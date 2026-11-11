@@ -656,7 +656,7 @@ fun ChatInputBar(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = att.displayName.ifBlank { "Attachment" },
+                                                text = att.name.ifBlank { "Attachment" },
                                                 fontSize = 12.sp,
                                                 color = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
                                                 maxLines = 1
