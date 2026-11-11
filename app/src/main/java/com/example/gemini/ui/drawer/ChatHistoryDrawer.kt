@@ -33,7 +33,7 @@ import androidx.compose.material.icons.automirrored.outlined.Login
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -692,13 +692,13 @@ fun ChatHistoryDrawer(
                     onClick = { onOpenImages?.invoke() }
                 )
                 SidebarNavigationRow(
-                    icon = Icons.Outlined.Tune,
+                    icon = Icons.Filled.Tune,
                     label = "Customize",
                     textColor = textPrimary,
                     onClick = { onOpenCustomize?.invoke() }
                 )
                 SidebarNavigationRow(
-                    icon = Icons.Outlined.Folder,
+                    icon = Icons.Filled.Folder,
                     label = "Projects",
                     textColor = textPrimary,
                     onClick = { onOpenProjects?.invoke() }
@@ -916,7 +916,7 @@ fun ChatHistoryDrawer(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Archive,
+                        imageVector = Icons.Filled.Archive,
                         contentDescription = null,
                         tint = ClaudeTerracotta,
                         modifier = Modifier.size(15.dp)
@@ -1406,7 +1406,7 @@ fun ChatHistoryDrawer(
                             },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = Icons.Default.Archive,
+                                    imageVector = Icons.Filled.Archive,
                                     contentDescription = null,
                                     tint = textPrimary,
                                     modifier = Modifier.size(20.dp)
@@ -1894,7 +1894,7 @@ private fun ChatHistoryItemRow(
                         text = { Text(if (conv.archived) "Unarchive" else "Archive", fontSize = 13.5.sp) },
                         leadingIcon = {
                             Icon(
-                                imageVector = if (conv.archived) Icons.Outlined.Unarchive else Icons.Default.Archive,
+                                imageVector = if (conv.archived) Icons.Outlined.Unarchive else Icons.Filled.Archive,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
