@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.rounded.Mic
@@ -139,7 +140,7 @@ fun AuraVoiceActions(
         ) {
             Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = if (phase == com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING) androidx.compose.material.icons.Icons.Default.Stop
+                    imageVector = if (phase == com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING) Icons.Filled.Stop
                         else Icons.Rounded.Mic,
                     contentDescription = null,
                     tint = AuraBlue,
