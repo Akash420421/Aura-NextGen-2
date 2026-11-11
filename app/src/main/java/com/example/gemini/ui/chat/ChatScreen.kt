@@ -307,13 +307,14 @@ fun ChatScreen(
     val screenAwakeReasons by viewModel.screenAwakeReasons.collectAsState()
     var screenAwakeInfoOpen by remember { mutableStateOf(false) }
 
+    val isAppDark = com.example.gemini.theme.isAppInDarkTheme()
     val view = androidx.compose.ui.platform.LocalView.current
-    DisposableEffect(isAuraHome, isDark) {
+    DisposableEffect(isAuraHome, isAppDark) {
         val window = (context as? Activity)?.window
         if (window != null && !view.isInEditMode) {
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, view)
-            insetsController.isAppearanceLightStatusBars = if (isAuraHome) true else !isDark
-            insetsController.isAppearanceLightNavigationBars = if (isAuraHome) true else !isDark
+            insetsController.isAppearanceLightStatusBars = if (isAuraHome) true else !isAppDark
+            insetsController.isAppearanceLightNavigationBars = if (isAuraHome) true else !isAppDark
         }
         onDispose {}
     }
