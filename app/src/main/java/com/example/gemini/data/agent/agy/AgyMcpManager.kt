@@ -37,7 +37,8 @@ import kotlinx.coroutines.CoroutineScope
 /** Antigravity MCP servers and the Cascade MCP plugin marketplace. Moved out of ChatViewModel unchanged. */
 class AgyMcpManager(
     private val backendScope: CoroutineScope,
-    private val agyHubClient: AgyHubClient
+    private val agyHubClient: AgyHubClient,
+    private val context: Context
 ) {
 
     private val _mcpServers = MutableStateFlow<List<com.example.gemini.domain.model.McpServerState>>(emptyList())
@@ -290,13 +291,22 @@ class AgyMcpManager(
                             val envMap = spec.env.toMutableMap()
                             // Ensure Termux stdio binaries (npx, python3, etc.) have proper loader and PATH on Android.
                             // A server runs the MCP on its own Linux: those Termux paths would break it there.
-                            if (!AuthPreferences.currentRemoteMode) {
-                                if (!envMap.containsKey("LD_PRELOAD")) {
-                                    envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
+                            if (!AuthPreferences.currentRemoteMode && com.example.gemini.data.local.LocalEnvironmentManager.isTermuxPackage(context)) {
+                                val dynamicPreload = com.example.gemini.data.local.LocalEnvironmentManager.findTermuxExecLibrary(context)?.absolutePath
+                                val existingPreload = envMap["LD_PRELOAD"].orEmpty()
+                                if (dynamicPreload != null && (existingPreload.isBlank() || existingPreload.contains("/data/data/com.termux/"))) {
+                                    envMap["LD_PRELOAD"] = dynamicPreload
+                                } else if (existingPreload.contains("/data/data/com.termux/")) {
+                                    envMap.remove("LD_PRELOAD")
                                 }
-                                if (!envMap.containsKey("PATH")) {
-                                    envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
+                                val prefix = com.example.gemini.data.local.LocalEnvironmentManager.getPrefixDir(context).absolutePath
+                                val home = com.example.gemini.data.local.LocalEnvironmentManager.getHomeDir(context).absolutePath
+                                if (envMap["PATH"].isNullOrBlank() || envMap["PATH"].orEmpty().contains("/data/data/com.termux/")) {
+                                    envMap["PATH"] = "$home/.local/bin:$prefix/bin:/system/bin"
                                 }
+                                val runtimeLibraries = com.example.gemini.data.local.LocalEnvironmentManager.getRuntimeLibraryPath(context)
+                                envMap["LD_LIBRARY_PATH"] = listOf(runtimeLibraries, envMap["LD_LIBRARY_PATH"])
+                                    .filterNot { it.isNullOrBlank() }.distinct().joinToString(":")
                             }
                             if (envMap.isNotEmpty()) {
                                 val envObj = org.json.JSONObject()

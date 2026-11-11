@@ -30,7 +30,7 @@ android {
     namespace = "com.example.gemini"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.antigem"
+        applicationId = "com.aura.ai"
         minSdk = 24
         targetSdk = 28
         versionCode = appVersionCode
@@ -52,30 +52,29 @@ android {
 
     flavorDimensions += "mode"
     productFlavors {
-        // Local ports differ per app so com.antigem and com.termux can be installed and run side by side
-        // (com.antigem: +2, so its bridge port never equals com.termux's hub port).
+        // Dedicated fork ports avoid attaching to another installed AntiGem/Termux bridge or hub.
         create("standard") {
             dimension = "mode"
-            applicationId = "com.antigem"
-            buildConfigField("int", "BRIDGE_PORT", "1236")
-            buildConfigField("int", "HUB_PORT", "1237")
-            buildConfigField("int", "BROWSER_MCP_PORT", "8767")
+            applicationId = "com.aura.ai"
+            buildConfigField("int", "BRIDGE_PORT", "1244")
+            buildConfigField("int", "HUB_PORT", "1245")
+            buildConfigField("int", "BROWSER_MCP_PORT", "8769")
             buildConfigField("boolean", "IS_SHARED_USER_ID", "false")
         }
         create("termux") {
             dimension = "mode"
             applicationId = "com.termux"
-            buildConfigField("int", "BRIDGE_PORT", "1234")
-            buildConfigField("int", "HUB_PORT", "1235")
-            buildConfigField("int", "BROWSER_MCP_PORT", "8765")
+            buildConfigField("int", "BRIDGE_PORT", "1244")
+            buildConfigField("int", "HUB_PORT", "1245")
+            buildConfigField("int", "BROWSER_MCP_PORT", "8769")
             buildConfigField("boolean", "IS_SHARED_USER_ID", "false")
         }
         create("termuxShared") {
             dimension = "mode"
             applicationId = "com.termux"
-            buildConfigField("int", "BRIDGE_PORT", "1234")
-            buildConfigField("int", "HUB_PORT", "1235")
-            buildConfigField("int", "BROWSER_MCP_PORT", "8765")
+            buildConfigField("int", "BRIDGE_PORT", "1244")
+            buildConfigField("int", "HUB_PORT", "1245")
+            buildConfigField("int", "BROWSER_MCP_PORT", "8769")
             buildConfigField("boolean", "IS_SHARED_USER_ID", "true")
         }
     }

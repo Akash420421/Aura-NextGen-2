@@ -267,12 +267,18 @@ class LocalPtySession(
                 LocalEnvironmentManager.ensureClaudeWrapper(context)
                 LocalEnvironmentManager.ensureTermuxApiDispatcher(context)
 
-                val loginShellBinaries = arrayOf("login", "bash", "zsh", "fish", "sh")
+                val mayUseLogin = initialCommand.isNullOrBlank() && context.packageName == "com.termux"
+                val requestedShell = forceShell?.takeUnless { it == "login" && !mayUseLogin }
+                val loginShellBinaries = if (mayUseLogin) {
+                    arrayOf("login", "bash", "sh", "zsh", "fish")
+                } else {
+                    arrayOf("bash", "sh", "zsh", "fish")
+                }
 
                 val shellBinary = when {
-                    forceShell != null && File(bin, forceShell).exists() && File(bin, forceShell).canExecute() -> File(bin, forceShell).absolutePath
-                    forceShell != null && File(bin, forceShell).exists() -> File(bin, forceShell).absolutePath
-                    forceShell != null && File(forceShell).exists() -> File(forceShell).absolutePath
+                    requestedShell != null && File(bin, requestedShell).exists() && File(bin, requestedShell).canExecute() -> File(bin, requestedShell).absolutePath
+                    requestedShell != null && File(bin, requestedShell).exists() -> File(bin, requestedShell).absolutePath
+                    requestedShell != null && File(requestedShell).exists() -> File(requestedShell).absolutePath
                     else -> {
                         var found: String? = null
                         for (name in loginShellBinaries) {
@@ -313,6 +319,7 @@ class LocalPtySession(
                 envMap["TERMUX_APK_RELEASE"] = "GITHUB"
                 envMap["TERMUX_APP_PID"] = "${android.os.Process.myPid()}"
                 envMap["TERMUX__USER_ID"] = "0"
+                envMap["LD_LIBRARY_PATH"] = LocalEnvironmentManager.getRuntimeLibraryPath(context)
                 envMap["SHELL"] = shellBinary
                 envMap["ANDROID_DATA"] = "/data"
                 envMap["ANDROID_ROOT"] = "/system"

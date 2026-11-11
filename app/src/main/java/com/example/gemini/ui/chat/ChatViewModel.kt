@@ -52,7 +52,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         isNetworkConnectedProvider = { isNetworkConnected() },
         onHubOnline = { loadMcpServers() }
     )
-    private val mcpManager = com.example.gemini.data.agent.agy.AgyMcpManager(viewModelScope, agyBackend.agyHubClient)
+    private val mcpManager = com.example.gemini.data.agent.agy.AgyMcpManager(viewModelScope, agyBackend.agyHubClient, application)
     private val pluginsManager = com.example.gemini.data.agent.agy.AgyPluginsManager(viewModelScope, agyBackend.agyHubClient, store, mcpManager)
     private val securityManager = com.example.gemini.data.agent.agy.AgySecuritySettingsManager(viewModelScope, agyBackend.agyHubClient, authPrefs, store)
     private val agyHubClient get() = agyBackend.agyHubClient

@@ -298,6 +298,10 @@ fun ChatScreen(
     val agyLoginIssue by viewModel.agyLoginIssue.collectAsState()
     val hubStatus by viewModel.hubStatus.collectAsState()
     val systemConnectionState by viewModel.systemConnectionState.collectAsState()
+    var auraHomeVoice by rememberSaveable { mutableStateOf(false) }
+    val isAuraHome = !isInFloatingWindow && isAgyChat && isFreshNewChat && messages.isEmpty() &&
+        systemConnectionState.status == com.example.gemini.data.remote.SystemStatus.READY
+    val auraAutoSend by com.example.gemini.data.jarvis.JarvisPreferences.autoSend.state.collectAsState()
     val isNetworkConnected by viewModel.isNetworkConnectedState.collectAsState()
     val isAnyGenerationOrTaskActive by viewModel.isAnyGenerationOrTaskActive.collectAsState()
     val screenAwakeReasons by viewModel.screenAwakeReasons.collectAsState()
@@ -404,6 +408,24 @@ fun ChatScreen(
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) beginVoiceCall()
         else voiceCallPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+    }
+    val auraJarvisMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+        else com.example.gemini.ui.components.AppToastHelper.showToast(
+            "Aura voice needs microphone access.", com.example.gemini.ui.components.ChatToastType.ERROR
+        )
+    }
+    val startAuraJarvis: () -> Unit = {
+        when {
+            !com.example.gemini.data.jarvis.JarvisPreferences.enabled.value ||
+                !com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.value -> {
+                requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS
+                showSettingsDialog = true
+            }
+            !com.example.gemini.data.jarvis.JarvisController.hasMic() ->
+                auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            else -> com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+        }
     }
     // before the first call: pick a voice (swipe through them and hear each one)
     var showVoicePicker by remember { mutableStateOf(false) }
@@ -1518,6 +1540,11 @@ fun ChatScreen(
                         }
                     },
                     title = {
+                        if (isAuraHome) {
+                            Box(Modifier.fillMaxWidth().height(52.dp), contentAlignment = Alignment.Center) {
+                                Text("AURA AI", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        } else {
                         val displayedChatTitle = remember(currentConv?.title, conversations, currentConv?.id) {
                             val fromList = conversations.firstOrNull { it.id == currentConv?.id }
                             val listTitle = fromList?.title?.takeIf {
@@ -1763,6 +1790,7 @@ fun ChatScreen(
                                 }
                             }
                         }
+                        }
                     },
                     navigationIcon = {
                         if (conversationBackStack.isNotEmpty()) {
@@ -1784,6 +1812,11 @@ fun ChatScreen(
                         }
                     },
                     actions = {
+                        if (isAuraHome) {
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Icon(Icons.Outlined.ChatBubbleOutline, contentDescription = "Chat history", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f))
+                            }
+                        }
                         // Browser, Terminal and the IDE are in the floating switcher (always on)
                         if (isInFloatingWindow) {
                             IconButton(onClick = onMinimizeWindow) {
@@ -1842,7 +1875,13 @@ fun ChatScreen(
                     val isExistingChat = messages.isEmpty() && isExistingConversation && isLoadingConversation
                     Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, error=$conversationError, isServerStopped=$isServerStopped")
 
-                    if (isAgyChat && isServerStopped && messages.isEmpty()) {
+                    if (isAuraHome) {
+                        if (auraHomeVoice) {
+                            com.example.gemini.ui.home.AuraVoiceWelcome(onStart = startAuraJarvis)
+                        } else {
+                            com.example.gemini.ui.home.AuraChatWelcome()
+                        }
+                    } else if (isAgyChat && isServerStopped && messages.isEmpty()) {
                         BoxWithConstraints(
                             modifier = Modifier.fillMaxSize()
                         ) {
@@ -2683,6 +2722,25 @@ fun ChatScreen(
                     )
                 }
 
+                if (isAuraHome) {
+                    com.example.gemini.ui.home.AuraHomeModeSwitcher(
+                        isVoice = auraHomeVoice,
+                        onSelect = { auraHomeVoice = it },
+                        modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 4.dp)
+                    )
+                }
+
+                if (isAuraHome && auraHomeVoice) {
+                    com.example.gemini.ui.home.AuraVoiceActions(
+                        autoSend = auraAutoSend,
+                        onStart = startAuraJarvis,
+                        onScreen = {
+                            requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS_SCREEN
+                            showSettingsDialog = true
+                        },
+                        onToggleAuto = { com.example.gemini.data.jarvis.JarvisPreferences.autoSend.set(!auraAutoSend) }
+                    )
+                } else {
                 // Chat Input Bar with Bottom Model & Thinking Selector Pills (Claude Android Style)
                 ChatInputBar(
                     isOnline = if (isCodexChat) codexState != com.example.gemini.data.agent.codex.CodexState.OFFLINE && codexState != com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED && codexState != com.example.gemini.data.agent.codex.CodexState.DISABLED && codexState != com.example.gemini.data.agent.codex.CodexState.OUTDATED
@@ -2769,6 +2827,7 @@ fun ChatScreen(
                     onStartVoiceCall = if (isAgyChat) onStartVoiceCall else null,
                     voiceCallActive = voiceCall.active
                 )
+                }
             }
         }
     }

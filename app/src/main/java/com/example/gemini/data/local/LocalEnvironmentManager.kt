@@ -172,7 +172,32 @@ object LocalEnvironmentManager {
     fun getHomeDir(context: Context): File = File(context.filesDir, "home")
     fun getProjectsDir(context: Context): File = File(getHomeDir(context), "projects")
     fun getUbuntuRootDir(context: Context): File = File(context.filesDir, "ubuntu")
-    fun isTermuxPackage(context: Context): Boolean = context.packageName == "com.termux"
+    /**
+     * The standalone Aura AI package and the Termux package use their own sandboxed Termux prefix. Older com.antigem
+     * installs keep using Ubuntu when one is already installed, preserving their existing rootfs layout.
+     */
+    fun isTermuxPackage(context: Context): Boolean = context.packageName == "com.termux" ||
+        context.packageName == "com.aura.ai" ||
+        (context.packageName == "com.antigem" && !isUbuntuInstalled(context))
+
+    fun findTermuxExecLibrary(context: Context): File? = findTermuxExecLibrary(context.packageName, context.filesDir)
+
+    fun findTermuxExecLibrary(packageName: String, filesDir: File? = null): File? {
+        val prefix = System.getenv("PREFIX")?.takeIf { it.isNotBlank() }?.let { File(it) }
+        val candidates = listOfNotNull(
+            prefix?.let { File(it, "lib/libtermux-exec.so") },
+            filesDir?.let { File(it, "usr/lib/libtermux-exec.so") },
+            File("/data/data/$packageName/files/usr/lib/libtermux-exec.so"),
+            File("/data/user/0/$packageName/files/usr/lib/libtermux-exec.so")
+        ).distinctBy { it.absolutePath }
+        return candidates.firstOrNull { it.isFile && it.canRead() }
+    }
+
+    fun getRuntimeLibraryPath(context: Context): String = listOf(
+        File(context.filesDir, "lib"),
+        File(context.filesDir, "bin"),
+        getLibDir(context)
+    ).joinToString(":") { it.absolutePath }
 
     fun ensureProotExtracted(context: Context): String {
         val binDir = File(context.filesDir, "bin")
@@ -612,7 +637,7 @@ object LocalEnvironmentManager {
             if (!libexecDir.exists()) libexecDir.mkdirs()
             val dispatcherFile = File(libexecDir, "termux-api")
             val scriptContent = """
-                #!/data/data/com.termux/files/usr/bin/bash
+                #!${File(getBinDir(context), "bash").absolutePath}
                 METHOD="${'$'}1"
                 shift
 
@@ -624,13 +649,13 @@ object LocalEnvironmentManager {
                     fi
                 fi
 
-                TMP_DIR="${'$'}{TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+                TMP_DIR="${'$'}{TMPDIR:-${getTmpDir(context).absolutePath}}"
                 mkdir -p "${'$'}TMP_DIR"
                 TMP_OUT="${'$'}TMP_DIR/api_out.${'$'}${'$'}"
 
                 am broadcast --user 0 \
                     -a "com.termux.api" \
-                    -n "com.termux/com.example.gemini.data.receiver.TermuxApiReceiver" \
+                    -n "${context.packageName}/com.example.gemini.data.receiver.TermuxApiReceiver" \
                     --es "api_method" "${'$'}METHOD" \
                     --es "socket_output" "${'$'}TMP_OUT" \
                     "${'$'}{EXTRA_ARGS[@]}" \
@@ -657,6 +682,7 @@ object LocalEnvironmentManager {
             dispatcherFile.writeText(scriptContent)
             dispatcherFile.setExecutable(true, false)
             dispatcherFile.setReadable(true, false)
+            Os.chmod(dispatcherFile.absolutePath, 493) // 0755
         } catch (e: Exception) {
             Log.w(TAG, "Failed ensuring termux-api dispatcher: ${e.message}")
         }
@@ -2172,6 +2198,24 @@ object LocalEnvironmentManager {
             }
         }
 
+        val loginFile = File(binDir, "login")
+        if (loginFile.isFile) {
+            runCatching {
+                val contents = loginFile.readText()
+                val firstLine = contents.lineSequence().firstOrNull().orEmpty()
+                if (firstLine.startsWith("#!") && firstLine.contains("com.termux")) {
+                    loginFile.writeText(contents.replaceFirst(firstLine, "#!${shFile.absolutePath}"))
+                }
+            }.onFailure { Log.w(TAG, "Could not repair login shebang: ${it.message}") }
+        }
+
+        binDir.listFiles()?.filter { it.isFile }?.forEach { executable ->
+            runCatching {
+                executable.setExecutable(true, false)
+                Os.chmod(executable.absolutePath, 493) // 0755
+            }.onFailure { Log.w(TAG, "Could not set executable permission on ${executable.name}: ${it.message}") }
+        }
+
         projectsDir.mkdirs()
 
         // Setup $HOME/.bashrc only if not provided by the archive
@@ -2188,6 +2232,7 @@ export COLORTERM="truecolor"
 export TERMUX_VERSION="0.118.0"
 export TERMUX_MAIN_PACKAGE_NAME="${context.packageName}"
 export TERMUX_APK_RELEASE="GITHUB"
+export LD_LIBRARY_PATH="${context.filesDir.absolutePath}/lib:${context.filesDir.absolutePath}/bin:${prefixDir.absolutePath}/lib"
 export ANDROID_DATA="/data"
 export ANDROID_ROOT="/system"
 export LANG="en_US.UTF-8"
@@ -2230,6 +2275,7 @@ export COLORTERM="truecolor"
 export TERMUX_VERSION="0.118.0"
 export TERMUX_MAIN_PACKAGE_NAME="${context.packageName}"
 export TERMUX_APK_RELEASE="GITHUB"
+export LD_LIBRARY_PATH="${context.filesDir.absolutePath}/lib:${context.filesDir.absolutePath}/bin:${prefixDir.absolutePath}/lib"
 export ANDROID_DATA="/data"
 export ANDROID_ROOT="/system"
 export LANG="en_US.UTF-8"
@@ -2237,6 +2283,13 @@ export LC_ALL="en_US.UTF-8"
 """.trimIndent()
             )
             try { Os.chmod(etcProfile.absolutePath, 420) } catch (_: Exception) {} // 0644
+        }
+
+        val ldLibraryExport = "export LD_LIBRARY_PATH=\"${context.filesDir.absolutePath}/lib:${context.filesDir.absolutePath}/bin:${prefixDir.absolutePath}/lib\""
+        listOf(bashrc, profile, etcProfile).forEach { environmentFile ->
+            if (environmentFile.isFile && !environmentFile.readText().contains("LD_LIBRARY_PATH=")) {
+                environmentFile.appendText("\n$ldLibraryExport\n")
+            }
         }
 
         // Ensure standard DNS resolution files exist in $PREFIX/etc if missing
@@ -2637,7 +2690,6 @@ All files created here persist inside the application.
             File(binDir, "bash").exists() -> File(binDir, "bash").absolutePath
             File(prefixDir, "bin/bash").exists() -> File(prefixDir, "bin/bash").absolutePath
             File(binDir, "sh").exists() -> File(binDir, "sh").absolutePath
-            File("/data/data/com.termux/files/usr/bin/bash").exists() -> "/data/data/com.termux/files/usr/bin/bash"
             else -> "sh"
         }
 
@@ -2651,6 +2703,7 @@ All files created here persist inside the application.
         env["HOME"] = homeDir.absolutePath
         env["TMPDIR"] = tmpDir.absolutePath
         env["PATH"] = "${homeDir.absolutePath}/.local/bin:${binDir.absolutePath}:${prefixDir.absolutePath}/bin:/system/bin:/system/xbin"
+        env["LD_LIBRARY_PATH"] = getRuntimeLibraryPath(context)
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["LANG"] = "en_US.UTF-8"
@@ -2699,7 +2752,6 @@ All files created here persist inside the application.
             File(binDir, "bash").exists() -> File(binDir, "bash").absolutePath
             File(prefixDir, "bin/bash").exists() -> File(prefixDir, "bin/bash").absolutePath
             File(binDir, "sh").exists() -> File(binDir, "sh").absolutePath
-            File("/data/data/com.termux/files/usr/bin/bash").exists() -> "/data/data/com.termux/files/usr/bin/bash"
             else -> "sh"
         }
 
@@ -2710,6 +2762,7 @@ All files created here persist inside the application.
         env["HOME"] = homeDir.absolutePath
         env["TMPDIR"] = tmpDir.absolutePath
         env["PATH"] = "${homeDir.absolutePath}/.local/bin:${binDir.absolutePath}:${prefixDir.absolutePath}/bin:/system/bin:/system/xbin"
+        env["LD_LIBRARY_PATH"] = getRuntimeLibraryPath(context)
         env["DEBIAN_FRONTEND"] = "noninteractive"
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"

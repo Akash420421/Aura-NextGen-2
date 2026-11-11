@@ -109,9 +109,10 @@ class AgyPluginService(
             list.add("file://$h/.gemini/antigravity/mcp_config.json")
         }
 
-        // 3. Android / Termux standard sandboxes
-        list.add("file:///data/data/com.termux/files/home/.gemini/config/mcp_config.json")
-        list.add("file:///data/user/0/com.termux/files/home/.gemini/config/mcp_config.json")
+        // 3. This app's Android sandbox. A fork cannot read another package's private files.
+        val packageName = com.example.gemini.BuildConfig.APPLICATION_ID
+        list.add(java.io.File("/data/user/0/$packageName/files/home/.gemini/config/mcp_config.json").toURI().toString())
+        list.add(java.io.File("/data/data/$packageName/files/home/.gemini/config/mcp_config.json").toURI().toString())
 
         // 4. Java user.home
         val userHome = System.getProperty("user.home")
@@ -185,17 +186,31 @@ class AgyPluginService(
                     serverSpecObj.put("args", argsArr)
 
                     val envMap = cmdEntry.env.toMutableMap()
-                    // Android / Termux environment loader injection
-                    val isAndroidTermux = java.io.File("/data/data/com.termux/files/usr/lib/libtermux-exec.so").exists() ||
-                                          System.getenv("PREFIX") != null ||
-                                          (System.getProperty("java.vendor")?.contains("Android", ignoreCase = true) == true)
-                    if (isAndroidTermux && !AuthPreferences.currentRemoteMode) {
-                        if (!envMap.containsKey("LD_PRELOAD") && java.io.File("/data/data/com.termux/files/usr/lib/libtermux-exec.so").exists()) {
-                            envMap["LD_PRELOAD"] = "/data/data/com.termux/files/usr/lib/libtermux-exec.so"
+                    // Use this APK's sandbox paths; /data/data/com.termux is inaccessible to custom package IDs.
+                    val packageName = com.example.gemini.BuildConfig.APPLICATION_ID
+                    val appFiles = java.io.File("/data/data/$packageName/files")
+                    val prefix = System.getenv("PREFIX")?.takeIf { it.isNotBlank() }
+                        ?: java.io.File(appFiles, "usr").absolutePath
+                    val prefixBin = java.io.File(prefix, "bin")
+                    val termuxExec = com.example.gemini.data.local.LocalEnvironmentManager
+                        .findTermuxExecLibrary(packageName)?.absolutePath
+                    val isTermuxEnvironment = packageName == "com.termux" || prefixBin.resolve("sh").exists()
+                    if (isTermuxEnvironment && !AuthPreferences.currentRemoteMode) {
+                        val currentPreload = envMap["LD_PRELOAD"].orEmpty()
+                        if (termuxExec != null && (currentPreload.isBlank() || currentPreload.contains("/data/data/com.termux/"))) {
+                            envMap["LD_PRELOAD"] = termuxExec
+                        } else if (currentPreload.contains("/data/data/com.termux/")) {
+                            envMap.remove("LD_PRELOAD")
                         }
-                        if (!envMap.containsKey("PATH")) {
-                            envMap["PATH"] = "/data/data/com.termux/files/home/.local/bin:/data/data/com.termux/files/usr/bin:/system/bin"
+                        val home = java.io.File(appFiles, "home").absolutePath
+                        if (envMap["PATH"].isNullOrBlank() || envMap["PATH"].orEmpty().contains("/data/data/com.termux/")) {
+                            envMap["PATH"] = "$home/.local/bin:$prefix/bin:/system/bin"
                         }
+                        val runtimeLibraries = listOf(
+                            java.io.File(appFiles, "lib"), java.io.File(appFiles, "bin"), java.io.File(prefix, "lib")
+                        ).joinToString(":") { it.absolutePath }
+                        envMap["LD_LIBRARY_PATH"] = listOf(runtimeLibraries, envMap["LD_LIBRARY_PATH"])
+                            .filterNot { it.isNullOrBlank() }.distinct().joinToString(":")
                     }
 
                     if (envMap.isNotEmpty()) {

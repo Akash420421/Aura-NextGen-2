@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 
 private val Context.dataStore by preferencesDataStore(name = "auth_prefs")
 
@@ -151,12 +152,18 @@ class AuthPreferences(private val context: Context) {
         val DEFAULT_HUB_URL = "http://127.0.0.1:${com.example.gemini.BuildConfig.HUB_PORT}"
         val DEFAULT_BRIDGE_HTTP_URL = "http://127.0.0.1:${com.example.gemini.BuildConfig.BRIDGE_PORT}"
 
-        /** The defaults every install used before ports became per app; a saved copy of them follows the new default. */
-        private const val LEGACY_HUB_URL = "http://127.0.0.1:1235"
-        private const val LEGACY_BRIDGE_HTTP_URL = "http://127.0.0.1:1234"
+        /** Loopback ports used by earlier Termux and standard AntiGem builds. */
+        private val LEGACY_HUB_PORTS = setOf(1235, 1237)
+        private val LEGACY_BRIDGE_PORTS = setOf(1234, 1236)
 
-        fun migrateHubUrl(url: String): String = if (url.trimEnd('/') == LEGACY_HUB_URL) DEFAULT_HUB_URL else url
-        fun migrateBridgeUrl(url: String): String = if (url.trimEnd('/') == LEGACY_BRIDGE_HTTP_URL) DEFAULT_BRIDGE_HTTP_URL else url
+        private fun migrateLoopbackUrl(url: String, legacyPorts: Set<Int>, defaultUrl: String): String {
+            val parsed = runCatching { java.net.URI(url.trim()) }.getOrNull() ?: return url
+            val host = parsed.host?.lowercase()
+            return if (parsed.port in legacyPorts && host in setOf("localhost", "127.0.0.1", "::1", "[::1]")) defaultUrl else url
+        }
+
+        fun migrateHubUrl(url: String): String = migrateLoopbackUrl(url, LEGACY_HUB_PORTS, DEFAULT_HUB_URL)
+        fun migrateBridgeUrl(url: String): String = migrateLoopbackUrl(url, LEGACY_BRIDGE_PORTS, DEFAULT_BRIDGE_HTTP_URL)
 
         @Volatile
         var currentHubUrl: String = DEFAULT_HUB_URL
@@ -264,8 +271,12 @@ class AuthPreferences(private val context: Context) {
     init {
         val savedHub = syncPrefs.getString("agy_hub_url", null)
         val savedBridgeHttp = syncPrefs.getString("agy_bridge_http_url", null)
-        if (!savedHub.isNullOrBlank()) currentHubUrl = migrateHubUrl(savedHub)
-        if (!savedBridgeHttp.isNullOrBlank()) currentBridgeHttpUrl = migrateBridgeUrl(savedBridgeHttp)
+        val migratedHub = savedHub?.let(::migrateHubUrl)
+        val migratedBridge = savedBridgeHttp?.let(::migrateBridgeUrl)
+        if (!migratedHub.isNullOrBlank()) currentHubUrl = migratedHub
+        if (!migratedBridge.isNullOrBlank()) currentBridgeHttpUrl = migratedBridge
+        if (savedHub != null && migratedHub != savedHub) syncPrefs.edit().putString("agy_hub_url", migratedHub).apply()
+        if (savedBridgeHttp != null && migratedBridge != savedBridgeHttp) syncPrefs.edit().putString("agy_bridge_http_url", migratedBridge).apply()
         val inspectorOn = syncPrefs.getBoolean("is_network_inspector_enabled", false)
         val inspectorFloating = syncPrefs.getBoolean("is_floating_network_inspector_enabled", false)
         com.example.gemini.data.remote.inspector.NetworkInspectorManager.isEnabled = inspectorOn
@@ -306,13 +317,25 @@ class AuthPreferences(private val context: Context) {
     val isLocalToolsInstalled: Flow<Boolean> = context.dataStore.data.map { it[IS_LOCAL_TOOLS_INSTALLED] ?: false }
     val localToolsInstallDate: Flow<Long?> = context.dataStore.data.map { it[LOCAL_TOOLS_INSTALL_DATE] }
     val localToolsVersion: Flow<String?> = context.dataStore.data.map { it[LOCAL_TOOLS_VERSION] }
-    val agyBridgeHttpUrl: Flow<String> = context.dataStore.data.map { 
+    val agyBridgeHttpUrl: Flow<String> = context.dataStore.data
+        .onEach { saved ->
+            val old = saved[AGY_BRIDGE_HTTP_URL] ?: return@onEach
+            val migrated = migrateBridgeUrl(old)
+            if (migrated != old) context.dataStore.edit { prefs -> if (prefs[AGY_BRIDGE_HTTP_URL] == old) prefs[AGY_BRIDGE_HTTP_URL] = migrated }
+        }
+        .map {
         val url = it[AGY_BRIDGE_HTTP_URL]?.let(::migrateBridgeUrl) ?: DEFAULT_BRIDGE_HTTP_URL
         currentBridgeHttpUrl = url
         url
     }
     val agyBridgeWsUrl: Flow<String> = agyBridgeHttpUrl.map { toWsUrl(it) }
-    val agyHubUrl: Flow<String> = context.dataStore.data.map { 
+    val agyHubUrl: Flow<String> = context.dataStore.data
+        .onEach { saved ->
+            val old = saved[AGY_HUB_URL] ?: return@onEach
+            val migrated = migrateHubUrl(old)
+            if (migrated != old) context.dataStore.edit { prefs -> if (prefs[AGY_HUB_URL] == old) prefs[AGY_HUB_URL] = migrated }
+        }
+        .map {
         val url = it[AGY_HUB_URL]?.let(::migrateHubUrl) ?: DEFAULT_HUB_URL
         currentHubUrl = url
         url
@@ -1004,10 +1027,10 @@ class AuthPreferences(private val context: Context) {
     }
 
     fun getDefaultBridgeBinaryPath(): String =
-        if (context.packageName == "com.termux") DEFAULT_BRIDGE_BINARY_PATH else DEFAULT_UBUNTU_BRIDGE_BINARY_PATH
+        if (com.example.gemini.data.local.LocalEnvironmentManager.isTermuxPackage(context)) DEFAULT_BRIDGE_BINARY_PATH else DEFAULT_UBUNTU_BRIDGE_BINARY_PATH
 
     fun getDefaultAgyBinaryPath(): String =
-        if (context.packageName == "com.termux") DEFAULT_AGY_BINARY_PATH else DEFAULT_UBUNTU_AGY_BINARY_PATH
+        if (com.example.gemini.data.local.LocalEnvironmentManager.isTermuxPackage(context)) DEFAULT_AGY_BINARY_PATH else DEFAULT_UBUNTU_AGY_BINARY_PATH
 
     val agyBridgeBinaryPath: Flow<String> = context.dataStore.data.map {
         it[AGY_BRIDGE_BINARY_PATH] ?: getAgyBridgeBinaryPathSync()
@@ -1036,7 +1059,7 @@ class AuthPreferences(private val context: Context) {
     }
 
     fun getDefaultClaudeBinaryPath(): String =
-        if (context.packageName == "com.termux") DEFAULT_CLAUDE_BINARY_PATH else DEFAULT_UBUNTU_CLAUDE_BINARY_PATH
+        if (com.example.gemini.data.local.LocalEnvironmentManager.isTermuxPackage(context)) DEFAULT_CLAUDE_BINARY_PATH else DEFAULT_UBUNTU_CLAUDE_BINARY_PATH
 
     fun getClaudeBinaryPathSync(): String =
         syncPrefs.getString("claude_binary_path", getDefaultClaudeBinaryPath()) ?: getDefaultClaudeBinaryPath()
@@ -1048,7 +1071,7 @@ class AuthPreferences(private val context: Context) {
     }
 
     fun getDefaultOpenCodeBinaryPath(): String =
-        if (context.packageName == "com.termux") DEFAULT_OPENCODE_BINARY_PATH else DEFAULT_UBUNTU_OPENCODE_BINARY_PATH
+        if (com.example.gemini.data.local.LocalEnvironmentManager.isTermuxPackage(context)) DEFAULT_OPENCODE_BINARY_PATH else DEFAULT_UBUNTU_OPENCODE_BINARY_PATH
 
     fun getOpenCodeBinaryPathSync(): String =
         syncPrefs.getString("opencode_binary_path", getDefaultOpenCodeBinaryPath()) ?: getDefaultOpenCodeBinaryPath()
@@ -1058,7 +1081,7 @@ class AuthPreferences(private val context: Context) {
     }
 
     fun getDefaultCodexBinaryPath(): String =
-        if (context.packageName == "com.termux") DEFAULT_CODEX_BINARY_PATH else DEFAULT_UBUNTU_CODEX_BINARY_PATH
+        if (com.example.gemini.data.local.LocalEnvironmentManager.isTermuxPackage(context)) DEFAULT_CODEX_BINARY_PATH else DEFAULT_UBUNTU_CODEX_BINARY_PATH
 
     fun getCodexBinaryPathSync(): String =
         syncPrefs.getString("codex_binary_path", getDefaultCodexBinaryPath()) ?: getDefaultCodexBinaryPath()

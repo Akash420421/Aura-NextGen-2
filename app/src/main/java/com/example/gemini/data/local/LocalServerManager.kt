@@ -370,12 +370,18 @@ object LocalServerManager {
             existingSession = null
         }
 
+        val appContext = context.applicationContext
+        if (!forceRestart && (existingSession == null || existingSession.isExited.value) && isOwnedBridgeResponding()) {
+            Log.i(TAG, "[ServerManager] Adopting the running bridge after its security token was verified")
+            _status.value = LocalServerStatus.Running()
+            return
+        }
+
         if (!LocalEnvironmentManager.isInstalled(context)) {
             Log.d(TAG, "[ServerManager] Bootstrap not installed, skipping server start")
             return
         }
 
-        val appContext = context.applicationContext
         ensureBridgeBinary(appContext)
         // the bridge starts Claude Code through the app's launcher (--claude-bin)
         LocalEnvironmentManager.ensureGlibcEnvironment(appContext)
@@ -411,6 +417,7 @@ object LocalServerManager {
                 context = appContext,
                 isSsh = false,
                 initialCommand = command,
+                forceShell = "bash",
                 initialCols = 80,
                 initialRows = 24
             )
@@ -442,22 +449,38 @@ object LocalServerManager {
         // its exit must not mark the new server stopped
         exitObserverJob?.cancel()
         exitObserverJob = null
-        val healthUrl = AuthPreferences.currentBridgeHttpUrl.trimEnd('/') + "/api/health"
+        val bridgeUrl = AuthPreferences.currentBridgeHttpUrl.trimEnd('/')
         withTimeoutOrNull(15_000L) {
-            while (!session.isExited.value && bridgeStillUp(healthUrl)) delay(250)
+            while (!session.isExited.value && bridgeStillUp(bridgeUrl)) delay(250)
         }
         if (!session.isExited.value) session.close()
     }
 
-    /** False once the bridge's port refuses connections; a slow answer while it stops still counts as up. */
-    private fun bridgeStillUp(healthUrl: String): Boolean = try {
-        AgyBridgeService.instance.fastClient.newCall(Request.Builder().url(healthUrl).get().build()).execute().close()
-        true
+    /** A port alone does not establish ownership: the bridge must accept this install's framed token. */
+    private fun isOwnedBridgeResponding(): Boolean = bridgeRespondsToCurrentToken()
+
+    private fun bridgeStillUp(bridgeUrl: String): Boolean = try {
+        bridgeInfoRequest(bridgeUrl).use { it.code == 200 }
     } catch (_: java.net.ConnectException) {
         false
+    } catch (_: java.net.UnknownHostException) {
+        false
     } catch (_: Exception) {
+        // A slow but reachable bridge may still be stopping; unauthorized or unrecognized servers return false above.
         true
     }
+
+    /** Adoption is allowed only after the framed token receives HTTP 200 from the identity endpoint. */
+    private fun bridgeRespondsToCurrentToken(baseUrl: String = AuthPreferences.currentBridgeHttpUrl.trimEnd('/')): Boolean =
+        runCatching { bridgeInfoRequest(baseUrl).use { it.code == 200 } }.getOrDefault(false)
+
+    private fun bridgeInfoRequest(baseUrl: String): okhttp3.Response = AgyBridgeService.instance.fastClient.newCall(
+        Request.Builder()
+            .url("${baseUrl.trimEnd('/')}/api/server/info")
+            .header(AuthPreferences.currentFramedHeader, "true")
+            .get()
+            .build()
+    ).execute()
 
     fun stopServer() {
         if (AuthPreferences.currentRemoteMode) {
@@ -481,6 +504,7 @@ object LocalServerManager {
             try {
                 val req = Request.Builder()
                     .url("$bridgeUrl/api/shutdown")
+                    .header(AuthPreferences.currentFramedHeader, "true")
                     .post("{}".toRequestBody(null))
                     .build()
                 AgyBridgeService.instance.fastClient.newCall(req).execute().close()
