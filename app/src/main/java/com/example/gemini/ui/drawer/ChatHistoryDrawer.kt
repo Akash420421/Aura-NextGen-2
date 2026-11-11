@@ -1369,7 +1369,7 @@ fun ChatHistoryDrawer(
                         expanded = showAvatarMenu,
                         onDismissRequest = { showAvatarMenu = false },
                         shape = RoundedCornerShape(16.dp),
-                        containerColor = if (isAppDark) Color(0xFF2C2C2E) else Color.White,
+                        containerColor = Color.White,
                         tonalElevation = 6.dp,
                         modifier = Modifier.widthIn(min = 220.dp)
                     ) {
