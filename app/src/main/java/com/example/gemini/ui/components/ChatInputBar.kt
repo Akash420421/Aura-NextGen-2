@@ -1261,23 +1261,27 @@ fun ChatInputBar(
                         }
 
                         // Live voice call with the agent (Antigravity voice mode); also while the agent works
-                        if (!auraHomeStyle && onStartVoiceCall != null && !isRecordingAudio && !isLiveDictating) {
+                        if (onStartVoiceCall != null && !isRecordingAudio && !isLiveDictating) {
                             Surface(
                                 onClick = onStartVoiceCall,
                                 shape = CircleShape,
-                                color = if (voiceCallActive) GeminiBlue else MaterialTheme.colorScheme.background,
+                                color = when {
+                                    voiceCallActive -> GeminiBlue
+                                    auraHomeStyle -> Color(0xFF151B2A)
+                                    else -> MaterialTheme.colorScheme.background
+                                },
                                 border = BorderStroke(
                                     1.dp,
-                                    if (voiceCallActive) GeminiBlue else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                                    if (voiceCallActive || auraHomeStyle) Color.Transparent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
                                 ),
                                 modifier = Modifier.size(if (auraHomeStyle) 52.dp else 34.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
-                                        imageVector = Icons.Rounded.HeadsetMic,
-                                        contentDescription = if (voiceCallActive) "Open voice call" else "Start voice call",
-                                        tint = if (voiceCallActive) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
-                                        modifier = Modifier.size(18.dp)
+                                        imageVector = if (auraHomeStyle) Icons.Rounded.GraphicEq else Icons.Rounded.HeadsetMic,
+                                        contentDescription = if (voiceCallActive) "Open voice call" else "Start voice conversation",
+                                        tint = if (voiceCallActive || auraHomeStyle) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                                        modifier = Modifier.size(if (auraHomeStyle) 24.dp else 18.dp)
                                     )
                                 }
                             }
@@ -1285,7 +1289,7 @@ fun ChatInputBar(
                         }
 
                         // Dedicated Speech-to-Text Live Dictation Button (AGY Hub)
-                        if (voiceEnabled && !isStreaming && !isRecordingAudio) {
+                        if (!auraHomeStyle && voiceEnabled && !isStreaming && !isRecordingAudio) {
                             Surface(
                                 onClick = {
                                     if (isLiveDictating) {
