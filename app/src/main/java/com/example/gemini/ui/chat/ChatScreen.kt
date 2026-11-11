@@ -299,9 +299,8 @@ fun ChatScreen(
     val hubStatus by viewModel.hubStatus.collectAsState()
     val systemConnectionState by viewModel.systemConnectionState.collectAsState()
     var auraHomeVoice by rememberSaveable { mutableStateOf(false) }
-    // The landing screen must remain visible while the local engine starts or recovers. Tying it to READY
-    // hid the requested Aura UI precisely when the bridge was offline.
-    val isAuraHome = !isInFloatingWindow && isAgyChat && isFreshNewChat && messages.isEmpty()
+    // The landing screen must remain visible whenever there are no messages in the current view.
+    val isAuraHome = !isInFloatingWindow && messages.isEmpty()
     val auraAutoSend by com.example.gemini.data.jarvis.JarvisPreferences.autoSend.state.collectAsState()
     val isNetworkConnected by viewModel.isNetworkConnectedState.collectAsState()
     val isAnyGenerationOrTaskActive by viewModel.isAnyGenerationOrTaskActive.collectAsState()
@@ -1561,7 +1560,12 @@ fun ChatScreen(
                     title = {
                         if (isAuraHome) {
                             Box(Modifier.fillMaxWidth().height(52.dp), contentAlignment = Alignment.Center) {
-                                Text("AURA AI", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                com.example.gemini.ui.components.AuraModeToggle(
+                                    currentMode = if (auraHomeVoice) "voice" else "chat",
+                                    onModeSelected = { mode ->
+                                        auraHomeVoice = (mode == "voice")
+                                    }
+                                )
                             }
                         } else {
                         val displayedChatTitle = remember(currentConv?.title, conversations, currentConv?.id) {
@@ -1916,7 +1920,11 @@ fun ChatScreen(
                         if (auraHomeVoice) {
                             com.example.gemini.ui.home.AuraVoiceWelcome(onStart = startAuraJarvis)
                         } else {
-                            com.example.gemini.ui.home.AuraChatWelcome()
+                            com.example.gemini.ui.home.AuraChatWelcome(
+                                onPromptSelected = { prompt ->
+                                    inputState.setTextAndPlaceCursorAtEnd(prompt)
+                                }
+                            )
                         }
                     } else if (isAgyChat && isServerStopped && messages.isEmpty()) {
                         BoxWithConstraints(
@@ -2763,13 +2771,6 @@ fun ChatScreen(
                     )
                 }
 
-                if (isAuraHome) {
-                    com.example.gemini.ui.home.AuraHomeModeSwitcher(
-                        isVoice = auraHomeVoice,
-                        onSelect = { auraHomeVoice = it },
-                        modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp, bottom = 4.dp)
-                    )
-                }
 
                 if (isAuraHome && auraHomeVoice) {
                     com.example.gemini.ui.home.AuraVoiceActions(

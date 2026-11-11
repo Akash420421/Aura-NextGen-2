@@ -320,6 +320,11 @@ class LocalPtySession(
                 envMap["TERMUX_APP_PID"] = "${android.os.Process.myPid()}"
                 envMap["TERMUX__USER_ID"] = "0"
                 envMap["LD_LIBRARY_PATH"] = LocalEnvironmentManager.getRuntimeLibraryPath(context)
+                LocalEnvironmentManager.findTermuxExecLibrary(context)?.let { execLib ->
+                    if (execLib.exists() && execLib.canRead()) {
+                        envMap["LD_PRELOAD"] = execLib.absolutePath
+                    }
+                }
                 envMap["SHELL"] = shellBinary
                 envMap["ANDROID_DATA"] = "/data"
                 envMap["ANDROID_ROOT"] = "/system"

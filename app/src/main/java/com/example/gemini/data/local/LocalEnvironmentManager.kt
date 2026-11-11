@@ -193,11 +193,21 @@ object LocalEnvironmentManager {
         return candidates.firstOrNull { it.isFile && it.canRead() }
     }
 
-    fun getRuntimeLibraryPath(context: Context): String = listOf(
-        File(context.filesDir, "lib"),
-        File(context.filesDir, "bin"),
-        getLibDir(context)
-    ).joinToString(":") { it.absolutePath }
+    fun getRuntimeLibraryPath(context: Context): String {
+        val prefix = getPrefixDir(context)
+        val libDir = getLibDir(context)
+        return listOf(
+            libDir.absolutePath,
+            "${prefix.absolutePath}/lib",
+            "${prefix.absolutePath}/lib64",
+            "${context.filesDir.absolutePath}/lib",
+            "${context.filesDir.absolutePath}/bin",
+            "/data/data/${context.packageName}/files/usr/lib",
+            "/data/user/0/${context.packageName}/files/usr/lib",
+            "/system/lib64",
+            "/system/lib"
+        ).distinct().joinToString(":")
+    }
 
     fun ensureProotExtracted(context: Context): String {
         val binDir = File(context.filesDir, "bin")
@@ -2372,6 +2382,12 @@ All files created here persist inside the application.
                 pb.environment()["PREFIX"] = prefixDir.absolutePath
                 pb.environment()["HOME"] = homeDir.absolutePath
                 pb.environment()["PATH"] = "${binDir.absolutePath}:/system/bin"
+                pb.environment()["LD_LIBRARY_PATH"] = getRuntimeLibraryPath(context)
+                findTermuxExecLibrary(context)?.let { execLib ->
+                    if (execLib.exists() && execLib.canRead()) {
+                        pb.environment()["LD_PRELOAD"] = execLib.absolutePath
+                    }
+                }
                 val process = pb.start()
                 process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
                 log("Generated fresh OpenSSH host keys via ssh-keygen -A")
@@ -2528,6 +2544,12 @@ All files created here persist inside the application.
             env["ANDROID_ROOT"] = "/system"
             env["LANG"] = "en_US.UTF-8"
             env["LC_ALL"] = "en_US.UTF-8"
+            env["LD_LIBRARY_PATH"] = getRuntimeLibraryPath(context)
+            findTermuxExecLibrary(context)?.let { execLib ->
+                if (execLib.exists() && execLib.canRead()) {
+                    env["LD_PRELOAD"] = execLib.absolutePath
+                }
+            }
 
             if (resolvedWorkingDir == null || !File(resolvedWorkingDir).exists()) {
                 resolvedWorkingDir = home.absolutePath
@@ -2704,6 +2726,11 @@ All files created here persist inside the application.
         env["TMPDIR"] = tmpDir.absolutePath
         env["PATH"] = "${homeDir.absolutePath}/.local/bin:${binDir.absolutePath}:${prefixDir.absolutePath}/bin:/system/bin:/system/xbin"
         env["LD_LIBRARY_PATH"] = getRuntimeLibraryPath(context)
+        findTermuxExecLibrary(context)?.let { execLib ->
+            if (execLib.exists() && execLib.canRead()) {
+                env["LD_PRELOAD"] = execLib.absolutePath
+            }
+        }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["LANG"] = "en_US.UTF-8"
@@ -2763,6 +2790,11 @@ All files created here persist inside the application.
         env["TMPDIR"] = tmpDir.absolutePath
         env["PATH"] = "${homeDir.absolutePath}/.local/bin:${binDir.absolutePath}:${prefixDir.absolutePath}/bin:/system/bin:/system/xbin"
         env["LD_LIBRARY_PATH"] = getRuntimeLibraryPath(context)
+        findTermuxExecLibrary(context)?.let { execLib ->
+            if (execLib.exists() && execLib.canRead()) {
+                env["LD_PRELOAD"] = execLib.absolutePath
+            }
+        }
         env["DEBIAN_FRONTEND"] = "noninteractive"
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"

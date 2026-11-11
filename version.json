@@ -1,14 +1,14 @@
 {
-  "version_code": 200,
-  "version_name": "2.0.0",
+  "version_code": 201,
+  "version_name": "2.0.1",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.0.0 Clean Architecture Release",
-    "Clean base from latest AntiGem v1.1.7 upstream",
-    "Dedicated standalone package com.aura.ai and port isolation",
-    "Exact Aura UI: Centered Header, Staggered Menu, Forum New Chat Icon, Mode Toggle, 3D Particle Voice Orb",
-    "Direct ELF execution with zero permission or collision errors",
-    "Double-back and safe chat feed scrolling protection"
+    "Aura AI v2.0.1 Release",
+    "Fix dynamic linking error: pass explicit LD_LIBRARY_PATH with usr/lib to prevent missing libandroid-support.so during shell verification",
+    "Inject LD_PRELOAD with libtermux-exec.so for transparent shebang execution",
+    "Auto-start local AI engine seamlessly after rootfs verification",
+    "Full Aura UI: Centered Header, Staggered Menu, Header Mode Toggle [Chat | Voice], Forum New Chat Icon",
+    "Persistent AuraHome with suggestion chips in Chat mode and 3D Morphing Particle Orb in Voice mode"
   ],
   "is_critical": false
 }

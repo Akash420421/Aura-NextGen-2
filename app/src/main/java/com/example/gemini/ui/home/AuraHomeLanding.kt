@@ -53,23 +53,51 @@ private val AuraMuted = Color(0xFF8B8D98)
 private val AuraBlue = Color(0xFF3478D4)
 
 @Composable
-fun AuraChatWelcome(modifier: Modifier = Modifier) {
+fun AuraChatWelcome(
+    onPromptSelected: (String) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
     Column(
-        modifier = modifier.fillMaxSize().padding(horizontal = 28.dp),
+        modifier = modifier.fillMaxSize().padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Text(
             "Hi Sir, what's on your mind?",
-            color = Color(0xFF171717), fontSize = 31.sp, lineHeight = 40.sp,
+            color = Color(0xFF171717), fontSize = 28.sp, lineHeight = 36.sp,
             fontWeight = FontWeight.Bold, textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
             "Ask a question, brainstorm ideas, or start coding",
-            color = AuraMuted, fontSize = 19.sp, lineHeight = 27.sp,
+            color = AuraMuted, fontSize = 16.sp, lineHeight = 22.sp,
             textAlign = TextAlign.Center
         )
+        Spacer(Modifier.height(28.dp))
+        val suggestions = listOf(
+            "⚡ Create a mobile web app",
+            "🔍 Analyze code and fix bugs",
+            "🎨 Design a landing page"
+        )
+        suggestions.forEach { prompt ->
+            Surface(
+                onClick = { onPromptSelected(prompt.substringAfter(" ")) },
+                shape = RoundedCornerShape(16.dp),
+                color = Color.White,
+                shadowElevation = 2.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 5.dp)
+            ) {
+                Text(
+                    text = prompt,
+                    color = Color(0xFF374151),
+                    fontSize = 14.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)
+                )
+            }
+        }
     }
 }
 
