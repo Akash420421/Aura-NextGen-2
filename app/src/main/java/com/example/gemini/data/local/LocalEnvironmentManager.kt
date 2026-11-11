@@ -173,12 +173,11 @@ object LocalEnvironmentManager {
     fun getProjectsDir(context: Context): File = File(getHomeDir(context), "projects")
     fun getUbuntuRootDir(context: Context): File = File(context.filesDir, "ubuntu")
     /**
-     * The standalone Aura AI package and the Termux package use their own sandboxed Termux prefix. Older com.antigem
-     * installs keep using Ubuntu when one is already installed, preserving their existing rootfs layout.
+     * Termux package name check: only official com.termux builds use the native Termux prefix.
+     * Standalone builds (like com.aura.ai) use PRoot + Ubuntu rootfs with standard glibc to
+     * avoid dynamic linker Bionic RUNPATH restrictions (e.g. libandroid-support.so not found).
      */
-    fun isTermuxPackage(context: Context): Boolean = context.packageName == "com.termux" ||
-        context.packageName == "com.aura.ai" ||
-        (context.packageName == "com.antigem" && !isUbuntuInstalled(context))
+    fun isTermuxPackage(context: Context): Boolean = context.packageName == "com.termux"
 
     fun findTermuxExecLibrary(context: Context): File? = findTermuxExecLibrary(context.packageName, context.filesDir)
 
@@ -2472,6 +2471,7 @@ All files created here persist inside the application.
             }
             cmdList.addAll(
                 listOf(
+                    "-b", "${getBinDir(context).absolutePath}:/antigem/bin",
                     "-b", "${homeDir.absolutePath}:/root/workspace",
                     "-w", "/root",
                     "/bin/bash", "-c", command
@@ -2769,6 +2769,13 @@ All files created here persist inside the application.
         command: String,
         onLogLine: (String) -> Unit
     ): LocalCommandResult = withContext(Dispatchers.IO) {
+        if (!isTermuxPackage(context) && isUbuntuInstalled(context)) {
+            return@withContext executeCommand(
+                command = command,
+                context = context,
+                onOutputLine = onLogLine
+            )
+        }
         val startTime = System.currentTimeMillis()
         val binDir = getBinDir(context)
         val prefixDir = getPrefixDir(context)

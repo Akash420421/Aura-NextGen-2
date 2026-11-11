@@ -1,6 +1,9 @@
 package com.example.gemini.ui.drawer
 
 import com.example.gemini.ui.components.accent
+import com.example.gemini.ui.components.SoftElevatedBox
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.text.font.FontFamily
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import androidx.compose.animation.AnimatedVisibility
@@ -622,16 +625,22 @@ fun ChatHistoryDrawer(
         )
     }
 
-    val isAppDark = com.example.gemini.theme.isAppInDarkTheme()
-    val drawerBg = if (isAppDark) Color(0xFF1C1C1E) else Color.White
-    val textPrimary = if (isAppDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A)
-    val textSecondary = if (isAppDark) Color(0xFFA1A1AA) else Color(0xFF8A8A8E)
-    val searchBtnBg = if (isAppDark) Color(0xFF2C2C2E) else Color.White
+    val drawerBg = MaterialTheme.colorScheme.background
+    val textPrimary = Color(0xFF1A1A1A)
+    val textSecondary = Color(0xFF8A8A8E)
 
     ModalDrawerSheet(
-        modifier = modifier.fillMaxWidth(0.80f).widthIn(max = 320.dp),
+        modifier = modifier
+            .fillMaxWidth(0.80f)
+            .widthIn(max = 320.dp)
+            .shadow(
+                elevation = 16.dp,
+                shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
+                ambientColor = Color.Black.copy(alpha = 0.08f),
+                spotColor = Color.Black.copy(alpha = 0.12f)
+            ),
         drawerContainerColor = drawerBg,
-        drawerShape = RoundedCornerShape(0.dp),
+        drawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
         drawerTonalElevation = 0.dp
     ) {
         Column(
@@ -639,43 +648,42 @@ fun ChatHistoryDrawer(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            // ---------------- header: Aura AI on the left, circular 44dp search on the right ----------------
+            // ---------------- header: Aura AI on the left, circular 44dp soft elevated search on the right ----------------
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                    .padding(start = 20.dp, end = 16.dp, top = 16.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "Aura AI",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = (-0.3).sp,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (-0.2).sp,
+                    fontFamily = FontFamily.SansSerif,
                     color = textPrimary,
                     modifier = Modifier.weight(1f)
                 )
 
-                Surface(
+                SoftElevatedBox(
+                    modifier = Modifier.size(44.dp),
+                    shape = CircleShape,
+                    backgroundColor = Color.White,
+                    elevation = 3.dp,
                     onClick = {
                         isSearchActive = !isSearchActive
                         if (!isSearchActive) {
                             searchQuery = ""
                             onSearchQueryChange("")
                         }
-                    },
-                    shape = CircleShape,
-                    color = searchBtnBg,
-                    shadowElevation = 2.dp,
-                    modifier = Modifier.size(44.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Filled.Search,
-                            contentDescription = "Search",
-                            tint = textPrimary,
-                            modifier = Modifier.size(22.dp)
-                        )
                     }
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = "Search",
+                        tint = textPrimary,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
 
@@ -683,7 +691,8 @@ fun ChatHistoryDrawer(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp)
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 SidebarNavigationRow(
                     icon = Icons.Outlined.PhotoLibrary,
@@ -1010,13 +1019,23 @@ fun ChatHistoryDrawer(
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                 fontSize = 12.sp
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Button(
-                                onClick = onRetry,
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            SoftElevatedBox(
+                                modifier = Modifier
+                                    .height(44.dp)
+                                    .padding(horizontal = 4.dp),
+                                shape = RoundedCornerShape(22.dp),
+                                backgroundColor = Color.White,
+                                elevation = 3.dp,
+                                onClick = onRetry
                             ) {
-                                Text("Retry", fontSize = 12.5.sp)
+                                Text(
+                                    text = "Retry",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF1976D2),
+                                    modifier = Modifier.padding(horizontal = 24.dp)
+                                )
                             }
                         }
                     }
@@ -1271,13 +1290,13 @@ fun ChatHistoryDrawer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 44dp circular Settings gear button
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .clickable { onOpenSettings() },
-                    contentAlignment = Alignment.Center
+                // 48dp circular Settings gear button with soft elevation
+                SoftElevatedBox(
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape,
+                    backgroundColor = Color.White,
+                    elevation = 3.dp,
+                    onClick = { onOpenSettings() }
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Settings,
@@ -1287,7 +1306,7 @@ fun ChatHistoryDrawer(
                     )
                 }
 
-                // 44dp circular Initials Avatar badge on right
+                // 48dp circular Initials Avatar badge on right with soft elevation
                 Box(contentAlignment = Alignment.Center) {
                     val avatarBg = Color(0xFF1DB39A)
                     val initials = remember(authInfo.displayName) {
@@ -1300,13 +1319,12 @@ fun ChatHistoryDrawer(
                         }
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(avatarBg)
-                            .clickable { showAvatarMenu = true },
-                        contentAlignment = Alignment.Center
+                    SoftElevatedBox(
+                        modifier = Modifier.size(48.dp),
+                        shape = CircleShape,
+                        backgroundColor = avatarBg,
+                        elevation = 3.dp,
+                        onClick = { showAvatarMenu = true }
                     ) {
                         if (authInfo.profilePictureUrl != null) {
                             SubcomposeAsyncImage(
@@ -2447,31 +2465,36 @@ fun SidebarNavigationRow(
     textColor: Color,
     onClick: () -> Unit
 ) {
-    val isAppDark = com.example.gemini.theme.isAppInDarkTheme()
-    val iconTint = if (isAppDark) Color(0xFFD1D1D6) else Color(0xFF1F1F1F)
-
-    Row(
+    SoftElevatedBox(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
-            .padding(horizontal = 8.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .height(52.dp)
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(18.dp),
+        backgroundColor = Color.White,
+        elevation = 3.dp,
+        onClick = onClick
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = iconTint,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Text(
-            text = label,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Normal,
-            color = textColor
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = Color(0xFF222222),
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(14.dp))
+            Text(
+                text = label,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Normal,
+                color = textColor,
+                maxLines = 1
+            )
+        }
     }
 }

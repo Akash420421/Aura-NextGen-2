@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.4-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.5-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,15 +70,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.0.4
-          name: Aura AI v2.0.4
+          tag_name: v2.0.5
+          name: Aura AI v2.0.5
           body: |
-            ### Aura AI v2.0.4 — ChatGPT-Style White Sidebar & Customize Screen
-            - **ChatGPT-Style White Theme Sidebar:** Clean white surface (#FFFFFF) with flat right edge (0dp radius), 44dp circular search button, and crisp dark status bar icons.
-            - **Fixed Navigation Menu:** Top rows for Images, Customize, Projects, Tasks, and Plugins with rounded ripple feedback.
-            - **Streamlined Chat History:** Single-line chat titles, selection pills, 32dp soft alpha fade, and long-press context menu.
-            - **Redesigned Footer:** 44dp settings gear, 44dp circular teal initials avatar badge, and avatar popup menu with Account, Archived Chats, Workspace Grouping, and Exit App.
-            - **New Full-Screen Customize Screen:** 3 grouped cards with colorful multi-tone icons for Personality, Memory, Plugins, Email, Calendar, Contacts, Passwords, and Location with sub-screen routing.
+            ### Aura AI v2.0.5 — PRoot Ubuntu Engine, Pure White Theme & Refined Sidebar
+            - **PRoot Ubuntu 24.04 Engine:** Fixed package isolation check so standalone `com.aura.ai` downloads lightweight Ubuntu rootfs (35MB) and executes under PRoot glibc. Completely resolves `libandroid-support.so not found` during bootstrap shell verification.
+            - **Local AI Engine Auto-Start:** Seamless daemon launch on isolated ports 1244/1245 upon rootfs verification, eliminating "Antigravity is stopped" and connection refused errors.
+            - **Pure White / Light Theme Everywhere:** Dark theme completely eliminated across screens, settings, dialogs, drawers, and menus. Status and navigation bar icons are dark everywhere for crisp readability.
+            - **Refined Sidebar:** Sidebar container background matches the Chat and Voice screens' off-white token (`MaterialTheme.colorScheme.background`), 28dp rounded right corners with edge shadow, 24sp SemiBold Aura AI header, and 44dp circular elevated search button.
+            - **Soft 3D Elevated Elements:** White elevated 52dp menu cards (Images, Customize, Projects, Tasks, Plugins) with 10dp gap, 48dp gear and teal avatar, and 44dp blue text Retry pill.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

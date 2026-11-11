@@ -34,7 +34,7 @@ fun CustomizePlaceholderScreen(
 ) {
     BackHandler(onBack = onBack)
     val isDark = isAppInDarkTheme()
-    val bgColor = if (isDark) Color(0xFF141416) else Color(0xFFF4F4F6)
+    val bgColor = MaterialTheme.colorScheme.background
     val topBarBg = if (isDark) Color(0xFF1C1C1E) else Color.White
     val textColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A)
     val descColor = if (isDark) Color(0xFFA1A1AA) else Color(0xFF8A8A8E)

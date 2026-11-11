@@ -1,14 +1,14 @@
 {
-  "version_code": 204,
-  "version_name": "2.0.4",
+  "version_code": 205,
+  "version_name": "2.0.5",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.0.4 ChatGPT-Style White Sidebar & Customize Screen",
-    "ChatGPT-Style White Theme Sidebar: Clean white surface with flat right edge, 44dp circular search button, and crisp dark status bar icons",
-    "Fixed Navigation Menu: Top rows for Images, Customize, Projects, Tasks, and Plugins with rounded ripple feedback",
-    "Streamlined Chat History: Single-line chat titles, selection pills, 32dp soft alpha fade, and long-press context menu",
-    "Redesigned Footer: 44dp settings gear, 44dp circular teal initials avatar badge, and avatar popup menu with Account, Archived Chats, Workspace Grouping, and Exit App",
-    "New Full-Screen Customize Screen: 3 grouped cards with colorful multi-tone icons for Personality, Memory, Plugins, Email, Calendar, Contacts, Passwords, and Location with sub-screen routing"
+    "Aura AI v2.0.5 PRoot Ubuntu Engine, Pure White Theme & Refined Sidebar",
+    "PRoot Ubuntu Engine: Fixed isTermuxPackage so standalone com.aura.ai downloads Ubuntu 24.04 rootfs (35MB) and executes under PRoot glibc, completely eliminating 'libandroid-support.so not found' during shell verification",
+    "Local AI Engine Auto-Start: Automatic startup of agy_ide_bridge and AGY Hub on isolated ports 1244/1245 upon rootfs verification",
+    "Pure White/Light Theme Everywhere: Complete elimination of dark mode across all screens, settings, dialogs, drawers, and menus with readable dark status & nav bar icons",
+    "Refined Sidebar: Drawer background matching Chat/Voice off-white, 28dp rounded right corners with edge shadow, 24sp SemiBold Aura AI header, 44dp circular elevated search button",
+    "Soft 3D Elevated Style: White elevated 52dp menu cards (Images, Customize, Projects, Tasks, Plugins) with 10dp gap, 48dp gear and teal avatar, and 44dp blue text Retry pill"
   ],
   "is_critical": false
 }

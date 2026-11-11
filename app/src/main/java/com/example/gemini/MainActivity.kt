@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO)
         enableEdgeToEdge()
         instanceRef = java.lang.ref.WeakReference(this)
         com.example.gemini.data.jarvis.JarvisPreferences.init(this)
@@ -225,7 +226,7 @@ class MainActivity : ComponentActivity() {
             val showFullScreenInstaller = !isInstalledState && !hasSkippedInstaller &&
                 !com.example.gemini.data.preferences.AuthPreferences.currentRemoteMode
 
-            GeminiTheme(darkTheme = useDarkTheme) {
+            GeminiTheme(darkTheme = false) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
