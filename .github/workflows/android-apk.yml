@@ -73,12 +73,14 @@ jobs:
           tag_name: v2.0.5
           name: Aura AI v2.0.5
           body: |
-            ### Aura AI v2.0.5 — PRoot Ubuntu Engine, Pure White Theme & Refined Sidebar
-            - **PRoot Ubuntu 24.04 Engine:** Fixed package isolation check so standalone `com.aura.ai` downloads lightweight Ubuntu rootfs (35MB) and executes under PRoot glibc. Completely resolves `libandroid-support.so not found` during bootstrap shell verification.
-            - **Local AI Engine Auto-Start:** Seamless daemon launch on isolated ports 1244/1245 upon rootfs verification, eliminating "Antigravity is stopped" and connection refused errors.
+            ### Aura AI v2.0.5 — Pure White Theme & Refined Sidebar
             - **Pure White / Light Theme Everywhere:** Dark theme completely eliminated across screens, settings, dialogs, drawers, and menus. Status and navigation bar icons are dark everywhere for crisp readability.
-            - **Refined Sidebar:** Sidebar container background matches the Chat and Voice screens' off-white token (`MaterialTheme.colorScheme.background`), 28dp rounded right corners with edge shadow, 24sp SemiBold Aura AI header, and 44dp circular elevated search button.
-            - **Soft 3D Elevated Elements:** White elevated 52dp menu cards (Images, Customize, Projects, Tasks, Plugins) with 10dp gap, 48dp gear and teal avatar, and 44dp blue text Retry pill.
+            - **Sidebar Background Match:** Sidebar container background matches the Chat and Voice screens' off-white token (`MaterialTheme.colorScheme.background`) with zero tonal elevation tint.
+            - **28dp Rounded Drawer:** Rounded right corners (28dp) with soft right-edge shadow.
+            - **24sp SemiBold Aura AI Header:** Clean typography with -0.2sp letter spacing and 44dp circular elevated search button.
+            - **Soft 3D Elevated Menu Cards:** White elevated 52dp cards (Images, Customize, Projects, Tasks, Plugins) with 10dp gap and rounded ripple feedback.
+            - **Elevated Footer Buttons:** 48dp white circular gear button and 48dp teal circular initials avatar.
+            - **Retry Pill:** 44dp white elevated pill with blue text for clean error recovery.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

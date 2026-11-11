@@ -3,12 +3,14 @@
   "version_name": "2.0.5",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.0.5 PRoot Ubuntu Engine, Pure White Theme & Refined Sidebar",
-    "PRoot Ubuntu Engine: Fixed isTermuxPackage so standalone com.aura.ai downloads Ubuntu 24.04 rootfs (35MB) and executes under PRoot glibc, completely eliminating 'libandroid-support.so not found' during shell verification",
-    "Local AI Engine Auto-Start: Automatic startup of agy_ide_bridge and AGY Hub on isolated ports 1244/1245 upon rootfs verification",
+    "Aura AI v2.0.5 Pure White Theme & Refined Sidebar",
     "Pure White/Light Theme Everywhere: Complete elimination of dark mode across all screens, settings, dialogs, drawers, and menus with readable dark status & nav bar icons",
-    "Refined Sidebar: Drawer background matching Chat/Voice off-white, 28dp rounded right corners with edge shadow, 24sp SemiBold Aura AI header, 44dp circular elevated search button",
-    "Soft 3D Elevated Style: White elevated 52dp menu cards (Images, Customize, Projects, Tasks, Plugins) with 10dp gap, 48dp gear and teal avatar, and 44dp blue text Retry pill"
+    "Sidebar Background Match: Drawer background matching Chat/Voice off-white token (#F9F9FB) with zero tonal elevation tint",
+    "28dp Rounded Drawer: Rounded right corners (28dp) with soft right-edge shadow",
+    "24sp SemiBold Aura AI Header: Clean typography with -0.2sp letter spacing and 44dp circular elevated search button",
+    "Soft 3D Elevated Menu Cards: White elevated 52dp cards (Images, Customize, Projects, Tasks, Plugins) with 10dp gap and rounded ripple feedback",
+    "Elevated Footer Buttons: 48dp white circular gear button and 48dp teal circular initials avatar",
+    "Retry Pill: 44dp white elevated pill with blue text for clean error recovery"
   ],
   "is_critical": false
 }

@@ -52,7 +52,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO)
         enableEdgeToEdge()
         instanceRef = java.lang.ref.WeakReference(this)
         com.example.gemini.data.jarvis.JarvisPreferences.init(this)
