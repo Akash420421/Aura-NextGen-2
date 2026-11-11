@@ -48,6 +48,16 @@ android {
             keyAlias = "antigem"
             keyPassword = "123456"
         }
+        // Cloud debug artifacts use a stable, private CI keystore when present, so an updated APK can
+        // install over the previous CI build instead of receiving a different runner-generated debug key.
+        if (file("aura-debug.jks").exists()) {
+            create("auraDebug") {
+                storeFile = file("aura-debug.jks")
+                storePassword = System.getenv("AURA_DEBUG_STORE_PASSWORD") ?: ""
+                keyAlias = "aura-debug"
+                keyPassword = System.getenv("AURA_DEBUG_KEY_PASSWORD") ?: ""
+            }
+        }
     }
 
     flavorDimensions += "mode"
@@ -81,6 +91,9 @@ android {
 
     buildTypes {
         debug {
+            if (file("aura-debug.jks").exists()) {
+                signingConfig = signingConfigs.getByName("auraDebug")
+            }
         }
         release {
             isMinifyEnabled = true

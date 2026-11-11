@@ -34,7 +34,21 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Restore stable debug signing key
+        env:
+          AURA_DEBUG_KEYSTORE_BASE64: ${{ secrets.AURA_DEBUG_KEYSTORE_BASE64 }}
+          AURA_DEBUG_STORE_PASSWORD: ${{ secrets.AURA_DEBUG_STORE_PASSWORD }}
+          AURA_DEBUG_KEY_PASSWORD: ${{ secrets.AURA_DEBUG_KEY_PASSWORD }}
+        run: |
+          test -n "$AURA_DEBUG_KEYSTORE_BASE64"
+          test -n "$AURA_DEBUG_STORE_PASSWORD"
+          test -n "$AURA_DEBUG_KEY_PASSWORD"
+          printf '%s' "$AURA_DEBUG_KEYSTORE_BASE64" | base64 --decode > app/aura-debug.jks
+
       - name: Build standalone Aura AI APK
+        env:
+          AURA_DEBUG_STORE_PASSWORD: ${{ secrets.AURA_DEBUG_STORE_PASSWORD }}
+          AURA_DEBUG_KEY_PASSWORD: ${{ secrets.AURA_DEBUG_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleStandardDebug

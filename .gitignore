@@ -60,6 +60,8 @@ proto_generator/*.json
 termux-app/
 /backup_bootstrap
 output/
+/build-artifacts/
+app/aura-debug.jks
 .agents/
 flow_mcp/
 finally.zip
