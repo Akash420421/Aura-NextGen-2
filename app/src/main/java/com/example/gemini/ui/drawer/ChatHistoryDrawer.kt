@@ -1918,6 +1918,7 @@ fun SearchChatsDialog(
     onSelectConversation: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val textPrimary = Color(0xFF1A1A1A)
     var query by remember { mutableStateOf("") }
     var selectedTimeFilter by remember { mutableStateOf("All") }
     var selectedWorkspaceFilter by remember { mutableStateOf("All") }
