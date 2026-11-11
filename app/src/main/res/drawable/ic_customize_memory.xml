@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Soft light orange background badge -->
+    <path
+        android:fillColor="#FFEDD5"
+        android:pathData="M5,4h14c1.1,0 2,0.9 2,2v12c0,1.1 -0.9,2 -2,2H5c-1.1,0 -2,-0.9 -2,-2V6c0,-1.1 0.9,-2 2,-2z" />
+    <!-- Vibrant orange chip core -->
+    <path
+        android:fillColor="#EA580C"
+        android:pathData="M9,7h6c0.55,0 1,0.45 1,1v8c0,0.55 -0.45,1 -1,1H9c-0.55,0 -1,-0.45 -1,-1V8c0,-0.55 0.45,-1 1,-1z" />
+    <!-- Memory nodes and traces -->
+    <path
+        android:fillColor="#C2410C"
+        android:pathData="M11,9h2v2h-2zM11,13h2v2h-2zM4,9h3v1.5H4zM4,13.5h3V15H4zM17,9h3v1.5h-3zM17,13.5h3V15h-3zM9,4h1.5v3H9zM13.5,4H15v3h-1.5zM9,17h1.5v3H9zM13.5,17H15v3h-1.5z" />
+</vector>

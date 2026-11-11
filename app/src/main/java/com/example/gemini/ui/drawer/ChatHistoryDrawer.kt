@@ -10,8 +10,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,6 +47,10 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Person
 import com.example.gemini.ui.components.AppToastHelper
 import com.example.gemini.ui.components.ChatToastType
 import android.widget.Toast
@@ -56,6 +62,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -129,6 +136,11 @@ fun ChatHistoryDrawer(
     /** Starts a Jarvis text chat (the command center) with that agent, or Jarvis' own agent for null. */
     onNewJarvisChat: ((com.example.gemini.domain.model.AgentKind?) -> Unit)? = null,
     enabledAgents: Set<com.example.gemini.domain.model.AgentKind> = emptySet(),
+    onOpenImages: (() -> Unit)? = null,
+    onOpenCustomize: (() -> Unit)? = null,
+    onOpenProjects: (() -> Unit)? = null,
+    onOpenTasks: (() -> Unit)? = null,
+    onOpenPlugins: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -610,83 +622,99 @@ fun ChatHistoryDrawer(
         )
     }
 
+    val isAppDark = com.example.gemini.theme.isAppInDarkTheme()
+    val drawerBg = if (isAppDark) Color(0xFF1C1C1E) else Color.White
+    val textPrimary = if (isAppDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A)
+    val textSecondary = if (isAppDark) Color(0xFFA1A1AA) else Color(0xFF8A8A8E)
+    val searchBtnBg = if (isAppDark) Color(0xFF2C2C2E) else Color.White
+
     ModalDrawerSheet(
-        modifier = modifier.fillMaxWidth(0.82f),
-        drawerContainerColor = MaterialTheme.colorScheme.surface,
+        modifier = modifier.fillMaxWidth(0.80f).widthIn(max = 320.dp),
+        drawerContainerColor = drawerBg,
+        drawerShape = RoundedCornerShape(0.dp),
         drawerTonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp)
+                .statusBarsPadding()
         ) {
-            // ---------------- header: brand on the left, power + new chat on the right ----------------
+            // ---------------- header: Aura AI on the left, circular 44dp search on the right ----------------
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 2.dp, top = 2.dp),
+                    .padding(start = 20.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "AntiGem",
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.Bold,
+                    text = "Aura AI",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Medium,
                     letterSpacing = (-0.3).sp,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = textPrimary,
                     modifier = Modifier.weight(1f)
                 )
 
-                @Composable
-                fun HeaderIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, active: Boolean, onClick: () -> Unit) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(if (active) ClaudeTerracotta.copy(alpha = 0.14f) else Color.Transparent)
-                            .clickable(onClick = onClick),
-                        contentAlignment = Alignment.Center
-                    ) {
+                Surface(
+                    onClick = {
+                        isSearchActive = !isSearchActive
+                        if (!isSearchActive) {
+                            searchQuery = ""
+                            onSearchQueryChange("")
+                        }
+                    },
+                    shape = CircleShape,
+                    color = searchBtnBg,
+                    shadowElevation = 2.dp,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = icon,
-                            contentDescription = description,
-                            tint = if (active) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                            modifier = Modifier.size(19.dp)
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = "Search",
+                            tint = textPrimary,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
-                HeaderIcon(Icons.Default.Search, "Search", isSearchActive || searchQuery.isNotBlank()) {
-                    isSearchActive = !isSearchActive
-                    if (!isSearchActive) {
-                        searchQuery = ""
-                        onSearchQueryChange("")
-                    }
-                }
-                HeaderIcon(
-                    if (groupByWorkspace) Icons.Default.Folder else Icons.Outlined.FolderOpen,
-                    if (groupByWorkspace) "Disable Workspace Grouping" else "Group by Workspace",
-                    groupByWorkspace
-                ) { onToggleGroupByWorkspace(!groupByWorkspace) }
-                HeaderIcon(
-                    Icons.Outlined.Archive,
-                    if (showArchived) "Show Chats" else "Show Archived Chats",
-                    showArchived
-                ) { onToggleShowArchived(!showArchived) }
+            }
 
-                // Exit app: quiet until pressed (it asks first)
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .clickable { showExitConfirmDialog = true },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PowerSettingsNew,
-                        contentDescription = "Exit App",
-                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.75f),
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
+            // Fixed Top Navigation Menu (Images, Customize, Projects, Tasks, Plugins)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                SidebarNavigationRow(
+                    icon = Icons.Outlined.PhotoLibrary,
+                    label = "Images",
+                    textColor = textPrimary,
+                    onClick = { onOpenImages?.invoke() }
+                )
+                SidebarNavigationRow(
+                    icon = Icons.Outlined.Tune,
+                    label = "Customize",
+                    textColor = textPrimary,
+                    onClick = { onOpenCustomize?.invoke() }
+                )
+                SidebarNavigationRow(
+                    icon = Icons.Outlined.Folder,
+                    label = "Projects",
+                    textColor = textPrimary,
+                    onClick = { onOpenProjects?.invoke() }
+                )
+                SidebarNavigationRow(
+                    icon = Icons.Outlined.Schedule,
+                    label = "Tasks",
+                    textColor = textPrimary,
+                    onClick = { onOpenTasks?.invoke() }
+                )
+                SidebarNavigationRow(
+                    icon = Icons.Outlined.Extension,
+                    label = "Plugins",
+                    textColor = textPrimary,
+                    onClick = { onOpenPlugins?.invoke() }
+                )
             }
 
             // ---------------- search field: only after tapping the header's search icon ----------------
@@ -918,25 +946,39 @@ fun ChatHistoryDrawer(
                 JarvisNewChatRow(agents = visibleAgents, onNew = onNewJarvisChat)
             }
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Section Label "Chats"
+            Text(
+                text = "Chats",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = textSecondary,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+            )
+
             val isEngineConnecting = agyEnabled && (systemConnectionState.status == com.example.gemini.data.remote.SystemStatus.STARTING ||
                     systemConnectionState.status == com.example.gemini.data.remote.SystemStatus.ACQUIRING_CSRF ||
                     (systemConnectionState.status == com.example.gemini.data.remote.SystemStatus.OFFLINE && isInitialGracePeriod)) && conversations.isEmpty()
             val showSkeleton =
                 agyEnabled && (!hasReceivedInitialSync || isLoading) && conversations.isEmpty() && errorMessage.isNullOrBlank()
 
-            Crossfade(
-                targetState = when {
-                    isEngineConnecting -> "engine_warming"
-                    showSkeleton -> "loading"
-                    !errorMessage.isNullOrBlank() && conversations.isEmpty() -> "error"
-                    filtered.isEmpty() -> "empty"
-                    else -> "content"
-                },
-                label = "drawerChatListFade",
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-            ) { state ->
+            ) {
+                Crossfade(
+                    targetState = when {
+                        isEngineConnecting -> "engine_warming"
+                        showSkeleton -> "loading"
+                        !errorMessage.isNullOrBlank() && conversations.isEmpty() -> "error"
+                        filtered.isEmpty() -> "empty"
+                        else -> "content"
+                    },
+                    label = "drawerChatListFade",
+                    modifier = Modifier.fillMaxSize()
+                ) { state ->
                 when (state) {
                     "engine_warming" -> {
                         DrawerEngineWarmingUpView()
@@ -1202,217 +1244,230 @@ fun ChatHistoryDrawer(
                         }
                     }
                 }
+
+                // 32dp soft alpha fade gradient overlay above footer
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(32.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, drawerBg)
+                            )
+                        )
+                )
             }
 
-            HorizontalDivider(
-                thickness = 0.5.dp,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-            )
+            // Bottom Footer: Settings gear on left, Initials Avatar badge on right
+            var showAvatarMenu by remember { mutableStateOf(false) }
 
-            // Bottom Bar: Settings (Left) & Profile/Login (Right)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Settings on left: icon only, same style as the Themes button next to it
-                Surface(
-                    onClick = onOpenSettings,
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color.Transparent,
-                    modifier = Modifier.padding(end = 4.dp)
+                // 44dp circular Settings gear button
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .clickable { onOpenSettings() },
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Settings,
                         contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        modifier = Modifier.padding(8.dp).size(20.dp)
+                        tint = textPrimary,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
-                // Themes: a floating picker over the sidebar and chat, to try themes and see them live
-                if (onOpenThemes != null) {
-                    Surface(
-                        onClick = onOpenThemes,
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color.Transparent,
-                        modifier = Modifier.padding(end = 4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Palette,
-                            contentDescription = "Themes",
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(8.dp).size(20.dp)
-                        )
+                // 44dp circular Initials Avatar badge on right
+                Box(contentAlignment = Alignment.Center) {
+                    val avatarBg = Color(0xFF1DB39A)
+                    val initials = remember(authInfo.displayName) {
+                        val parts = authInfo.displayName.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                        when {
+                            parts.size >= 2 -> "${parts[0].first().uppercaseChar()}${parts[1].first().uppercaseChar()}"
+                            parts.size == 1 && parts[0].length >= 2 -> "${parts[0][0].uppercaseChar()}${parts[0][1].uppercaseChar()}"
+                            parts.size == 1 -> "${parts[0][0].uppercaseChar()}"
+                            else -> "AK"
+                        }
                     }
-                }
 
-                // keeps the profile / login button on the right
-                Spacer(modifier = Modifier.weight(1f))
-
-                // Profile / Login on right
-                if (accountsButton != null) {
-                    accountsButton()
-                } else if (isAuthBusy) {
-                    Surface(
-                        onClick = { showSigningInProgressDialog = true },
-                        shape = RoundedCornerShape(14.dp),
-                        color = ClaudeTerracotta.copy(alpha = 0.12f),
-                        modifier = Modifier.height(30.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(avatarBg)
+                            .clickable { showAvatarMenu = true },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
+                        if (authInfo.profilePictureUrl != null) {
+                            SubcomposeAsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(parseProfileAvatarModel(authInfo.profilePictureUrl))
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = "Profile Picture",
                                 modifier = Modifier
-                                    .size(6.dp)
-                                    .background(ClaudeTerracotta, CircleShape)
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                error = {
+                                    Text(
+                                        text = initials,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.White
+                                    )
+                                },
+                                loading = {
+                                    Text(
+                                        text = initials,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color.White
+                                    )
+                                }
                             )
-                            Spacer(modifier = Modifier.width(5.dp))
+                        } else {
                             Text(
-                                text = "Signing In...",
-                                fontSize = 11.5.sp,
+                                text = initials,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = ClaudeTerracotta
+                                color = Color.White
                             )
                         }
                     }
-                } else {
-                    when (systemConnectionState.status) {
-                        com.example.gemini.data.remote.SystemStatus.READY -> {
-                            // Profile avatar button with real display name
-                            Surface(
-                                onClick = { showProfileDialog = true },
-                                shape = RoundedCornerShape(20.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                border = androidx.compose.foundation.BorderStroke(
-                                    1.dp,
-                                    ClaudeTerracotta.copy(alpha = 0.4f)
-                                )
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    SubcomposeAsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(parseProfileAvatarModel(authInfo.profilePictureUrl))
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Profile Picture",
-                                        modifier = Modifier
-                                            .size(24.dp)
-                                            .clip(CircleShape),
-                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                        loading = {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .background(ClaudeTerracotta),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                val initial =
-                                                    authInfo.displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "U"
-                                                Text(
-                                                    text = initial,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = Color.White
-                                                )
-                                            }
-                                        },
-                                        error = {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .background(ClaudeTerracotta),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                val initial =
-                                                    authInfo.displayName.firstOrNull()?.uppercaseChar()?.toString() ?: "U"
-                                                Text(
-                                                    text = initial,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = Color.White
-                                                )
-                                            }
-                                        }
+
+                    // Popup Menu anchored to the Avatar
+                    DropdownMenu(
+                        expanded = showAvatarMenu,
+                        onDismissRequest = { showAvatarMenu = false },
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = if (isAppDark) Color(0xFF2C2C2E) else Color.White,
+                        tonalElevation = 6.dp,
+                        modifier = Modifier.widthIn(min = 220.dp)
+                    ) {
+                        // 1. Account / Profile
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        text = if (authInfo.displayName.isNotBlank()) authInfo.displayName else "Account",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = textPrimary
                                     )
-                                    val nameToShow = authInfo.displayName
-                                    if (nameToShow.isNotBlank()) {
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                    val email = authInfo.email
+                                    if (email != null && email.isNotBlank()) {
                                         Text(
-                                            text = nameToShow,
+                                            text = email,
                                             fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.widthIn(max = 110.dp),
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            color = textSecondary
                                         )
                                     }
                                 }
-                            }
-                        }
-
-                        com.example.gemini.data.remote.SystemStatus.UNAUTHENTICATED -> {
-                            // Not logged in (UNAUTHENTICATED) -> Sign In button
-                            FilledTonalButton(
-                                onClick = onLogin,
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.filledTonalButtonColors(
-                                    containerColor = ClaudeTerracotta.copy(alpha = 0.15f),
-                                    contentColor = ClaudeTerracotta
-                                ),
-                                modifier = Modifier.height(32.dp)
-                            ) {
+                            },
+                            leadingIcon = {
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Outlined.Login,
-                                    contentDescription = "Sign In",
-                                    modifier = Modifier.size(15.dp)
+                                    imageVector = Icons.Outlined.Person,
+                                    contentDescription = null,
+                                    tint = textPrimary,
+                                    modifier = Modifier.size(20.dp)
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Sign In",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                            },
+                            onClick = {
+                                showAvatarMenu = false
+                                showProfileDialog = true
                             }
-                        }
+                        )
 
-                        else -> {
-                            // All intermediate or offline states (OFFLINE, STARTING, ACQUIRING_CSRF, CHECKING_AUTH, ERROR)
-                            val statusObj = systemConnectionState.status
-                            Surface(
-                                onClick = if (statusObj == com.example.gemini.data.remote.SystemStatus.OFFLINE || statusObj == com.example.gemini.data.remote.SystemStatus.ERROR) onRetry else onCheckAuth,
-                                shape = RoundedCornerShape(14.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.height(30.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .background(statusObj.dotColor, CircleShape)
-                                    )
-                                    Spacer(modifier = Modifier.width(5.dp))
-                                    Text(
-                                        text = statusObj.label,
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Normal,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                                    )
-                                }
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = textSecondary.copy(alpha = 0.2f),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+
+                        // 2. Archived Chats Toggle
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = if (showArchived) "Hide Archived Chats" else "Show Archived Chats",
+                                    fontSize = 14.sp,
+                                    color = textPrimary
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Archive,
+                                    contentDescription = null,
+                                    tint = textPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            onClick = {
+                                showAvatarMenu = false
+                                onToggleShowArchived(!showArchived)
                             }
-                        }
+                        )
+
+                        // 3. Group by Workspace Toggle
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = if (groupByWorkspace) "Disable Workspace Grouping" else "Group by Workspace",
+                                    fontSize = 14.sp,
+                                    color = textPrimary
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = textPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            onClick = {
+                                showAvatarMenu = false
+                                onToggleGroupByWorkspace(!groupByWorkspace)
+                            }
+                        )
+
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = textSecondary.copy(alpha = 0.2f),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+
+                        // 4. Exit App
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = "Exit App",
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.PowerSettingsNew,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            onClick = {
+                                showAvatarMenu = false
+                                showExitConfirmDialog = true
+                            }
+                        )
                     }
                 }
             }
@@ -1517,247 +1572,173 @@ private fun ChatHistoryItemRow(
     claudeActions: ClaudeDrawerActions? = null
 ) {
     val isSubagent = depth > 0
-    val startPadding = if (isSubagent) (12 + (depth * 14)).dp else 0.dp
+    val startPadding = if (isSubagent) (12 + (depth * 14)).dp else 6.dp
+    val isAppDark = com.example.gemini.theme.isAppInDarkTheme()
+    val textPrimary = if (isAppDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A)
+    val selectedBg = if (isAppDark) Color(0xFF2C2C2E) else Color(0xFFF0F0F2)
     val statusDotColor = when {
         isActivelyRunning -> com.example.gemini.theme.AppColors.success
         isScheduledOrBackground -> com.example.gemini.theme.AppColors.warning
         else -> null
     }
-    Row(
+
+    var menuExpanded by remember { mutableStateOf(false) }
+    var showRename by remember { mutableStateOf(false) }
+    val isClaudeConv = conv.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
+    val isAgentConv = conv.agent != com.example.gemini.domain.model.AgentKind.AGY
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = com.example.gemini.ui.components.LocalSnackbarHostState.current
+
+    if (showRename && claudeActions != null) {
+        var newTitle by remember { mutableStateOf(conv.title) }
+        AlertDialog(
+            onDismissRequest = { showRename = false },
+            title = { Text("Rename chat", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(value = newTitle, onValueChange = { newTitle = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    claudeActions.rename(conv.id, newTitle)
+                    showRename = false
+                }, enabled = newTitle.isNotBlank()) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } }
+        )
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
                 start = startPadding,
-                end = 0.dp,
-                top = if (isSubagent) 1.dp else 2.dp,
-                bottom = if (isSubagent) 1.dp else 2.dp
+                end = 6.dp,
+                top = 1.dp,
+                bottom = 1.dp
             )
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (isSelected) MaterialTheme.colorScheme.surfaceVariant
-                else Color.Transparent
-            )
-            .clickable {
-                Log.d("CHAT_OPEN_DEBUG", "📂 [Drawer Row] User clicked: id=${conv.id}, title='${conv.title}'")
-                onSelectConversation(conv.id)
-            }
-            .padding(
-                horizontal = if (isSubagent) 8.dp else 10.dp,
-                vertical = if (isSubagent) 7.dp else 9.dp
-            ),
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isSubagent) {
-            Box(contentAlignment = Alignment.Center) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (isSelected) selectedBg else Color.Transparent)
+                .combinedClickable(
+                    onClick = {
+                        Log.d("CHAT_OPEN_DEBUG", "📂 [Drawer Row] User clicked: id=${conv.id}, title='${conv.title}'")
+                        onSelectConversation(conv.id)
+                    },
+                    onLongClick = {
+                        menuExpanded = true
+                    }
+                )
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isSubagent) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.CallSplit,
                     contentDescription = "Subagent",
                     tint = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     modifier = Modifier.size(15.dp)
                 )
-                if (statusDotColor != null) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .align(Alignment.TopEnd)
-                            .offset(x = 2.dp, y = (-2).dp)
-                            .background(statusDotColor, CircleShape)
-                    )
-                }
+                Spacer(modifier = Modifier.width(8.dp))
             }
-            Spacer(modifier = Modifier.width(8.dp))
-        } else {
-            Box(contentAlignment = Alignment.Center) {
-                // Claude chats are marked by an orange chat icon (instead of a "Claude" text badge)
-                val isClaudeChat = conv.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
-                val isOpenCodeChat = conv.agent == com.example.gemini.domain.model.AgentKind.OPENCODE
-                val isCodexChat = conv.agent == com.example.gemini.domain.model.AgentKind.CODEX
-                if (isJarvis) {
-                    com.example.gemini.ui.jarvis.JarvisBotIcon(19.dp, com.example.gemini.ui.jarvis.Cyan.copy(alpha = if (isSelected) 1f else 0.85f))
-                } else Icon(
-                    // an Antigravity cloud chat (Remote Agents) shows a cloud
-                    imageVector = if (conv.isCloud) Icons.Outlined.Cloud else Icons.Outlined.ChatBubbleOutline,
-                    contentDescription = if (conv.isCloud) "Cloud chat" else if (isClaudeChat) "Claude Code chat" else if (isOpenCodeChat) "OpenCode chat" else if (isCodexChat) "Codex chat" else null,
-                    tint = when {
-                        conv.isCloud -> com.example.gemini.theme.GeminiBlue.copy(alpha = if (isSelected) 1f else 0.85f)
-                        isClaudeChat -> com.example.gemini.ui.components.ClaudeAccent.copy(alpha = if (isSelected) 1f else 0.85f)
-                        isOpenCodeChat -> com.example.gemini.ui.components.OpenCodeAccent.copy(alpha = if (isSelected) 1f else 0.85f)
-                        isCodexChat -> com.example.gemini.ui.components.CodexAccent.copy(alpha = if (isSelected) 1f else 0.85f)
-                        isSelected -> ClaudeTerracotta
-                        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    },
-                    modifier = Modifier.size(17.dp)
-                )
-                if (statusDotColor != null) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .align(Alignment.TopEnd)
-                            .offset(x = 2.dp, y = (-2).dp)
-                            .background(statusDotColor, CircleShape)
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-        }
 
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
             Text(
                 text = displayName,
-                fontSize = if (isSubagent) 12.8.sp else 13.5.sp,
-                fontWeight = if (isSelected) FontWeight.SemiBold else if (isSubagent) FontWeight.Medium else FontWeight.Normal,
+                fontSize = 16.sp,
+                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                color = if (isSubagent && isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f, fill = false)
+                color = textPrimary,
+                modifier = Modifier.weight(1f)
             )
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                if (subagents.isNotEmpty()) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSubagentsExpanded) ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(
-                            alpha = 0.7f
-                        ),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isSubagentsExpanded) ClaudeTerracotta.copy(alpha = 0.4f) else Color.Transparent
-                        ),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { onToggleSubagents?.invoke() }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "${subagents.size}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (isSubagentsExpanded) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Icon(
-                                imageVector = if (isSubagentsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                contentDescription = if (isSubagentsExpanded) "Collapse subagents" else "Expand subagents",
-                                tint = if (isSubagentsExpanded) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                    }
-                }
-
-                val timeStr = formatRelativeTime(conv.updatedAt)
-                if (timeStr.isNotBlank()) {
-                    Text(
-                        text = timeStr,
-                        fontSize = if (isSubagent) 10.5.sp else 11.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.width(4.dp))
-
-        if (activeInst != null) {
-            Surface(
-                shape = RoundedCornerShape(4.dp),
-                color = com.example.gemini.theme.AppColors.success.copy(alpha = 0.15f),
-                border = BorderStroke(1.dp, com.example.gemini.theme.AppColors.success.copy(alpha = 0.5f)),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable {
-                        onTerminateInstance(activeInst, conv.title)
-                    }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            if (subagents.isNotEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isSubagentsExpanded) ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(
+                        alpha = 0.7f
+                    ),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isSubagentsExpanded) ClaudeTerracotta.copy(alpha = 0.4f) else Color.Transparent
+                    ),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onToggleSubagents?.invoke() }
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .background(com.example.gemini.theme.AppColors.success, CircleShape)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "RUNNING",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = com.example.gemini.theme.AppColors.success
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${subagents.size}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isSubagentsExpanded) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Icon(
+                            imageVector = if (isSubagentsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (isSubagentsExpanded) "Collapse subagents" else "Expand subagents",
+                            tint = if (isSubagentsExpanded) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
                 }
+                Spacer(modifier = Modifier.width(4.dp))
             }
-            Spacer(modifier = Modifier.width(6.dp))
-        } else if (statusDotColor != null) {
-            Box(
-                modifier = Modifier
-                    .padding(horizontal = 2.dp)
-                    .size(7.dp)
-                    .background(statusDotColor, CircleShape)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-        }
 
-        var menuExpanded by remember { mutableStateOf(false) }
-        var showRename by remember { mutableStateOf(false) }
-        val isClaudeConv = conv.agent == com.example.gemini.domain.model.AgentKind.CLAUDE
-        // Claude Code and OpenCode chats: renamed, exported and shared through claudeActions (routed by agent)
-        val isAgentConv = conv.agent != com.example.gemini.domain.model.AgentKind.AGY
-        val clipboardManager = LocalClipboardManager.current
-        val context = LocalContext.current
-
-        val scope = rememberCoroutineScope()
-        val snackbarHostState = com.example.gemini.ui.components.LocalSnackbarHostState.current
-
-        if (showRename && claudeActions != null) {
-            var newTitle by remember { mutableStateOf(conv.title) }
-            AlertDialog(
-                onDismissRequest = { showRename = false },
-                title = { Text("Rename chat", fontWeight = FontWeight.Bold) },
-                text = {
-                    OutlinedTextField(value = newTitle, onValueChange = { newTitle = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        claudeActions.rename(conv.id, newTitle)
-                        showRename = false
-                    }, enabled = newTitle.isNotBlank()) { Text("Save") }
-                },
-                dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } }
-            )
-        }
-
-        Box {
-            IconButton(
-                onClick = { menuExpanded = true },
-                modifier = Modifier.size(26.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.MoreVert,
-                    contentDescription = "Options",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.size(17.dp)
+            if (activeInst != null) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = com.example.gemini.theme.AppColors.success.copy(alpha = 0.15f),
+                    border = BorderStroke(1.dp, com.example.gemini.theme.AppColors.success.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable {
+                            onTerminateInstance(activeInst, conv.title)
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(com.example.gemini.theme.AppColors.success, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "RUNNING",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = com.example.gemini.theme.AppColors.success
+                        )
+                    }
+                }
+            } else if (statusDotColor != null) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .background(statusDotColor, CircleShape)
                 )
             }
+        }
 
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false },
-                shape = RoundedCornerShape(12.dp),
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-                modifier = Modifier.widthIn(min = 210.dp)
-            ) {
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+            shape = RoundedCornerShape(12.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+            modifier = Modifier.widthIn(min = 210.dp)
+        ) {
                 DropdownMenuItem(
                     text = { Text("Copy Conversation ID", fontSize = 13.5.sp) },
                     leadingIcon = {
@@ -2456,5 +2437,41 @@ private fun JarvisNewChatRow(
             )
         }
         Icon(Icons.Filled.Add, contentDescription = "New Jarvis chat", tint = accent)
+    }
+}
+
+@Composable
+fun SidebarNavigationRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    textColor: Color,
+    onClick: () -> Unit
+) {
+    val isAppDark = com.example.gemini.theme.isAppInDarkTheme()
+    val iconTint = if (isAppDark) Color(0xFFD1D1D6) else Color(0xFF1F1F1F)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .padding(horizontal = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = iconTint,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Text(
+            text = label,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Normal,
+            color = textColor
+        )
     }
 }

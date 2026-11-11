@@ -309,12 +309,17 @@ fun ChatScreen(
 
     val isAppDark = com.example.gemini.theme.isAppInDarkTheme()
     val view = androidx.compose.ui.platform.LocalView.current
-    DisposableEffect(isAuraHome, isAppDark) {
+    var showCustomizeScreen by rememberSaveable { mutableStateOf(false) }
+    var showImagesGalleryScreen by rememberSaveable { mutableStateOf(false) }
+    val isDrawerOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
+
+    DisposableEffect(isAuraHome, isAppDark, isDrawerOpen, showCustomizeScreen, showImagesGalleryScreen) {
         val window = (context as? Activity)?.window
         if (window != null && !view.isInEditMode) {
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, view)
-            insetsController.isAppearanceLightStatusBars = if (isAuraHome) true else !isAppDark
-            insetsController.isAppearanceLightNavigationBars = if (isAuraHome) true else !isAppDark
+            val forceDarkIcons = isAuraHome || isDrawerOpen || showCustomizeScreen || showImagesGalleryScreen
+            insetsController.isAppearanceLightStatusBars = if (forceDarkIcons) true else !isAppDark
+            insetsController.isAppearanceLightNavigationBars = if (forceDarkIcons) true else !isAppDark
         }
         onDispose {}
     }
@@ -1347,6 +1352,28 @@ fun ChatScreen(
                     showSettingsDialog = true
                     scope.launch { drawerState.close() }
                 },
+                onOpenImages = {
+                    scope.launch { drawerState.close() }
+                    showImagesGalleryScreen = true
+                },
+                onOpenCustomize = {
+                    scope.launch { drawerState.close() }
+                    showCustomizeScreen = true
+                },
+                onOpenProjects = {
+                    scope.launch { drawerState.close() }
+                    showProjectPickerDialog = true
+                },
+                onOpenTasks = {
+                    scope.launch { drawerState.close() }
+                    requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS_TASKS
+                    showSettingsDialog = true
+                },
+                onOpenPlugins = {
+                    scope.launch { drawerState.close() }
+                    requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.WEBVIEW_EXTENSIONS
+                    showSettingsDialog = true
+                },
                 // the sidebar stays open: the picker floats over it so the new look shows on the sidebar and the chat
                 onOpenThemes = { showThemePanel = !showThemePanel },
                 agyEnabled =com.example.gemini.domain.model.AgentKind.AGY in enabledAgents,
@@ -2352,7 +2379,7 @@ fun ChatScreen(
                     }
 
                     // Clean "Scroll to latest message" button (only in active chat when scrolled up)
-                    val showScrollToBottom = !isAuraHome && feedItems.isNotEmpty() && !isAtBottom
+                    val showScrollToBottom = !isAuraHome && feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
 
                     androidx.compose.animation.AnimatedVisibility(
                         visible = showScrollToBottom,
@@ -3833,6 +3860,31 @@ fun ChatScreen(
             onSetThemeMode = { viewModel.setThemeMode(it) },
             onClose = { showThemePanel = false },
             modifier = Modifier.align(Alignment.BottomCenter).zIndex(9999f)
+        )
+    }
+
+    if (showCustomizeScreen) {
+        com.example.gemini.ui.customize.CustomizeScreen(
+            onBack = { showCustomizeScreen = false },
+            onOpenPersonality = {
+                requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS_PERSONALITY
+                showSettingsDialog = true
+            },
+            onOpenMemory = {
+                requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS_CHAT
+                claudeSettingsPage = com.example.gemini.ui.claude.ClaudeSettingsPage.MEMORY
+                showSettingsDialog = true
+            },
+            onOpenPlugins = {
+                requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.WEBVIEW_EXTENSIONS
+                showSettingsDialog = true
+            }
+        )
+    }
+
+    if (showImagesGalleryScreen) {
+        com.example.gemini.ui.gallery.ImagesGalleryScreen(
+            onBack = { showImagesGalleryScreen = false }
         )
     }
     } // End of Box

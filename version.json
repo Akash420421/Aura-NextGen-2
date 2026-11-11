@@ -1,14 +1,14 @@
 {
-  "version_code": 203,
-  "version_name": "2.0.3",
+  "version_code": 204,
+  "version_name": "2.0.4",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.0.3 Voice Page Polish & WebGL Orb Integration",
-    "Part 7 3D WebGL Particle Orb: Interactive Three.js particle orb dynamically reacting to voice phases (idle, listening, thinking, speaking)",
-    "Bottom Controls Alignment: Centered 56dp 'Tap to Start' pill seamlessly aligned with 56dp circular Screen and Auto-on actions across all screen widths",
-    "Touch Feedback Fix: Eliminated all rectangular ripple boxes on round buttons and orb canvas with bounded circular shapes",
-    "Status Bar Contrast: Dynamic status bar insets ensure dark, legible clock, battery, and Wi-Fi icons on light landing backgrounds",
-    "Clean Edge Rendering: Eliminated stray WebView scrollbars and edge strips"
+    "Aura AI v2.0.4 ChatGPT-Style White Sidebar & Customize Screen",
+    "ChatGPT-Style White Theme Sidebar: Clean white surface with flat right edge, 44dp circular search button, and crisp dark status bar icons",
+    "Fixed Navigation Menu: Top rows for Images, Customize, Projects, Tasks, and Plugins with rounded ripple feedback",
+    "Streamlined Chat History: Single-line chat titles, selection pills, 32dp soft alpha fade, and long-press context menu",
+    "Redesigned Footer: 44dp settings gear, 44dp circular teal initials avatar badge, and avatar popup menu with Account, Archived Chats, Workspace Grouping, and Exit App",
+    "New Full-Screen Customize Screen: 3 grouped cards with colorful multi-tone icons for Personality, Memory, Plugins, Email, Calendar, Contacts, Passwords, and Location with sub-screen routing"
   ],
   "is_critical": false
 }
