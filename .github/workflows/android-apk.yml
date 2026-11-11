@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.2-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.3-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,14 +70,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.0.2
-          name: Aura AI v2.0.2
+          tag_name: v2.0.3
+          name: Aura AI v2.0.3
           body: |
-            ### Aura AI v2.0.2 — Home Screen Redesign & Polish Release
-            - **Slim Minimal Input Bar:** Compact 52–56dp floating pill with 36dp circular buttons (+, Waveform, Mic/Send), 8dp padding/spacing, 48dp touch targets, and full-width text field.
-            - **No Truncation:** Full "Ask anything..." placeholder cleanly visible across narrow (360dp) and standard phone screens.
-            - **Clean Suggestion Chips:** Text-only pill chips (44dp, 22dp radius, no emojis or heavy shadows, subtle press ripple/scale) spaced 24dp below the subtitle.
-            - **Fixed Scroll Button:** Gated FloatingSwitcherWidget away from Chat and replaced with a fixed, centered 40dp white circular button (12dp above input bar) appearing only in active chats when scrolled up.
+            ### Aura AI v2.0.3 — Voice Page Polish & WebGL Particle Orb
+            - **Part 7 3D WebGL Particle Orb:** Interactive Three.js particle orb dynamically reacting to voice phases (idle, listening, thinking, speaking).
+            - **Bottom Controls Alignment:** Centered 56dp 'Tap to Start' pill seamlessly aligned with 56dp circular Screen and Auto-on actions across all screen widths.
+            - **Touch Feedback Fix:** Eliminated all rectangular ripple boxes on round buttons and orb canvas with bounded circular shapes.
+            - **Status Bar Contrast:** Dynamic status bar insets ensure dark, legible clock, battery, and Wi-Fi icons on light landing backgrounds.
+            - **Clean Edge Rendering:** Eliminated stray WebView scrollbars and edge strips.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
