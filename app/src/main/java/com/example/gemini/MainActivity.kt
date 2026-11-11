@@ -501,50 +501,52 @@ class MainActivity : ComponentActivity() {
                                         switcherLastSeenMode = currentViewMode
                                     }
                                 }
-                                com.example.gemini.ui.components.FloatingSwitcherWidget(
-                                    currentViewMode = currentViewMode,
-                                    orientation = floatingSwitcherOrientation,
-                                    items = floatingSwitcherItems,
-                                    autoCollapseTimeoutSec = floatingSwitcherAutoCollapseSec,
-                                    savedPosXRatio = floatingSwitcherPosX,
-                                    savedPosYRatio = floatingSwitcherPosY,
-                                    onNavigateToChat = {
-                                        previousViewMode = currentViewMode
-                                        currentViewMode = AppViewMode.CHAT
-                                    },
-                                    onNavigateToIde = {
-                                        previousViewMode = currentViewMode
-                                        currentViewMode = AppViewMode.IDE
-                                    },
-                                    onNavigateToBrowser = {
-                                        previousViewMode = currentViewMode
-                                        currentViewMode = AppViewMode.BROWSER
-                                    },
-                                    onNavigateToTerminal = openTerminalFromSwitcher,
-                                    onNavigateToNotes = {
-                                        previousViewMode = currentViewMode
-                                        currentViewMode = AppViewMode.NOTES
-                                    },
-                                    onNavigateToFiles = {
-                                        previousViewMode = currentViewMode
-                                        currentViewMode = AppViewMode.FILES
-                                    },
-                                    onNavigateBack = {
-                                        val target = switcherBackTarget
-                                        when {
-                                            target == null || target == currentViewMode -> Unit
-                                            target == AppViewMode.TERMINAL -> openTerminalFromSwitcher()
-                                            else -> {
-                                                previousViewMode = currentViewMode
-                                                currentViewMode = target
+                                if (currentViewMode != AppViewMode.CHAT) {
+                                    com.example.gemini.ui.components.FloatingSwitcherWidget(
+                                        currentViewMode = currentViewMode,
+                                        orientation = floatingSwitcherOrientation,
+                                        items = floatingSwitcherItems,
+                                        autoCollapseTimeoutSec = floatingSwitcherAutoCollapseSec,
+                                        savedPosXRatio = floatingSwitcherPosX,
+                                        savedPosYRatio = floatingSwitcherPosY,
+                                        onNavigateToChat = {
+                                            previousViewMode = currentViewMode
+                                            currentViewMode = AppViewMode.CHAT
+                                        },
+                                        onNavigateToIde = {
+                                            previousViewMode = currentViewMode
+                                            currentViewMode = AppViewMode.IDE
+                                        },
+                                        onNavigateToBrowser = {
+                                            previousViewMode = currentViewMode
+                                            currentViewMode = AppViewMode.BROWSER
+                                        },
+                                        onNavigateToTerminal = openTerminalFromSwitcher,
+                                        onNavigateToNotes = {
+                                            previousViewMode = currentViewMode
+                                            currentViewMode = AppViewMode.NOTES
+                                        },
+                                        onNavigateToFiles = {
+                                            previousViewMode = currentViewMode
+                                            currentViewMode = AppViewMode.FILES
+                                        },
+                                        onNavigateBack = {
+                                            val target = switcherBackTarget
+                                            when {
+                                                target == null || target == currentViewMode -> Unit
+                                                target == AppViewMode.TERMINAL -> openTerminalFromSwitcher()
+                                                else -> {
+                                                    previousViewMode = currentViewMode
+                                                    currentViewMode = target
+                                                }
                                             }
-                                        }
-                                    },
-                                    onPositionSaved = { x, y ->
-                                        chatViewModel.saveFloatingSwitcherPosition(x, y)
-                                    },
-                                    onOrientationChange = { chatViewModel.setFloatingSwitcherOrientation(it) }
-                                )
+                                        },
+                                        onPositionSaved = { x, y ->
+                                            chatViewModel.saveFloatingSwitcherPosition(x, y)
+                                        },
+                                        onOrientationChange = { chatViewModel.setFloatingSwitcherOrientation(it) }
+                                    )
+                                }
                                 if (showSwitcherToolsInstall) {
                                     com.example.gemini.ui.settings.LocalToolsInstallDialog(
                                         authPreferences = chatViewModel.authPreferences,

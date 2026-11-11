@@ -17,6 +17,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.horizontalScroll
 import com.example.gemini.theme.isAppInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -607,6 +608,247 @@ fun ChatInputBar(
             title = "Attachment Preview",
             onDismiss = { previewImageUrl = null }
         )
+    }
+
+    if (auraHomeStyle) {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            color = Color.Transparent
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 52.dp, max = 160.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    color = if (isDark) Color(0xFF2A2A2C) else Color.White,
+                    border = BorderStroke(
+                        1.dp,
+                        if (isDark) Color(0xFF3A3A3C) else Color(0xFFE6E6EA)
+                    ),
+                    shadowElevation = 3.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp)
+                    ) {
+                        if (attachments.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(bottom = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                attachments.forEach { att ->
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4),
+                                        border = BorderStroke(1.dp, if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = att.displayName.ifBlank { "Attachment" },
+                                                fontSize = 12.sp,
+                                                color = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
+                                                maxLines = 1
+                                            )
+                                            Spacer(Modifier.width(4.dp))
+                                            Icon(
+                                                imageVector = Icons.Outlined.Close,
+                                                contentDescription = "Remove",
+                                                tint = if (isDark) Color(0xFF9E9EA4) else Color(0xFF8A8A8E),
+                                                modifier = Modifier
+                                                    .size(14.dp)
+                                                    .clickable { onRemoveAttachment(att.id) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // [+] Attachment Button
+                            Box(
+                                modifier = Modifier.size(48.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Surface(
+                                    onClick = onAttachClick,
+                                    shape = CircleShape,
+                                    color = if (isDark) Color(0xFF3A3A3C) else Color(0xFFEDEDEB),
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Add,
+                                            contentDescription = "Add attachments",
+                                            tint = if (isDark) Color(0xFFD1D1D6) else Color(0xFF5F6368),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            // Middle Area: Text Field taking all remaining width
+                            Box(
+                                modifier = Modifier.weight(1f),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                TextField(
+                                    state = textFieldState,
+                                    placeholder = {
+                                        Text(
+                                            text = "Ask anything...",
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = if (isDark) Color(0xFF8E8E93) else Color(0xFF8A8A8E),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .focusRequester(focusRequester),
+                                    colors = TextFieldDefaults.colors(
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent,
+                                        disabledContainerColor = Color.Transparent,
+                                        focusedIndicatorColor = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                        disabledIndicatorColor = Color.Transparent,
+                                        focusedTextColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
+                                        unfocusedTextColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
+                                        cursorColor = GeminiBlue
+                                    ),
+                                    textStyle = TextStyle(
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Normal,
+                                        lineHeight = 22.sp
+                                    ),
+                                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            // Waveform voice mode button
+                            if (onStartVoiceCall != null) {
+                                Box(
+                                    modifier = Modifier.size(48.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Surface(
+                                        onClick = onStartVoiceCall,
+                                        shape = CircleShape,
+                                        color = if (voiceCallActive) GeminiBlue else Color(0xFF151B2A),
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.GraphicEq,
+                                                contentDescription = "Voice mode",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+
+                            // Mic / Send Button with 150ms crossfade
+                            Box(
+                                modifier = Modifier.size(48.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Crossfade(
+                                    targetState = canSend,
+                                    animationSpec = tween(150),
+                                    label = "home_mic_send_crossfade"
+                                ) { hasContentToSend ->
+                                    if (hasContentToSend) {
+                                        Surface(
+                                            onClick = {
+                                                val trimmed = textFieldState.text.toString().trim()
+                                                if (!isAuth) {
+                                                    Toast.makeText(context, "Please sign in first to send messages.", Toast.LENGTH_SHORT).show()
+                                                    return@Surface
+                                                }
+                                                if (attachmentsBusy) {
+                                                    Toast.makeText(context, "Wait until attachments are ready.", Toast.LENGTH_SHORT).show()
+                                                    return@Surface
+                                                }
+                                                if (!isOnline) {
+                                                    Toast.makeText(context, offlineMessage, Toast.LENGTH_SHORT).show()
+                                                    return@Surface
+                                                }
+                                                if (isLiveDictating) {
+                                                    stopLiveDictation()
+                                                }
+                                                onSendMessage(trimmed)
+                                                textFieldState.clearText()
+                                            },
+                                            shape = CircleShape,
+                                            color = Color(0xFF151B2A),
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.ArrowUpward,
+                                                    contentDescription = "Send",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        Surface(
+                                            onClick = {
+                                                if (voiceNotesAsText) {
+                                                    startAutoTranscribe()
+                                                } else {
+                                                    recordMode = AudioRecordMode.VOICE_NOTE
+                                                    triggerMicClick()
+                                                }
+                                            },
+                                            shape = CircleShape,
+                                            color = Color(0xFF151B2A),
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Mic,
+                                                    contentDescription = if (voiceNotesAsText) "Record and transcribe" else "Record voice note",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
     }
 
     Surface(

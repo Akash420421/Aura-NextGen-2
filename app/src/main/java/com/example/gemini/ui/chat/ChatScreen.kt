@@ -2339,52 +2339,45 @@ fun ChatScreen(
                         }
                     }
 
-                    // Floating Scroll Up / Scroll Down Button (Instant Movement)
-                    val showUpArrow = showScrollButton && scrollDirection == ScrollDirection.UP && !isAtTop
-                    val showDownArrow = showScrollButton && scrollDirection == ScrollDirection.DOWN && !isAtBottom
-                    val isVisible = (showUpArrow || showDownArrow) && feedItems.size > 2
-                                            
+                    // Clean "Scroll to latest message" button (only in active chat when scrolled up)
+                    val showScrollToBottom = !isAuraHome && feedItems.isNotEmpty() && !isAtBottom
+
                     androidx.compose.animation.AnimatedVisibility(
-                        visible = isVisible,
-                        enter = fadeIn() + scaleIn(initialScale = 0.8f),
-                        exit = fadeOut() + scaleOut(targetScale = 0.8f),
+                        visible = showScrollToBottom,
+                        enter = fadeIn(animationSpec = tween(150)),
+                        exit = fadeOut(animationSpec = tween(150)),
                         modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = 16.dp, bottom = 12.dp)
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 12.dp)
                     ) {
+                        val isDark = isAppInDarkTheme()
                         Surface(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .clickable {
-                                    showScrollButton = false
-                                    scope.launch {
-                                        try {
-                                            if (showUpArrow) {
-                                                listState.scrollToItem(0)
-                                            } else if (feedItems.isNotEmpty()) {
-                                                listState.scrollToItem(maxOf(0, feedItems.size - 1))
-                                            }
-                                        } catch (e: Exception) {
-                                            Log.w("ChatScreen", "Scroll failed: ${e.message}")
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        if (feedItems.isNotEmpty()) {
+                                            listState.animateScrollToItem(maxOf(0, feedItems.size - 1))
                                         }
+                                    } catch (e: Exception) {
+                                        Log.w("ChatScreen", "Scroll to bottom failed: ${e.message}")
                                     }
-                                },
+                                }
+                            },
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface,
-                            tonalElevation = 6.dp,
-                            shadowElevation = 6.dp,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
+                            color = if (isDark) Color(0xFF2A2A2C) else Color.White,
+                            shadowElevation = 2.dp,
+                            border = BorderStroke(1.dp, if (isDark) Color(0xFF3A3A3C) else Color(0xFFE8E8EC)),
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier.fillMaxSize()
                             ) {
                                 Icon(
-                                    imageVector = if (showUpArrow) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                    contentDescription = if (showUpArrow) "Jump to Top" else "Jump to Bottom",
-                                    tint = ClaudeTerracotta,
-                                    modifier = Modifier.size(22.dp)
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Scroll to latest message",
+                                    tint = if (isDark) Color(0xFFD1D1D6) else Color(0xFF4A4A4E),
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
