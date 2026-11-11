@@ -68,8 +68,10 @@ class MainActivity : ComponentActivity() {
 
         if (com.example.gemini.ui.components.PermissionUtils.hasNotificationPermission(this)) {
             com.example.gemini.data.service.TermuxService.start(this)
-            com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(this)
         }
+        // Start the local bridge as soon as the app's foreground process is available. Notification access controls
+        // the persistent wake-lock service, but should not block the initial server launch.
+        com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(this)
         com.example.gemini.data.daemon.TermuxDaemonManager.init(this)
         com.example.gemini.ui.browser.BrowserSessionManager.instance.init(this)
         com.example.gemini.data.local.LocalTerminalBridge.instance.init(this)
@@ -247,9 +249,7 @@ class MainActivity : ComponentActivity() {
                                 isInstalledState = true
                                 hasSkippedInstaller = true
                                 // before the first agent choice the server waits (the choice dialog starts it)
-                                if (com.example.gemini.data.local.LocalServerManager.hasServerScript(context) &&
-                                    com.example.gemini.data.agent.AgentPreferences.hasChosenSync(context)
-                                ) {
+                                if (com.example.gemini.data.local.LocalServerManager.hasServerScript(context)) {
                                     com.example.gemini.data.local.LocalServerManager.startServer(
                                         context,
                                         forceRestart = false
@@ -630,8 +630,8 @@ class MainActivity : ComponentActivity() {
         instanceRef = java.lang.ref.WeakReference(this)
         if (com.example.gemini.ui.components.PermissionUtils.hasNotificationPermission(this)) {
             com.example.gemini.data.service.TermuxService.start(this)
-            com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(this)
         }
+        com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(this)
     }
 
     override fun onNewIntent(intent: Intent) {

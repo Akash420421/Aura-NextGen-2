@@ -192,13 +192,15 @@ fun ChatInputBar(
     onStartVoiceCall: (() -> Unit)? = null,
     /** A voice call is running (the call button lights up and opens it). */
     voiceCallActive: Boolean = false,
+    /** Compact light composer used on Aura AI's dedicated home screen. */
+    auraHomeStyle: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val coroutineScope = rememberCoroutineScope()
-    val isDark = isAppInDarkTheme()
+    val isDark = if (auraHomeStyle) false else isAppInDarkTheme()
 
     // Audio recording & Speech-to-Text state
     var recordMode by remember { mutableStateOf(AudioRecordMode.VOICE_NOTE) }
@@ -614,7 +616,7 @@ fun ChatInputBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 6.dp)
+                .padding(horizontal = if (auraHomeStyle) 24.dp else 14.dp, vertical = 6.dp)
         ) {
             QueuedMessagesCard(
                 messages = queuedMessages,
@@ -626,8 +628,8 @@ fun ChatInputBar(
             // Claude-style unified rounded input card
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                color = com.example.gemini.theme.AppColors.card,
+                shape = RoundedCornerShape(if (auraHomeStyle) 32.dp else 24.dp),
+                color = if (auraHomeStyle) Color.White else com.example.gemini.theme.AppColors.card,
                 border = BorderStroke(
                     1.dp,
                     if (isDark) Color.White.copy(alpha = 0.08f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
@@ -902,37 +904,32 @@ fun ChatInputBar(
                             }
                         }
 
-                        // 1. Text Field Area on Top
-                        TextField(
-                        state = textFieldState,
-                        placeholder = {
-                            Text(
-                                text = "Reply to ${selectedModel.displayName.split(" ").firstOrNull() ?: "Gemini"}...",
-                                fontSize = 15.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.42f)
-                            )
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester)
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            cursorColor = ClaudeTerracotta
-                        ),
-                        textStyle = TextStyle(
-                            fontSize = 15.sp,
-                            lineHeight = 21.sp
-                        ),
-                        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
-                    )
+                        // The regular composer keeps its multiline input above the controls. Aura's home composer
+                        // places a single-line field inline between the attachment and voice actions below.
+                        if (!auraHomeStyle) TextField(
+                            state = textFieldState,
+                            placeholder = {
+                                Text(
+                                    text = "Reply to ${selectedModel.displayName.split(" ").firstOrNull() ?: "Gemini"}...",
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.42f)
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester).padding(horizontal = 4.dp, vertical = 2.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                cursorColor = ClaudeTerracotta
+                            ),
+                            textStyle = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+                            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
+                        )
 
                     // 2. Attachments Preview (if any)
                     if (attachments.isNotEmpty() || isUploadingAttachment) {
@@ -1149,9 +1146,9 @@ fun ChatInputBar(
                         Surface(
                             onClick = onAttachClick,
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.background,
+                            color = if (auraHomeStyle) Color(0xFFEEEDEA) else MaterialTheme.colorScheme.background,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
-                            modifier = Modifier.size(34.dp)
+                            modifier = Modifier.size(if (auraHomeStyle) 52.dp else 34.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
@@ -1170,7 +1167,33 @@ fun ChatInputBar(
                                 .padding(horizontal = 6.dp),
                             contentAlignment = Alignment.CenterStart
                         ) {
-                            Surface(
+                            if (auraHomeStyle) {
+                                TextField(
+                                    state = textFieldState,
+                                    placeholder = {
+                                        Text(
+                                            "Ask anything",
+                                            fontSize = 18.sp,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.52f),
+                                            maxLines = 1
+                                        )
+                                    },
+                                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                                    colors = TextFieldDefaults.colors(
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent,
+                                        disabledContainerColor = Color.Transparent,
+                                        focusedIndicatorColor = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        cursorColor = GeminiBlue
+                                    ),
+                                    textStyle = TextStyle(fontSize = 18.sp, lineHeight = 24.sp),
+                                    lineLimits = TextFieldLineLimits.SingleLine,
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
+                                )
+                            } else Surface(
                                 onClick = {
                                     focusManager.clearFocus(force = true)
                                     keyboardController?.hide()
@@ -1238,7 +1261,7 @@ fun ChatInputBar(
                         }
 
                         // Live voice call with the agent (Antigravity voice mode); also while the agent works
-                        if (onStartVoiceCall != null && !isRecordingAudio && !isLiveDictating) {
+                        if (!auraHomeStyle && onStartVoiceCall != null && !isRecordingAudio && !isLiveDictating) {
                             Surface(
                                 onClick = onStartVoiceCall,
                                 shape = CircleShape,
@@ -1247,7 +1270,7 @@ fun ChatInputBar(
                                     1.dp,
                                     if (voiceCallActive) GeminiBlue else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
                                 ),
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(if (auraHomeStyle) 52.dp else 34.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
@@ -1277,7 +1300,7 @@ fun ChatInputBar(
                                     1.dp,
                                     if (isLiveDictating) GeminiBlue.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
                                 ),
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(if (auraHomeStyle) 52.dp else 34.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
@@ -1365,8 +1388,8 @@ fun ChatInputBar(
                             }
                         } else {
                             // Claude-style Microphone Voice Recorder Button
-                            val voiceBgColor = com.example.gemini.theme.AppColors.onBackground
-                            val voiceIconColor = com.example.gemini.theme.AppColors.background
+                            val voiceBgColor = if (auraHomeStyle) Color(0xFF151B2A) else com.example.gemini.theme.AppColors.onBackground
+                            val voiceIconColor = if (auraHomeStyle) Color.White else com.example.gemini.theme.AppColors.background
 
                             Surface(
                                 onClick = {
@@ -1380,7 +1403,7 @@ fun ChatInputBar(
                                 shape = CircleShape,
                                 color = voiceBgColor,
                                 shadowElevation = 1.dp,
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(if (auraHomeStyle) 52.dp else 36.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(

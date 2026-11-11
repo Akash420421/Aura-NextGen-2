@@ -299,8 +299,9 @@ fun ChatScreen(
     val hubStatus by viewModel.hubStatus.collectAsState()
     val systemConnectionState by viewModel.systemConnectionState.collectAsState()
     var auraHomeVoice by rememberSaveable { mutableStateOf(false) }
-    val isAuraHome = !isInFloatingWindow && isAgyChat && isFreshNewChat && messages.isEmpty() &&
-        systemConnectionState.status == com.example.gemini.data.remote.SystemStatus.READY
+    // The landing screen must remain visible while the local engine starts or recovers. Tying it to READY
+    // hid the requested Aura UI precisely when the bridge was offline.
+    val isAuraHome = !isInFloatingWindow && isAgyChat && isFreshNewChat && messages.isEmpty()
     val auraAutoSend by com.example.gemini.data.jarvis.JarvisPreferences.autoSend.state.collectAsState()
     val isNetworkConnected by viewModel.isNetworkConnectedState.collectAsState()
     val isAnyGenerationOrTaskActive by viewModel.isAnyGenerationOrTaskActive.collectAsState()
@@ -1513,6 +1514,20 @@ fun ChatScreen(
                 }
             )
         }
+        MaterialTheme(
+            colorScheme = if (isAuraHome) androidx.compose.material3.lightColorScheme(
+                primary = Color(0xFF151B2A),
+                onPrimary = Color.White,
+                secondary = Color(0xFF3478D4),
+                background = Color(0xFFF8F8FA),
+                onBackground = Color(0xFF171717),
+                surface = Color.White,
+                onSurface = Color(0xFF171B28),
+                outline = Color(0xFFE1E1E5)
+            ) else MaterialTheme.colorScheme,
+            typography = MaterialTheme.typography,
+            shapes = MaterialTheme.shapes
+        ) {
         Scaffold(
             snackbarHost = {},
             topBar = {
@@ -2825,11 +2840,13 @@ fun ChatScreen(
                     onSendQueuedNow = { viewModel.sendQueuedNow(it) },
                     onDeleteQueued = { viewModel.deleteQueued(it) },
                     onStartVoiceCall = if (isAgyChat) onStartVoiceCall else null,
-                    voiceCallActive = voiceCall.active
+                    voiceCallActive = voiceCall.active,
+                    auraHomeStyle = isAuraHome
                 )
                 }
             }
         }
+    }
     }
 
     // Antigravity cloud agents: projects and connections, preview, run a command

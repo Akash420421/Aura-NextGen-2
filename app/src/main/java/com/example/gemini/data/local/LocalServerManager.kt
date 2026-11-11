@@ -331,11 +331,8 @@ object LocalServerManager {
             Log.d(TAG, "[ServerManager] No server executable found in home directory, skipping autoStartOnAppLaunch")
             return
         }
-        if (!com.example.gemini.data.agent.AgentPreferences.hasChosenSync(context)) {
-            // the server starts with the agent flags: wait for the first-launch agent choice
-            Log.d(TAG, "[ServerManager] Agents not chosen yet, deferring auto-start until the choice is made")
-            return
-        }
+        // If the user has not made the optional first-launch agent choice yet, start with the default AGY selection.
+        // Applying their choice later will restart the bridge with the selected agent flags.
         hasInitialAutoStarted = true
         startServer(context, forceRestart = false)
     }
