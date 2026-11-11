@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.5-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.6-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,17 +70,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.0.5
-          name: Aura AI v2.0.5
+          tag_name: v2.0.6
+          name: Aura AI v2.0.6
           body: |
-            ### Aura AI v2.0.5 — Pure White Theme & Refined Sidebar
-            - **Pure White / Light Theme Everywhere:** Dark theme completely eliminated across screens, settings, dialogs, drawers, and menus. Status and navigation bar icons are dark everywhere for crisp readability.
-            - **Sidebar Background Match:** Sidebar container background matches the Chat and Voice screens' off-white token (`MaterialTheme.colorScheme.background`) with zero tonal elevation tint.
-            - **28dp Rounded Drawer:** Rounded right corners (28dp) with soft right-edge shadow.
-            - **24sp SemiBold Aura AI Header:** Clean typography with -0.2sp letter spacing and 44dp circular elevated search button.
-            - **Soft 3D Elevated Menu Cards:** White elevated 52dp cards (Images, Customize, Projects, Tasks, Plugins) with 10dp gap and rounded ripple feedback.
-            - **Elevated Footer Buttons:** 48dp white circular gear button and 48dp teal circular initials avatar.
-            - **Retry Pill:** 44dp white elevated pill with blue text for clean error recovery.
+            ### Aura AI v2.0.6 — Real Antigravity Account Login & Zero Orange Theme
+            - **Real Antigravity Account Login:** Replaced fake mock profile dialog with authentic multi-agent AccountsButton and real AccountsDialog for direct Antigravity sign-in, account switching, and tier verification.
+            - **Purged Orange Color:** Completely removed ClaudeTerracotta (orange) from the drawer, search bar, archived chats header, and selection badges, replacing with clean neutral dark and blue accents.
+            - **Elevated Drawer Footer:** Crisp white elevated Accounts button and 3-dots overflow menu for clean account management and options.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -31,7 +31,6 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.gemini.domain.model.ArtifactSnapshot
-import com.example.gemini.theme.ClaudeTerracotta
 import com.example.gemini.theme.GeminiBlue
 import com.example.gemini.ui.components.ArtifactDownloadHelper
 import com.example.gemini.ui.components.FullScreenImageDialog
@@ -71,13 +70,13 @@ fun ArtifactsDrawerContent(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Layers,
                     contentDescription = null,
-                    tint = ClaudeTerracotta,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -95,14 +94,14 @@ fun ArtifactsDrawerContent(
                     Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(10.dp),
-                        color = ClaudeTerracotta.copy(alpha = 0.18f),
-                        border = BorderStroke(0.8.dp, ClaudeTerracotta.copy(alpha = 0.35f))
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f))
                     ) {
                         Text(
                             text = "${artifacts.size}",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = ClaudeTerracotta,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                         )
                     }
@@ -279,7 +278,7 @@ private fun ArtifactCardItem(
                     }
                 } else {
                     val (icon, bgTint, iconTint) = when {
-                        isPlan -> Triple(Icons.Outlined.AutoAwesome, ClaudeTerracotta.copy(alpha = 0.16f), ClaudeTerracotta)
+                        isPlan -> Triple(Icons.Outlined.AutoAwesome, Color(0xFF6366F1).copy(alpha = 0.16f), Color(0xFF6366F1))
                         isWalkthrough -> Triple(Icons.Outlined.Description, GeminiBlue.copy(alpha = 0.16f), GeminiBlue)
                         else -> Triple(Icons.AutoMirrored.Outlined.InsertDriveFile, com.example.gemini.theme.AppColors.accentTeal.copy(alpha = 0.16f), com.example.gemini.theme.AppColors.accentTeal)
                     }

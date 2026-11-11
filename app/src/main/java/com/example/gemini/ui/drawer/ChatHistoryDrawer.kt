@@ -85,7 +85,6 @@ import com.example.gemini.domain.model.Conversation
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Description
-import com.example.gemini.theme.ClaudeTerracotta
 import com.example.gemini.theme.GeminiBlue
 import androidx.compose.material.icons.outlined.Share
 import com.example.gemini.ui.components.ConversationExportHelper
@@ -130,6 +129,7 @@ fun ChatHistoryDrawer(
     isOpen: Boolean = false,
     /** Accounts of the enabled agents; replaces the Antigravity-only profile / sign-in button when set. */
     accountsButton: (@Composable () -> Unit)? = null,
+    onOpenAccounts: (() -> Unit)? = null,
     /** Antigravity runs: its hub start-up and first sync drive the list's loading states. */
     agyEnabled: Boolean = true,
     claudeActions: ClaudeDrawerActions? = null,
@@ -154,7 +154,6 @@ fun ChatHistoryDrawer(
             null
         )
     }
-    var showProfileDialog by remember { mutableStateOf(false) }
     var showSigningInProgressDialog by remember { mutableStateOf(false) }
     var showExitConfirmDialog by remember { mutableStateOf(false) }
     var conversationToDelete by remember { mutableStateOf<Conversation?>(null) }
@@ -741,7 +740,7 @@ fun ChatHistoryDrawer(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                     border = BorderStroke(
                         1.dp,
-                        if (searchQuery.isNotBlank()) ClaudeTerracotta.copy(alpha = 0.5f)
+                        if (searchQuery.isNotBlank()) textPrimary.copy(alpha = 0.35f)
                         else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)
                     ),
                     modifier = Modifier
@@ -758,7 +757,7 @@ fun ChatHistoryDrawer(
                         Icon(
                             imageVector = Icons.Default.Search,
                             contentDescription = null,
-                            tint = if (searchQuery.isNotBlank()) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                            tint = if (searchQuery.isNotBlank()) textPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -774,7 +773,7 @@ fun ChatHistoryDrawer(
                                 fontSize = 14.sp,
                                 lineHeight = 18.sp
                             ),
-                            cursorBrush = SolidColor(ClaudeTerracotta),
+                            cursorBrush = SolidColor(textPrimary),
                             modifier = Modifier
                                 .weight(1f)
                                 .focusRequester(searchFocus),
@@ -845,7 +844,7 @@ fun ChatHistoryDrawer(
                         text = "Advanced Search ›",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = ClaudeTerracotta,
+                        color = Color(0xFF1976D2),
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .clickable { showFullSearchDialog = true }
@@ -880,7 +879,7 @@ fun ChatHistoryDrawer(
                     }
                     allItems.forEach { (agent, label) ->
                         val selected = !jarvisFilter && agentFilter == agent
-                        val accent = agent?.accent() ?: ClaudeTerracotta
+                        val accent = agent?.accent() ?: textPrimary
                         Text(
                             text = label,
                             fontSize = 11.5.sp,
@@ -927,7 +926,7 @@ fun ChatHistoryDrawer(
                     Icon(
                         imageVector = Icons.Filled.Archive,
                         contentDescription = null,
-                        tint = ClaudeTerracotta,
+                        tint = textSecondary,
                         modifier = Modifier.size(15.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
@@ -935,7 +934,7 @@ fun ChatHistoryDrawer(
                         text = "Archived chats · ${topLevelChats.size}",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = ClaudeTerracotta,
+                        color = textSecondary,
                         modifier = Modifier.weight(1f)
                     )
                     Text(
@@ -1246,13 +1245,13 @@ fun ChatHistoryDrawer(
                                                     text = if (isExpanded) "Show less" else "Show ${chats.size - 5} more",
                                                     fontSize = 11.5.sp,
                                                     fontWeight = FontWeight.Medium,
-                                                    color = ClaudeTerracotta
+                                                    color = Color(0xFF1976D2)
                                                 )
                                                 Spacer(modifier = Modifier.width(2.dp))
                                                 Icon(
                                                     imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                                                     contentDescription = null,
-                                                    tint = ClaudeTerracotta,
+                                                    tint = Color(0xFF1976D2),
                                                     modifier = Modifier.size(14.dp)
                                                 )
                                             }
@@ -1279,8 +1278,8 @@ fun ChatHistoryDrawer(
                 )
             }
 
-            // Bottom Footer: Settings gear on left, Initials Avatar badge on right
-            var showAvatarMenu by remember { mutableStateOf(false) }
+            // Bottom Footer: Settings gear on left, Accounts button + overflow menu on right
+            var showOverflowMenu by remember { mutableStateOf(false) }
 
             Row(
                 modifier = Modifier
@@ -1306,197 +1305,159 @@ fun ChatHistoryDrawer(
                     )
                 }
 
-                // 48dp circular Initials Avatar badge on right with soft elevation
-                Box(contentAlignment = Alignment.Center) {
-                    val avatarBg = Color(0xFF1DB39A)
-                    val initials = remember(authInfo.displayName) {
-                        val parts = authInfo.displayName.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-                        when {
-                            parts.size >= 2 -> "${parts[0].first().uppercaseChar()}${parts[1].first().uppercaseChar()}"
-                            parts.size == 1 && parts[0].length >= 2 -> "${parts[0][0].uppercaseChar()}${parts[0][1].uppercaseChar()}"
-                            parts.size == 1 -> "${parts[0][0].uppercaseChar()}"
-                            else -> "AK"
-                        }
+                // Profile / Accounts and Options on the right
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Real accounts button: shows real agent status & sign-in badge, opens real AccountsDialog
+                    if (accountsButton != null) {
+                        accountsButton()
                     }
 
-                    SoftElevatedBox(
-                        modifier = Modifier.size(48.dp),
-                        shape = CircleShape,
-                        backgroundColor = avatarBg,
-                        elevation = 3.dp,
-                        onClick = { showAvatarMenu = true }
-                    ) {
-                        if (authInfo.profilePictureUrl != null) {
-                            SubcomposeAsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(parseProfileAvatarModel(authInfo.profilePictureUrl))
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = "Profile Picture",
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(CircleShape),
-                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                error = {
-                                    Text(
-                                        text = initials,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color.White
+                    // 44dp circular 3-dots overflow button with soft elevation
+                    Box(contentAlignment = Alignment.Center) {
+                        SoftElevatedBox(
+                            modifier = Modifier.size(44.dp),
+                            shape = CircleShape,
+                            backgroundColor = Color.White,
+                            elevation = 3.dp,
+                            onClick = { showOverflowMenu = true }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More Options",
+                                tint = textPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        // Dropdown Menu anchored to the 3-dots button
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = Color.White,
+                            tonalElevation = 6.dp,
+                            modifier = Modifier.widthIn(min = 220.dp)
+                        ) {
+                            // 1. Accounts & Sign-in (opens real AccountsDialog)
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            text = if (authInfo.displayName.isNotBlank()) authInfo.displayName else "Accounts & Sign-in",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = textPrimary
+                                        )
+                                        val email = authInfo.email
+                                        if (email != null && email.isNotBlank()) {
+                                            Text(
+                                                text = email,
+                                                fontSize = 12.sp,
+                                                color = textSecondary
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Person,
+                                        contentDescription = null,
+                                        tint = textPrimary,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 },
-                                loading = {
-                                    Text(
-                                        text = initials,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color.White
-                                    )
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onOpenAccounts?.invoke() ?: onLogin()
                                 }
                             )
-                        } else {
-                            Text(
-                                text = initials,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color.White
+
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = textSecondary.copy(alpha = 0.2f),
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+
+                            // 2. Archived Chats Toggle
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = if (showArchived) "Hide Archived Chats" else "Show Archived Chats",
+                                        fontSize = 14.sp,
+                                        color = textPrimary
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Filled.Archive,
+                                        contentDescription = null,
+                                        tint = textPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onToggleShowArchived(!showArchived)
+                                }
+                            )
+
+                            // 3. Group by Workspace Toggle
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = if (groupByWorkspace) "Disable Workspace Grouping" else "Group by Workspace",
+                                        fontSize = 14.sp,
+                                        color = textPrimary
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = textPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onToggleGroupByWorkspace(!groupByWorkspace)
+                                }
+                            )
+
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = textSecondary.copy(alpha = 0.2f),
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+
+                            // 4. Exit App
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = "Exit App",
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.PowerSettingsNew,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    showExitConfirmDialog = true
+                                }
                             )
                         }
                     }
-
-                    // Popup Menu anchored to the Avatar
-                    DropdownMenu(
-                        expanded = showAvatarMenu,
-                        onDismissRequest = { showAvatarMenu = false },
-                        shape = RoundedCornerShape(16.dp),
-                        containerColor = Color.White,
-                        tonalElevation = 6.dp,
-                        modifier = Modifier.widthIn(min = 220.dp)
-                    ) {
-                        // 1. Account / Profile
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(
-                                        text = if (authInfo.displayName.isNotBlank()) authInfo.displayName else "Account",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = textPrimary
-                                    )
-                                    val email = authInfo.email
-                                    if (email != null && email.isNotBlank()) {
-                                        Text(
-                                            text = email,
-                                            fontSize = 12.sp,
-                                            color = textSecondary
-                                        )
-                                    }
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Outlined.Person,
-                                    contentDescription = null,
-                                    tint = textPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            onClick = {
-                                showAvatarMenu = false
-                                showProfileDialog = true
-                            }
-                        )
-
-                        HorizontalDivider(
-                            thickness = 0.5.dp,
-                            color = textSecondary.copy(alpha = 0.2f),
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-
-                        // 2. Archived Chats Toggle
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = if (showArchived) "Hide Archived Chats" else "Show Archived Chats",
-                                    fontSize = 14.sp,
-                                    color = textPrimary
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Filled.Archive,
-                                    contentDescription = null,
-                                    tint = textPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            onClick = {
-                                showAvatarMenu = false
-                                onToggleShowArchived(!showArchived)
-                            }
-                        )
-
-                        // 3. Group by Workspace Toggle
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = if (groupByWorkspace) "Disable Workspace Grouping" else "Group by Workspace",
-                                    fontSize = 14.sp,
-                                    color = textPrimary
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Folder,
-                                    contentDescription = null,
-                                    tint = textPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            onClick = {
-                                showAvatarMenu = false
-                                onToggleGroupByWorkspace(!groupByWorkspace)
-                            }
-                        )
-
-                        HorizontalDivider(
-                            thickness = 0.5.dp,
-                            color = textSecondary.copy(alpha = 0.2f),
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-
-                        // 4. Exit App
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = "Exit App",
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.PowerSettingsNew,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            onClick = {
-                                showAvatarMenu = false
-                                showExitConfirmDialog = true
-                            }
-                        )
-                    }
                 }
-            }
-
-            if (showProfileDialog) {
-                ProfileDetailDialog(
-                    authInfo = authInfo,
-                    onDismiss = { showProfileDialog = false },
-                    onLogout = onLogout
-                )
             }
 
             if (showFullSearchDialog) {
@@ -1660,7 +1621,7 @@ private fun ChatHistoryItemRow(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.CallSplit,
                     contentDescription = "Subagent",
-                    tint = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    tint = if (isSelected) textPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     modifier = Modifier.size(15.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -1679,12 +1640,12 @@ private fun ChatHistoryItemRow(
             if (subagents.isNotEmpty()) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = if (isSubagentsExpanded) ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(
+                    color = if (isSubagentsExpanded) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(
                         alpha = 0.7f
                     ),
                     border = BorderStroke(
                         1.dp,
-                        if (isSubagentsExpanded) ClaudeTerracotta.copy(alpha = 0.4f) else Color.Transparent
+                        if (isSubagentsExpanded) MaterialTheme.colorScheme.outline.copy(alpha = 0.3f) else Color.Transparent
                     ),
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
@@ -1698,13 +1659,13 @@ private fun ChatHistoryItemRow(
                             text = "${subagents.size}",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (isSubagentsExpanded) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (isSubagentsExpanded) textPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.width(2.dp))
                         Icon(
                             imageVector = if (isSubagentsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                             contentDescription = if (isSubagentsExpanded) "Collapse subagents" else "Expand subagents",
-                            tint = if (isSubagentsExpanded) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (isSubagentsExpanded) textPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(13.dp)
                         )
                     }
@@ -1780,7 +1741,7 @@ private fun ChatHistoryItemRow(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.CallSplit,
                             contentDescription = null,
-                            tint = ClaudeTerracotta,
+                            tint = textPrimary,
                             modifier = Modifier.size(18.dp)
                         )
                     },
@@ -1885,7 +1846,7 @@ private fun ChatHistoryItemRow(
                         Icon(
                             imageVector = Icons.Outlined.Share,
                             contentDescription = null,
-                            tint = ClaudeTerracotta,
+                            tint = textPrimary,
                             modifier = Modifier.size(18.dp)
                         )
                     },
@@ -2036,13 +1997,13 @@ fun SearchChatsDialog(
                             modifier = Modifier
                                 .size(34.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Search,
                                 contentDescription = null,
-                                tint = ClaudeTerracotta,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -2082,7 +2043,7 @@ fun SearchChatsDialog(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                     border = BorderStroke(
                         1.5.dp,
-                        if (query.isNotBlank()) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant.copy(
+                        if (query.isNotBlank()) textPrimary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(
                             alpha = 0.3f
                         )
                     ),
@@ -2097,7 +2058,7 @@ fun SearchChatsDialog(
                         Icon(
                             imageVector = Icons.Default.Search,
                             contentDescription = null,
-                            tint = if (query.isNotBlank()) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(
+                            tint = if (query.isNotBlank()) textPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(
                                 alpha = 0.6f
                             ),
                             modifier = Modifier.size(18.dp)
@@ -2112,7 +2073,7 @@ fun SearchChatsDialog(
                                 fontSize = 14.sp,
                                 lineHeight = 20.sp
                             ),
-                            cursorBrush = SolidColor(ClaudeTerracotta),
+                            cursorBrush = SolidColor(textPrimary),
                             modifier = Modifier.weight(1f),
                             decorationBox = { innerTextField ->
                                 if (query.isEmpty()) {
@@ -2156,12 +2117,12 @@ fun SearchChatsDialog(
                         val isSelected = selectedTimeFilter == timeLabel
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(
+                            color = if (isSelected) textPrimary.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant.copy(
                                 alpha = 0.35f
                             ),
                             border = BorderStroke(
                                 1.dp,
-                                if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant.copy(
+                                if (isSelected) textPrimary.copy(alpha = 0.35f) else MaterialTheme.colorScheme.outlineVariant.copy(
                                     alpha = 0.2f
                                 )
                             ),
@@ -2173,7 +2134,7 @@ fun SearchChatsDialog(
                                 text = timeLabel,
                                 fontSize = 11.5.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface.copy(
+                                color = if (isSelected) textPrimary else MaterialTheme.colorScheme.onSurface.copy(
                                     alpha = 0.8f
                                 ),
                                 modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
@@ -2193,12 +2154,12 @@ fun SearchChatsDialog(
                             val isSelected = selectedWorkspaceFilter == wsName
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(
+                                color = if (isSelected) textPrimary.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant.copy(
                                     alpha = 0.35f
                                 ),
                                 border = BorderStroke(
                                     1.dp,
-                                    if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant.copy(
+                                    if (isSelected) textPrimary.copy(alpha = 0.35f) else MaterialTheme.colorScheme.outlineVariant.copy(
                                         alpha = 0.2f
                                     )
                                 ),
@@ -2215,7 +2176,7 @@ fun SearchChatsDialog(
                                         Icon(
                                             imageVector = Icons.Default.Folder,
                                             contentDescription = null,
-                                            tint = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface.copy(
+                                            tint = if (isSelected) textPrimary else MaterialTheme.colorScheme.onSurface.copy(
                                                 alpha = 0.6f
                                             ),
                                             modifier = Modifier.size(12.dp)
@@ -2225,7 +2186,7 @@ fun SearchChatsDialog(
                                         text = wsName,
                                         fontSize = 11.5.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface.copy(
+                                        color = if (isSelected) textPrimary else MaterialTheme.colorScheme.onSurface.copy(
                                             alpha = 0.8f
                                         )
                                     )
@@ -2288,12 +2249,12 @@ fun SearchChatsDialog(
                             val isSelected = conv.id == currentConversationId
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant.copy(
+                                color = if (isSelected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(
                                     alpha = 0.35f
                                 ),
                                 border = BorderStroke(
                                     1.dp,
-                                    if (isSelected) ClaudeTerracotta.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(
+                                    if (isSelected) textPrimary.copy(alpha = 0.3f) else MaterialTheme.colorScheme.outlineVariant.copy(
                                         alpha = 0.15f
                                     )
                                 ),
@@ -2303,7 +2264,7 @@ fun SearchChatsDialog(
                                     .clickable {
                                         Log.d(
                                             "CHAT_OPEN_DEBUG",
-                                            "📂 [Drawer Dialog] User clicked: id=${conv.id}, title='${conv.title}'"
+                                             "[Drawer Dialog] User clicked: id=${conv.id}, title='${conv.title}'"
                                         )
                                         onSelectConversation(conv.id)
                                         onDismiss()
@@ -2319,7 +2280,7 @@ fun SearchChatsDialog(
                                             text = conv.title,
                                             fontSize = 13.5.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface,
+                                            color = if (isSelected) textPrimary else MaterialTheme.colorScheme.onSurface,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.weight(1f)
@@ -2383,13 +2344,13 @@ fun SearchChatsDialog(
                                         if (conv.modelId.isNotBlank()) {
                                             Surface(
                                                 shape = RoundedCornerShape(4.dp),
-                                                color = ClaudeTerracotta.copy(alpha = 0.1f)
+                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                                             ) {
                                                 Text(
                                                     text = conv.modelId.substringAfterLast('/'),
                                                     fontSize = 10.sp,
                                                     fontWeight = FontWeight.Medium,
-                                                    color = ClaudeTerracotta,
+                                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
                                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                                 )
                                             }

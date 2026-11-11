@@ -325,7 +325,7 @@ object BuiltInThemes {
         dark = dark, builtIn = true,
         about = if (dark) "AntiGem's original warm dark look with the amber accent" else "AntiGem's original clean light look with the amber accent",
         colors = buildMap {
-            put("primary", 0xFFD97706); put("secondary", 0xFFB45309); put("on_primary", 0xFFFFFFFF)
+            put("primary", 0xFF1A1A1A); put("secondary", 0xFF3F3F46); put("on_primary", 0xFFFFFFFF)
             if (dark) {
                 put("background", 0xFF181816); put("surface", 0xFF181816); put("on_background", 0xFFF5F5F4); put("on_surface", 0xFFF5F5F4)
                 put("surface_variant", 0xFF32312D)

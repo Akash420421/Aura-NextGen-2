@@ -1377,6 +1377,7 @@ fun ChatScreen(
                 // the sidebar stays open: the picker floats over it so the new look shows on the sidebar and the chat
                 onOpenThemes = { showThemePanel = !showThemePanel },
                 agyEnabled =com.example.gemini.domain.model.AgentKind.AGY in enabledAgents,
+                onOpenAccounts = { showAccountsDialog = true },
                 accountsButton = {
                     com.example.gemini.ui.agents.AccountsButton(
                         agy = agyEntry,
