@@ -258,6 +258,20 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     } else {
+                        var lastBackPressTime by remember { mutableStateOf(0L) }
+                        BackHandler(enabled = currentViewMode == AppViewMode.CHAT) {
+                            val currentTime = System.currentTimeMillis()
+                            if (currentTime - lastBackPressTime < 2000L) {
+                                (context as? android.app.Activity)?.finish()
+                            } else {
+                                lastBackPressTime = currentTime
+                                com.example.gemini.ui.components.AppToastHelper.showToast(
+                                    "Press back again to exit",
+                                    com.example.gemini.ui.components.ChatToastType.INFO
+                                )
+                            }
+                        }
+
                         BackHandler(enabled = currentViewMode != AppViewMode.CHAT && currentViewMode != AppViewMode.BROWSER) {
                             currentViewMode =
                                 if (previousViewMode != currentViewMode && previousViewMode != AppViewMode.BROWSER) previousViewMode else AppViewMode.CHAT

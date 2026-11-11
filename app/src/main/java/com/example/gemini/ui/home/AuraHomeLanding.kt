@@ -97,29 +97,11 @@ fun AuraVoiceWelcome(onStart: () -> Unit, modifier: Modifier = Modifier) {
 
 @Composable
 fun AuraHomeModeSwitcher(isVoice: Boolean, onSelect: (Boolean) -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier,
-        shape = CircleShape,
-        color = Color(0xFFE7E8ED),
-        shadowElevation = 5.dp
-    ) {
-        Row(Modifier.padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            HomeModeOption("Chat", selected = !isVoice) { onSelect(false) }
-            HomeModeOption("Voice", selected = isVoice) { onSelect(true) }
-        }
-    }
-}
-
-@Composable
-private fun HomeModeOption(label: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier.width(112.dp).height(44.dp).clip(CircleShape)
-            .background(if (selected) Color.White else Color.Transparent)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, color = if (selected) AuraInk else Color(0xFF717681), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-    }
+    com.example.gemini.ui.components.AuraModeToggle(
+        currentMode = if (isVoice) "voice" else "chat",
+        onModeSelected = { onSelect(it == "voice") },
+        modifier = modifier
+    )
 }
 
 @Composable
@@ -133,6 +115,7 @@ fun AuraVoiceActions(
     val phase by com.example.gemini.data.jarvis.JarvisController.phase.collectAsState()
     val startLabel = when (phase) {
         com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> "Tap to Send"
+        com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> "Thinking…"
         com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> "Tap to Talk"
         else -> "Tap to Start"
     }
@@ -143,13 +126,27 @@ fun AuraVoiceActions(
     ) {
         VoiceSideAction(Icons.Outlined.DesktopWindows, "Screen", onScreen)
         Surface(
-            onClick = onStart, shape = CircleShape, color = Color.White,
-            shadowElevation = 4.dp, modifier = Modifier.weight(1f).padding(horizontal = 12.dp).height(64.dp)
+            onClick = {
+                when (phase) {
+                    com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> com.example.gemini.data.jarvis.JarvisController.finishListening()
+                    com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> com.example.gemini.data.jarvis.JarvisController.silence()
+                    com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> com.example.gemini.data.jarvis.JarvisController.stopEverything()
+                    else -> onStart()
+                }
+            },
+            shape = CircleShape, color = Color.White,
+            shadowElevation = 4.dp, modifier = Modifier.weight(1f).padding(horizontal = 12.dp).height(56.dp)
         ) {
             Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Mic, null, tint = AuraBlue, modifier = Modifier.size(23.dp))
-                Spacer(Modifier.width(9.dp))
-                Text(startLabel, color = AuraBlue, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+                Icon(
+                    imageVector = if (phase == com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING) androidx.compose.material.icons.Icons.Rounded.Stop
+                        else Icons.Rounded.Mic,
+                    contentDescription = null,
+                    tint = AuraBlue,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(startLabel, color = AuraBlue, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
         }
         VoiceSideAction(Icons.Outlined.Language, if (autoSend) "Auto on" else "Auto", onToggleAuto)

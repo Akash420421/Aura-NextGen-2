@@ -989,7 +989,11 @@ fun ChatScreen(
     LaunchedEffect(userSentMessageTrigger) {
         if (userSentMessageTrigger > 0 && feedItems.isNotEmpty()) {
             shouldAutoScroll = true
-            listState.scrollToItem(feedItems.size)
+            try {
+                listState.scrollToItem(maxOf(0, feedItems.size - 1))
+            } catch (e: Exception) {
+                Log.w("ChatScreen", "Scroll to bottom failed: ${e.message}")
+            }
         }
     }
 
@@ -1808,7 +1812,14 @@ fun ChatScreen(
                         }
                     },
                     navigationIcon = {
-                        if (conversationBackStack.isNotEmpty()) {
+                        if (isAuraHome) {
+                            IconButton(
+                                onClick = { scope.launch { drawerState.open() } },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                com.example.gemini.ui.components.StaggeredMenuIcon(tint = MaterialTheme.colorScheme.onSurface)
+                            }
+                        } else if (conversationBackStack.isNotEmpty()) {
                             IconButton(onClick = navigateBackConversation) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -1828,8 +1839,19 @@ fun ChatScreen(
                     },
                     actions = {
                         if (isAuraHome) {
-                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(Icons.Outlined.ChatBubbleOutline, contentDescription = "Chat history", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f))
+                            IconButton(
+                                onClick = {
+                                    val currentId = currentConv?.id
+                                    if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
+                                        ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
+                                    }
+                                    conversationBackStack.clear()
+                                    viewModel.startNewChat()
+                                    auraHomeVoice = false
+                                },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                com.example.gemini.ui.components.NewChatIcon(tint = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                         // Browser, Terminal and the IDE are in the floating switcher (always on)
@@ -2329,10 +2351,14 @@ fun ChatScreen(
                                 .clickable {
                                     showScrollButton = false
                                     scope.launch {
-                                        if (showUpArrow) {
-                                            listState.scrollToItem(0)
-                                        } else {
-                                            listState.scrollToItem(feedItems.size)
+                                        try {
+                                            if (showUpArrow) {
+                                                listState.scrollToItem(0)
+                                            } else if (feedItems.isNotEmpty()) {
+                                                listState.scrollToItem(maxOf(0, feedItems.size - 1))
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.w("ChatScreen", "Scroll failed: ${e.message}")
                                         }
                                     }
                                 },

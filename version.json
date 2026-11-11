@@ -1,9 +1,14 @@
 {
-  "version_code": 127,
-  "version_name": "1.1.7",
+  "version_code": 200,
+  "version_name": "2.0.0",
   "min_supported_version_code": 1,
   "changelog": [
-    "Improved browser mcp connection stability and performance."
+    "Aura AI v2.0.0 Clean Architecture Release",
+    "Clean base from latest AntiGem v1.1.7 upstream",
+    "Dedicated standalone package com.aura.ai and port isolation",
+    "Exact Aura UI: Centered Header, Staggered Menu, Forum New Chat Icon, Mode Toggle, 3D Particle Voice Orb",
+    "Direct ELF execution with zero permission or collision errors",
+    "Double-back and safe chat feed scrolling protection"
   ],
   "is_critical": false
 }

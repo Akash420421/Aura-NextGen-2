@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
@@ -53,10 +53,33 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:assembleStandardDebug
 
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release_assets
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.0-release.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Aura-AI-APK
-          path: app/build/outputs/apk/standard/debug/*.apk
+          path: release_assets/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: v2.0.0
+          name: Aura AI v2.0.0
+          body: |
+            ### Aura AI v2.0.0 — Official Clean Release
+            - **Base:** Latest AntiGem v1.1.7 (`180960a`)
+            - **Package:** `com.aura.ai`
+            - **App Name:** `Aura AI`
+            - **UI:** Exact Aura UI (Centered Header, Staggered Menu, New Chat Icon, Mode Toggle, 3D Particle Voice Orb)
+            - **Engine:** Direct ELF shell runner, isolated ports 1244/1245/8769
+            - **Stability:** Double-back exit handler and crash-shielded feed scrolling
+          files: release_assets/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
