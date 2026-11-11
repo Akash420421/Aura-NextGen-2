@@ -1244,8 +1244,9 @@ fun ChatHistoryDrawer(
                         }
                     }
                 }
+            }
 
-                // 32dp soft alpha fade gradient overlay above footer
+            // 32dp soft alpha fade gradient overlay above footer
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1893,7 +1894,7 @@ private fun ChatHistoryItemRow(
                         text = { Text(if (conv.archived) "Unarchive" else "Archive", fontSize = 13.5.sp) },
                         leadingIcon = {
                             Icon(
-                                imageVector = if (conv.archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive,
+                                imageVector = if (conv.archived) Icons.Outlined.Unarchive else Icons.Default.Archive,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
@@ -1930,7 +1931,6 @@ private fun ChatHistoryItemRow(
             }
         }
     }
-}
 
 @Composable
 fun SearchChatsDialog(
