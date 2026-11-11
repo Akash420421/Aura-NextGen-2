@@ -139,7 +139,7 @@ fun AuraVoiceActions(
         ) {
             Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = if (phase == com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING) androidx.compose.material.icons.Icons.Rounded.Stop
+                    imageVector = if (phase == com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING) androidx.compose.material.icons.Icons.Default.Stop
                         else Icons.Rounded.Mic,
                     contentDescription = null,
                     tint = AuraBlue,
