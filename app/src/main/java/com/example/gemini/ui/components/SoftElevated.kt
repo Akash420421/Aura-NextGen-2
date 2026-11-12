@@ -2,7 +2,9 @@ package com.example.gemini.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -33,6 +35,7 @@ fun SoftElevatedBox(
     shape: Shape = RoundedCornerShape(18.dp),
     backgroundColor: Color = Color.White,
     elevation: Dp = 3.dp,
+    border: BorderStroke? = BorderStroke(1.dp, Color(0x10000000)),
     onClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
@@ -50,11 +53,15 @@ fun SoftElevatedBox(
             .shadow(
                 elevation = elevation,
                 shape = shape,
-                ambientColor = Color.Black.copy(alpha = 0.05f),
-                spotColor = Color.Black.copy(alpha = 0.06f)
+                clip = false,
+                ambientColor = Color.Black.copy(alpha = 0.06f),
+                spotColor = Color.Black.copy(alpha = 0.08f)
             )
             .clip(shape)
             .background(backgroundColor)
+            .then(
+                if (border != null) Modifier.border(border, shape) else Modifier
+            )
             .then(
                 if (onClick != null) {
                     Modifier.clickable(

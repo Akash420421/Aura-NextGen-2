@@ -1,12 +1,15 @@
 {
-  "version_code": 206,
-  "version_name": "2.0.6",
+  "version_code": 207,
+  "version_name": "2.0.7",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.0.6 Real Account Login & Orange Accents Removal",
-    "Real Antigravity Account Login: Replaced fake mock profile dialog with authentic multi-agent AccountsButton and real AccountsDialog for direct Antigravity sign-in and management",
-    "Purged Orange Color: Completely removed ClaudeTerracotta (orange) from the drawer, search bar, archived chats header, and selection badges, replacing with clean neutral dark and blue accents",
-    "Elevated Drawer Footer: Crisp white elevated Accounts button and 3-dots overflow menu for clean account management and options"
+    "Aura AI v2.0.7 Compact Elevated Sidebar & Permanent Porcelain Theme",
+    "Compact Gemini-Style Menu: 44dp slim rows with 6dp spacing, outlined icons, and 14dp rounded cards",
+    "Expandable More Section: Clean 'More' menu item with rotating chevron revealing Plugins & extensions",
+    "Manrope SemiBold Title: Bundled true Manrope font for the 'Aura AI' header with 48dp soft elevated search",
+    "Refined Footer: Balanced layout with 48dp circular Settings gear, centered Accounts pill, and 48dp 3-dots overflow menu",
+    "Unified Soft 3D Elevation: Consistent dual-layer ambient/spot shadows and subtle borders across all cards and buttons",
+    "Permanent Porcelain Theme: Default pure light mode with Porcelain palette across the entire app"
   ],
   "is_critical": false
 }

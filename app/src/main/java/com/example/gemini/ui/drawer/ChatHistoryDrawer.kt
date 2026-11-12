@@ -3,7 +3,12 @@ package com.example.gemini.ui.drawer
 import com.example.gemini.ui.components.accent
 import com.example.gemini.ui.components.SoftElevatedBox
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import com.example.gemini.R
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import androidx.compose.animation.AnimatedVisibility
@@ -46,7 +51,10 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Public
@@ -158,6 +166,15 @@ fun ChatHistoryDrawer(
     var showExitConfirmDialog by remember { mutableStateOf(false) }
     var conversationToDelete by remember { mutableStateOf<Conversation?>(null) }
     var isInitialGracePeriod by remember { mutableStateOf(true) }
+    var isMoreExpanded by remember { mutableStateOf(false) }
+    val moreChevronRotation by animateFloatAsState(
+        targetValue = if (isMoreExpanded) 180f else 0f,
+        animationSpec = tween(durationMillis = 200),
+        label = "more_chevron_rotation"
+    )
+    LaunchedEffect(isOpen) {
+        if (!isOpen) isMoreExpanded = false
+    }
 
     LaunchedEffect(Unit) {
         kotlinx.coroutines.delay(3500)
@@ -647,7 +664,7 @@ fun ChatHistoryDrawer(
                 .fillMaxSize()
                 .statusBarsPadding()
         ) {
-            // ---------------- header: Aura AI on the left, circular 44dp soft elevated search on the right ----------------
+            // ---------------- header: Aura AI on the left, circular 48dp soft elevated search on the right ----------------
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -658,14 +675,15 @@ fun ChatHistoryDrawer(
                     text = "Aura AI",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.SemiBold,
-                    letterSpacing = (-0.2).sp,
-                    fontFamily = FontFamily.SansSerif,
+                    letterSpacing = (-0.3).sp,
+                    fontFamily = FontFamily(Font(R.font.manrope_semibold, FontWeight.SemiBold)),
                     color = textPrimary,
+                    maxLines = 1,
                     modifier = Modifier.weight(1f)
                 )
 
                 SoftElevatedBox(
-                    modifier = Modifier.size(44.dp),
+                    modifier = Modifier.size(48.dp),
                     shape = CircleShape,
                     backgroundColor = Color.White,
                     elevation = 3.dp,
@@ -678,20 +696,20 @@ fun ChatHistoryDrawer(
                     }
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Search,
+                        imageVector = Icons.Outlined.Search,
                         contentDescription = "Search",
                         tint = textPrimary,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
 
-            // Fixed Top Navigation Menu (Images, Customize, Projects, Tasks, Plugins)
+            // Compact Top Navigation Menu (Images, Customize, Projects, Tasks, More -> Plugins)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 SidebarNavigationRow(
                     icon = Icons.Outlined.PhotoLibrary,
@@ -700,13 +718,13 @@ fun ChatHistoryDrawer(
                     onClick = { onOpenImages?.invoke() }
                 )
                 SidebarNavigationRow(
-                    icon = Icons.Filled.Tune,
+                    icon = Icons.Outlined.Tune,
                     label = "Customize",
                     textColor = textPrimary,
                     onClick = { onOpenCustomize?.invoke() }
                 )
                 SidebarNavigationRow(
-                    icon = Icons.Filled.Folder,
+                    icon = Icons.Outlined.FolderOpen,
                     label = "Projects",
                     textColor = textPrimary,
                     onClick = { onOpenProjects?.invoke() }
@@ -718,11 +736,38 @@ fun ChatHistoryDrawer(
                     onClick = { onOpenTasks?.invoke() }
                 )
                 SidebarNavigationRow(
-                    icon = Icons.Outlined.Extension,
-                    label = "Plugins",
+                    icon = Icons.Rounded.MoreHoriz,
+                    label = "More",
                     textColor = textPrimary,
-                    onClick = { onOpenPlugins?.invoke() }
+                    trailingContent = {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (isMoreExpanded) "Collapse" else "Expand",
+                            tint = textSecondary,
+                            modifier = Modifier
+                                .size(18.dp)
+                                .rotate(moreChevronRotation)
+                        )
+                    },
+                    onClick = { isMoreExpanded = !isMoreExpanded }
                 )
+                AnimatedVisibility(
+                    visible = isMoreExpanded,
+                    enter = expandVertically(tween(200)) + fadeIn(tween(200)),
+                    exit = shrinkVertically(tween(200)) + fadeOut(tween(200))
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        SidebarNavigationRow(
+                            icon = Icons.Outlined.Extension,
+                            label = "Plugins",
+                            textColor = textPrimary,
+                            onClick = { onOpenPlugins?.invoke() }
+                        )
+                    }
+                }
             }
 
             // ---------------- search field: only after tapping the header's search icon ----------------
@@ -1305,32 +1350,29 @@ fun ChatHistoryDrawer(
                     )
                 }
 
-                // Profile / Accounts and Options on the right
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Real accounts button: shows real agent status & sign-in badge, opens real AccountsDialog
-                    if (accountsButton != null) {
-                        accountsButton()
-                    }
+                // Real accounts button in the center
+                if (accountsButton != null) {
+                    accountsButton()
+                } else {
+                    Spacer(modifier = Modifier.width(48.dp))
+                }
 
-                    // 44dp circular 3-dots overflow button with soft elevation
-                    Box(contentAlignment = Alignment.Center) {
-                        SoftElevatedBox(
-                            modifier = Modifier.size(44.dp),
-                            shape = CircleShape,
-                            backgroundColor = Color.White,
-                            elevation = 3.dp,
-                            onClick = { showOverflowMenu = true }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.MoreVert,
-                                contentDescription = "More Options",
-                                tint = textPrimary,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
+                // 48dp circular 3-dots overflow button with soft elevation on the right
+                Box(contentAlignment = Alignment.Center) {
+                    SoftElevatedBox(
+                        modifier = Modifier.size(48.dp),
+                        shape = CircleShape,
+                        backgroundColor = Color.White,
+                        elevation = 3.dp,
+                        onClick = { showOverflowMenu = true }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "More Options",
+                            tint = textPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
 
                         // Dropdown Menu anchored to the 3-dots button
                         DropdownMenu(
@@ -1458,7 +1500,6 @@ fun ChatHistoryDrawer(
                         }
                     }
                 }
-            }
 
             if (showFullSearchDialog) {
                 SearchChatsDialog(
@@ -2425,38 +2466,45 @@ fun SidebarNavigationRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     textColor: Color,
+    modifier: Modifier = Modifier,
+    trailingContent: (@Composable () -> Unit)? = null,
     onClick: () -> Unit
 ) {
     SoftElevatedBox(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(44.dp)
             .padding(horizontal = 16.dp),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(14.dp),
         backgroundColor = Color.White,
-        elevation = 3.dp,
+        elevation = 2.dp,
         onClick = onClick
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 14.dp),
+                .padding(start = 14.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = Color(0xFF222222),
-                modifier = Modifier.size(24.dp)
+                tint = Color(0xFF1A1A1A),
+                modifier = Modifier.size(22.dp)
             )
             Spacer(modifier = Modifier.width(14.dp))
             Text(
                 text = label,
-                fontSize = 17.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Normal,
                 color = textColor,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
+            if (trailingContent != null) {
+                trailingContent()
+            }
         }
     }
 }
