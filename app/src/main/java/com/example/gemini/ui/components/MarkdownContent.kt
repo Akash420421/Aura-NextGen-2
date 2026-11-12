@@ -175,7 +175,8 @@ fun MarkdownBlockView(
     onRejectTool: ((com.example.gemini.domain.model.ToolCall) -> Unit)? = null,
     onTerminateTool: ((com.example.gemini.domain.model.ToolCall) -> Unit)? = null,
     onSubmitChoices: ((com.example.gemini.domain.model.ToolCall, List<com.example.gemini.data.remote.dto.AskQuestionResponseItemDto>, String) -> Unit)? = null,
-    onSkipChoices: ((com.example.gemini.domain.model.ToolCall, List<com.example.gemini.data.remote.dto.AskQuestionResponseItemDto>) -> Unit)? = null
+    onSkipChoices: ((com.example.gemini.domain.model.ToolCall, List<com.example.gemini.data.remote.dto.AskQuestionResponseItemDto>) -> Unit)? = null,
+    onRetry: (() -> Unit)? = null
 ) {
     when (block) {
         is MarkdownBlock.AgentThought -> {
@@ -198,7 +199,7 @@ fun MarkdownBlockView(
             )
         }
         is MarkdownBlock.AgentError -> {
-            AgentErrorCard(error = block, modifier = modifier)
+            AgentErrorCard(error = block, onRetry = onRetry, modifier = modifier)
         }
         is MarkdownBlock.InteractiveUi -> {
             InteractiveUiView(htmlCode = block.htmlCode, title = block.title, modifier = modifier)
@@ -258,8 +259,8 @@ fun MarkdownBlockView(
                     text = if (block.indent == 0) "• " else "◦ ",
                     fontWeight = FontWeight.Bold,
                     color = ClaudeTerracotta,
-                    fontSize = 14.sp,
-                    lineHeight = 21.sp,
+                    fontSize = 16.sp,
+                    lineHeight = 24.sp,
                     style = TextStyle(
                         platformStyle = PlatformTextStyle(includeFontPadding = false),
                         lineHeightStyle = LineHeightStyle(
@@ -285,8 +286,8 @@ fun MarkdownBlockView(
                     text = "${block.number} ",
                     fontWeight = FontWeight.Bold,
                     color = ClaudeTerracotta,
-                    fontSize = 13.5.sp,
-                    lineHeight = 21.sp,
+                    fontSize = 16.sp,
+                    lineHeight = 24.sp,
                     style = TextStyle(
                         platformStyle = PlatformTextStyle(includeFontPadding = false),
                         lineHeightStyle = LineHeightStyle(
@@ -1337,6 +1338,7 @@ fun MarkdownDetailsView(
 @Composable
 fun AgentErrorCard(
     error: MarkdownBlock.AgentError,
+    onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1452,6 +1454,35 @@ fun AgentErrorCard(
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                 ) { Text("Reconnect in Settings", fontSize = 12.5.sp) }
+            }
+
+            if (onRetry != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(50),
+                    color = Color.White,
+                    shadowElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = "Retry",
+                            tint = Color(0xFF1A1A1A),
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Retry",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF1A1A1A)
+                        )
+                    }
+                }
             }
 
             // Full Error / Stack Trace / JSON Accordion if present
@@ -2292,14 +2323,14 @@ fun FormattedInlineText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = TextStyle(
-        fontSize = 14.sp,
-        lineHeight = 21.sp,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
         platformStyle = PlatformTextStyle(includeFontPadding = false),
         lineHeightStyle = LineHeightStyle(
             alignment = LineHeightStyle.Alignment.Center,
             trim = LineHeightStyle.Trim.None
         ),
-        color = MaterialTheme.colorScheme.onSurface
+        color = Color(0xFF1A1A1A)
     ),
     isStrikethrough: Boolean = false
 ) {

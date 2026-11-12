@@ -268,17 +268,7 @@ fun MessageBubble(
                             .fillMaxWidth()
                             .padding(top = 6.dp)
                     ) {
-                        // Token & Cache Telemetry Badge (Displayed just above action icons)
-                        if (message.tokenUsage != null) {
-                            val payloadToShow = message.rawContent ?: message.rawPayload
-                            TokenUsageTelemetryPill(
-                                usage = message.tokenUsage,
-                                onViewPayload = if (!payloadToShow.isNullOrBlank()) {
-                                    { onViewRawPayload?.invoke(payloadToShow) }
-                                } else null
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                        }
+                        // Technical Token & Cache Telemetry Pill hidden as requested
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -397,12 +387,13 @@ fun UserMessageBubble(
             }
         }
 
+        val screenWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
         Box(
             modifier = Modifier
-                .widthIn(max = 330.dp)
+                .widthIn(max = screenWidth * 0.80f)
                 .bringIntoViewRequester(bubbleBringIntoView)
-                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
+                .background(Color(0xFFEDECF0))
                 .clickable { showUserActions = !showUserActions }
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
@@ -484,9 +475,9 @@ fun UserMessageBubble(
                         SelectionContainer {
                             Text(
                                 text = styledContent,
-                                fontSize = 15.sp,
+                                fontSize = 16.sp,
                                 lineHeight = 22.sp,
-                                color = MaterialTheme.colorScheme.onSurface,
+                                color = Color(0xFF1A1A1A),
                                 maxLines = if (isTextExpanded) Int.MAX_VALUE else 6,
                                 overflow = TextOverflow.Ellipsis,
                                 onTextLayout = { if (!isTextExpanded) isTextOverflowing = it.hasVisualOverflow }
@@ -613,17 +604,7 @@ fun AssistantMessageFooter(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 2.dp)
     ) {
-        // Token & Cache Telemetry Badge (Displayed just above action icons)
-        if (message.tokenUsage != null) {
-            val payloadToShow = message.rawContent ?: message.rawPayload
-            TokenUsageTelemetryPill(
-                usage = message.tokenUsage,
-                onViewPayload = if (!payloadToShow.isNullOrBlank()) {
-                    { onViewRawPayload?.invoke(payloadToShow) }
-                } else null
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-        }
+        // Technical Token & Cache Telemetry Pill hidden as requested
 
         Row(
             modifier = Modifier.fillMaxWidth(),

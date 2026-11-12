@@ -299,8 +299,8 @@ fun ChatScreen(
     val hubStatus by viewModel.hubStatus.collectAsState()
     val systemConnectionState by viewModel.systemConnectionState.collectAsState()
     var auraHomeVoice by rememberSaveable { mutableStateOf(false) }
-    // The landing screen must remain visible whenever there are no messages in the current view.
-    val isAuraHome = !isInFloatingWindow && messages.isEmpty()
+    // The clean Aura UI is permanent across all conversations.
+    val isAuraHome = !isInFloatingWindow
     val auraAutoSend by com.example.gemini.data.jarvis.JarvisPreferences.autoSend.state.collectAsState()
     val isNetworkConnected by viewModel.isNetworkConnectedState.collectAsState()
     val isAnyGenerationOrTaskActive by viewModel.isAnyGenerationOrTaskActive.collectAsState()
@@ -1915,7 +1915,7 @@ fun ChatScreen(
                                 )
                             }
                         }
-                        if (isDevModeEnabled) {
+                        if (isDevModeEnabled && !isAuraHome) {
                             IconButton(onClick = { showChatTelemetryDialog = true }) {
                                 Icon(
                                     imageVector = Icons.Outlined.Analytics,
@@ -1956,16 +1956,14 @@ fun ChatScreen(
                     val isExistingChat = messages.isEmpty() && isExistingConversation && isLoadingConversation
                     Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, error=$conversationError, isServerStopped=$isServerStopped")
 
-                    if (isAuraHome) {
-                        if (auraHomeVoice) {
-                            com.example.gemini.ui.home.AuraVoiceWelcome(onStart = startAuraJarvis)
-                        } else {
-                            com.example.gemini.ui.home.AuraChatWelcome(
-                                onPromptSelected = { prompt ->
-                                    inputState.setTextAndPlaceCursorAtEnd(prompt)
-                                }
-                            )
-                        }
+                    if (auraHomeVoice) {
+                        com.example.gemini.ui.home.AuraVoiceWelcome(onStart = startAuraJarvis)
+                    } else if (messages.isEmpty()) {
+                        com.example.gemini.ui.home.AuraChatWelcome(
+                            onPromptSelected = { prompt ->
+                                inputState.setTextAndPlaceCursorAtEnd(prompt)
+                            }
+                        )
                     } else if (isAgyChat && isServerStopped && messages.isEmpty()) {
                         BoxWithConstraints(
                             modifier = Modifier.fillMaxSize()
@@ -2205,7 +2203,8 @@ fun ChatScreen(
                                 LazyColumn(
                                     state = listState,
                                     modifier = Modifier.fillMaxSize().then(chatBounce.modifier),
-                                    contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
                                     userScrollEnabled = chatBounce.userScrollEnabled,
                                     overscrollEffect = chatBounce.overscrollEffect
                                 ) {
@@ -2235,7 +2234,7 @@ fun ChatScreen(
                                                 }
                                             }
                                         }
-                                        is ChatFeedItem.Divider -> com.example.gemini.ui.components.WaveDivider(label = feedItem.label)
+                                        is ChatFeedItem.Divider -> Unit
                                         is ChatFeedItem.VoiceCall -> com.example.gemini.ui.voice.VoiceCallMarker(feedItem) {
                                             if (feedItem.live) com.example.gemini.data.voice.AgyVoiceCall.setMinimized(false)
                                             else openVoiceTranscript = feedItem.record
@@ -2279,6 +2278,10 @@ fun ChatScreen(
                                             }
                                         }
                                         is ChatFeedItem.AssistantBlock -> {
+                                            var showAssistantMenu by remember { mutableStateOf(false) }
+                                            val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                                            val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -2292,41 +2295,82 @@ fun ChatScreen(
                                                         onRejectTool = if (isTool) { { toolCall -> if (toolCall.toolType == ToolType.ASK_CHOICE) viewModel.cancelUserChoices(toolCall, feedItem.messageId) else viewModel.rejectTerminalTool(toolCall, feedItem.messageId) } } else null,
                                                         onTerminateTool = if (isTool) { { toolCall -> viewModel.terminateRunningTerminalTool(toolCall, feedItem.messageId) } } else null,
                                                         onSubmitChoices = if (isTool) { { toolCall, responses, summaryPayload -> viewModel.submitUserChoices(toolCall, feedItem.messageId, responses, summaryPayload) } } else null,
-                                                        onSkipChoices = if (isTool) { { toolCall, responses -> viewModel.skipUserChoices(toolCall, feedItem.messageId, responses) } } else null
+                                                        onSkipChoices = if (isTool) { { toolCall, responses -> viewModel.skipUserChoices(toolCall, feedItem.messageId, responses) } } else null,
+                                                        onRetry = {
+                                                            viewModel.retryMessage(feedItem.messageId)
+                                                            userSentMessageTrigger++
+                                                        }
                                                     )
                                                 }
-                                                // Text is selectable per block: each list item has its own selection container, so a
-                                                // selection never outlives the item when it scrolls away (one container spanning many
-                                                // items crashed). Interactive blocks (tool cards, web views, media) keep their own gestures.
                                                 val selectable = when (feedItem.block) {
                                                     is MarkdownBlock.Paragraph, is MarkdownBlock.Header, is MarkdownBlock.Bullet,
                                                     is MarkdownBlock.Numbered, is MarkdownBlock.Task, is MarkdownBlock.Blockquote,
                                                     is MarkdownBlock.Alert, is MarkdownBlock.Table -> true
                                                     else -> false
                                                 }
-                                                if (selectable) SelectionContainer { blockView() } else blockView()
+                                                if (selectable) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .combinedClickable(
+                                                                onLongClick = {
+                                                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                                    showAssistantMenu = true
+                                                                },
+                                                                onClick = {}
+                                                            )
+                                                    ) {
+                                                        SelectionContainer { blockView() }
+                                                    }
+                                                } else blockView()
+
+                                                DropdownMenu(
+                                                    expanded = showAssistantMenu,
+                                                    onDismissRequest = { showAssistantMenu = false },
+                                                    shape = RoundedCornerShape(16.dp),
+                                                    containerColor = Color.White,
+                                                    tonalElevation = 6.dp,
+                                                    modifier = Modifier.widthIn(min = 160.dp)
+                                                ) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("Copy", fontSize = 14.sp, color = Color(0xFF1A1A1A)) },
+                                                        leadingIcon = {
+                                                            Icon(
+                                                                imageVector = Icons.Outlined.ContentCopy,
+                                                                contentDescription = "Copy",
+                                                                tint = Color(0xFF1A1A1A),
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        },
+                                                        onClick = {
+                                                            showAssistantMenu = false
+                                                            val content = messages.find { it.id == feedItem.messageId }?.content ?: ""
+                                                            clipboard.setText(AnnotatedString(content))
+                                                            Toast.makeText(context, "Copied response", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Regenerate", fontSize = 14.sp, color = Color(0xFF1A1A1A)) },
+                                                        leadingIcon = {
+                                                            Icon(
+                                                                imageVector = Icons.Outlined.Refresh,
+                                                                contentDescription = "Regenerate",
+                                                                tint = Color(0xFF1A1A1A),
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        },
+                                                        onClick = {
+                                                            showAssistantMenu = false
+                                                            viewModel.retryMessage(feedItem.messageId)
+                                                            userSentMessageTrigger++
+                                                        }
+                                                    )
+                                                }
                                             }
                                         }
                                         // with the working animation on, the working row below replaces these dots
-                                        // progress shows in the working row under the reply (the working animation is always on)
                                         is ChatFeedItem.AssistantTyping -> Unit
-                                        is ChatFeedItem.AssistantFooter -> {
-                                            AssistantMessageFooter(
-                                                message = feedItem.message,
-                                                // fades in where the working row fades out (no pop-in at the end of a turn)
-                                                modifier = Modifier.animateItem(fadeInSpec = tween(220), placementSpec = null, fadeOutSpec = null),
-                                                isDevModeEnabled = isDevModeEnabled,
-                                                onRetry = { targetMsg ->
-                                                    viewModel.retryMessage(targetMsg.id)
-                                                    userSentMessageTrigger++
-                                                },
-                                                onViewRawPayload = { payloadJson ->
-                                                    showRawPayloadDialog = payloadJson
-                                                },
-                                                onShowArtifacts = { showArtifactsDrawer = true },
-                                                artifactsCount = artifacts.size
-                                            )
-                                        }
+                                        is ChatFeedItem.AssistantFooter -> Unit
                                         is ChatFeedItem.StreamingMessage -> {
                                             MessageBubble(
                                                 message = feedItem.message,
@@ -2373,14 +2417,14 @@ fun ChatScreen(
 
                                     // Bottom spacer to ensure scrolling reaches comfortably above the input box
                                     item(key = "bottom_anchor") {
-                                        Spacer(modifier = Modifier.height(16.dp))
+                                        Spacer(modifier = Modifier.height(96.dp))
                                     }
                                 }
                         }
                     }
 
                     // Clean "Scroll to latest message" button (only in active chat when scrolled up)
-                    val showScrollToBottom = !isAuraHome && feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
+                    val showScrollToBottom = feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
 
                     androidx.compose.animation.AnimatedVisibility(
                         visible = showScrollToBottom,
@@ -2388,7 +2432,7 @@ fun ChatScreen(
                         exit = fadeOut(animationSpec = tween(150)),
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 12.dp)
+                            .padding(bottom = 76.dp)
                     ) {
                         val isDark = isAppInDarkTheme()
                         Surface(
@@ -2879,7 +2923,13 @@ fun ChatScreen(
                         viewModel.clearDraft(activeConversationKey)
                         inputState.clearText()
                     },
-                    onStopStreaming = { showStopConfirmDialog = true },
+                    onStopStreaming = {
+                        if (isAuraHome) {
+                            viewModel.stopStreaming()
+                        } else {
+                            showStopConfirmDialog = true
+                        }
+                    },
                     attachments = attachments,
                     isUploadingAttachment = isUploadingAttachment,
                     attachmentProgress = attachmentProgress,
@@ -3563,6 +3613,11 @@ fun ChatScreen(
     // Attachment Selector Bottom Sheet
     if (showAttachmentSelector) {
         AttachmentSelectorBottomSheet(
+            selectedModelId = selectedModelId,
+            availableModels = enabledModels,
+            onSelectModel = { modelId -> viewModel.selectModel(modelId) },
+            thinkingPreference = thinkingPref,
+            onPreferenceSelected = { pref -> viewModel.setThinkingPreference(pref) },
             onPickImage = { photoPickerLauncher.launch("image/*") },
             onPickFile = { filePickerLauncher.launch("*/*") },
             onPickFromFiles = { showAttachFromFiles = true },

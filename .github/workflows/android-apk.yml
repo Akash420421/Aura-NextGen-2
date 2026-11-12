@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.7-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.0.8-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,16 +70,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.0.7
-          name: Aura AI v2.0.7
+          tag_name: v2.0.8
+          name: Aura AI v2.0.8
           body: |
-            ### Aura AI v2.0.7 — Compact Elevated Sidebar & Permanent Porcelain Theme
-            - **Compact Gemini-Style Menu:** 44dp slim rows with 6dp spacing, outlined Material icons, and 14dp rounded cards.
-            - **Expandable More Section:** Clean 'More' menu item with rotating chevron revealing Plugins.
-            - **Manrope SemiBold Header:** Bundled Manrope font for "Aura AI" header with 48dp soft elevated search button.
-            - **Refined Footer:** Balanced layout with 48dp Settings gear, centered Accounts pill, and 48dp 3-dots overflow menu.
-            - **Unified Soft 3D Elevation:** Consistent dual-layer ambient/spot shadows and subtle borders across all cards.
-            - **Permanent Porcelain Theme:** Default pure light mode with Porcelain palette across the entire app.
+            ### Aura AI v2.0.8 — Permanent Clean Chat UI, Modern Attachment Sheet & Model Picker
+            - **Permanent Aura Chat UI:** Single, unified chat screen for new and loaded conversations, eliminating jump-back to the legacy interface.
+            - **Polished Conversation View:** 80% max-width user bubbles with light gray fill, clean full-width markdown assistant responses.
+            - **Stop Button & Dynamic Pill:** Floating input bar switches dynamically between Stop (streaming), Send (text typed), and Mic/Voice note (idle).
+            - **56dp Image Thumbnail & File Previews:** Thumbnails and document chips preview inside the input pill with instant remove buttons.
+            - **Redesigned Add-to-Chat Sheet:** Equal top cards (Photo / Image, Document / File, From Files) with caption, plus built-in Model Picker and Thinking Preference control.
+            - **Long-Press Menu & Inline Retry:** Clean floating context menu for Copy and Regenerate, with a soft-elevated white Retry button on failure.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

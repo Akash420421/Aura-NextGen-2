@@ -643,33 +643,98 @@ fun ChatInputBar(
                                     .fillMaxWidth()
                                     .horizontalScroll(rememberScrollState())
                                     .padding(bottom = 6.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 attachments.forEach { att ->
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4),
-                                        border = BorderStroke(1.dp, if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6))
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
+                                    val isImg = !(att.reference && att.base64.isNullOrBlank()) && (
+                                        att.isImage || att.name.endsWith(".jpg", true) || att.name.endsWith(".png", true) ||
+                                            att.name.endsWith(".jpeg", true) || att.name.endsWith(".webp", true) ||
+                                            att.name.endsWith(".gif", true) || att.mimeType?.startsWith("image/") == true
+                                    )
+                                    val imgSource = remember(att) {
+                                        when {
+                                            !att.localUri.isNullOrBlank() -> att.localUri
+                                            !att.url.isNullOrBlank() -> att.url
+                                            att.path.isNotBlank() -> if (att.path.startsWith("file://") || att.path.startsWith("http")) att.path else "file://${att.path}"
+                                            else -> null
+                                        }
+                                    }
+
+                                    if (isImg && imgSource != null) {
+                                        Box(
+                                            modifier = Modifier.size(56.dp)
                                         ) {
-                                            Text(
-                                                text = att.name.ifBlank { "Attachment" },
-                                                fontSize = 12.sp,
-                                                color = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
-                                                maxLines = 1
-                                            )
-                                            Spacer(Modifier.width(4.dp))
-                                            Icon(
-                                                imageVector = Icons.Outlined.Close,
-                                                contentDescription = "Remove",
-                                                tint = if (isDark) Color(0xFF9E9EA4) else Color(0xFF8A8A8E),
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4),
+                                                border = BorderStroke(1.dp, if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6)),
                                                 modifier = Modifier
-                                                    .size(14.dp)
+                                                    .fillMaxSize()
+                                                    .clickable { previewImageUrl = imgSource }
+                                            ) {
+                                                AsyncImage(
+                                                    model = imgSource,
+                                                    contentDescription = att.name,
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                )
+                                            }
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = Color.Black.copy(alpha = 0.65f),
+                                                modifier = Modifier
+                                                    .size(20.dp)
+                                                    .align(Alignment.TopEnd)
+                                                    .offset(x = 4.dp, y = (-4).dp)
                                                     .clickable { onRemoveAttachment(att.id) }
-                                            )
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Close,
+                                                        contentDescription = "Remove",
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4),
+                                            border = BorderStroke(1.dp, if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6))
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Outlined.InsertDriveFile,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFF5F6368),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(
+                                                    text = att.name.ifBlank { "Document" },
+                                                    fontSize = 12.sp,
+                                                    color = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
+                                                    maxLines = 1,
+                                                    modifier = Modifier.widthIn(max = 140.dp),
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Icon(
+                                                    imageVector = Icons.Outlined.Close,
+                                                    contentDescription = "Remove",
+                                                    tint = if (isDark) Color(0xFF9E9EA4) else Color(0xFF8A8A8E),
+                                                    modifier = Modifier
+                                                        .size(14.dp)
+                                                        .clickable { onRemoveAttachment(att.id) }
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -778,66 +843,89 @@ fun ChatInputBar(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Crossfade(
-                                    targetState = canSend,
+                                    targetState = when {
+                                        isStreaming -> "stop"
+                                        canSend -> "send"
+                                        else -> "mic"
+                                    },
                                     animationSpec = tween(150),
-                                    label = "home_mic_send_crossfade"
-                                ) { hasContentToSend ->
-                                    if (hasContentToSend) {
-                                        Surface(
-                                            onClick = {
-                                                val trimmed = textFieldState.text.toString().trim()
-                                                if (!isAuth) {
-                                                    Toast.makeText(context, "Please sign in first to send messages.", Toast.LENGTH_SHORT).show()
-                                                    return@Surface
+                                    label = "home_mic_send_stop_crossfade"
+                                ) { state ->
+                                    when (state) {
+                                        "stop" -> {
+                                            Surface(
+                                                onClick = onStopStreaming,
+                                                shape = CircleShape,
+                                                color = Color(0xFF151B2A),
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(3.dp),
+                                                        color = Color.White,
+                                                        modifier = Modifier.size(12.dp)
+                                                    ) {}
                                                 }
-                                                if (attachmentsBusy) {
-                                                    Toast.makeText(context, "Wait until attachments are ready.", Toast.LENGTH_SHORT).show()
-                                                    return@Surface
-                                                }
-                                                if (!isOnline) {
-                                                    Toast.makeText(context, offlineMessage, Toast.LENGTH_SHORT).show()
-                                                    return@Surface
-                                                }
-                                                if (isLiveDictating) {
-                                                    stopLiveDictation()
-                                                }
-                                                onSendMessage(trimmed)
-                                                textFieldState.clearText()
-                                            },
-                                            shape = CircleShape,
-                                            color = Color(0xFF151B2A),
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Default.ArrowUpward,
-                                                    contentDescription = "Send",
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
                                             }
                                         }
-                                    } else {
-                                        Surface(
-                                            onClick = {
-                                                if (voiceNotesAsText) {
-                                                    startAutoTranscribe()
-                                                } else {
-                                                    recordMode = AudioRecordMode.VOICE_NOTE
-                                                    triggerMicClick()
+                                        "send" -> {
+                                            Surface(
+                                                onClick = {
+                                                    val trimmed = textFieldState.text.toString().trim()
+                                                    if (!isAuth) {
+                                                        Toast.makeText(context, "Please sign in first to send messages.", Toast.LENGTH_SHORT).show()
+                                                        return@Surface
+                                                    }
+                                                    if (attachmentsBusy) {
+                                                        Toast.makeText(context, "Wait until attachments are ready.", Toast.LENGTH_SHORT).show()
+                                                        return@Surface
+                                                    }
+                                                    if (!isOnline) {
+                                                        Toast.makeText(context, offlineMessage, Toast.LENGTH_SHORT).show()
+                                                        return@Surface
+                                                    }
+                                                    if (isLiveDictating) {
+                                                        stopLiveDictation()
+                                                    }
+                                                    onSendMessage(trimmed)
+                                                    textFieldState.clearText()
+                                                },
+                                                shape = CircleShape,
+                                                color = Color(0xFF151B2A),
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.ArrowUpward,
+                                                        contentDescription = "Send",
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
                                                 }
-                                            },
-                                            shape = CircleShape,
-                                            color = Color(0xFF151B2A),
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Rounded.Mic,
-                                                    contentDescription = if (voiceNotesAsText) "Record and transcribe" else "Record voice note",
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
+                                            }
+                                        }
+                                        else -> {
+                                            Surface(
+                                                onClick = {
+                                                    if (voiceNotesAsText) {
+                                                        startAutoTranscribe()
+                                                    } else {
+                                                        recordMode = AudioRecordMode.VOICE_NOTE
+                                                        triggerMicClick()
+                                                    }
+                                                },
+                                                shape = CircleShape,
+                                                color = Color(0xFF151B2A),
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Mic,
+                                                        contentDescription = if (voiceNotesAsText) "Record and transcribe" else "Record voice note",
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
