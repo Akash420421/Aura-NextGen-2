@@ -39,8 +39,8 @@ fun AttachmentSelectorBottomSheet(
     selectedModelId: String = "",
     availableModels: List<AiModel> = emptyList(),
     onSelectModel: (String) -> Unit = {},
-    thinkingPreference: String = "High",
-    onPreferenceSelected: ((String) -> Unit)? = null,
+    thinkingPreference: com.example.gemini.domain.model.ThinkingPreference = com.example.gemini.domain.model.ThinkingPreference(),
+    onPreferenceSelected: ((com.example.gemini.domain.model.ThinkingPreference) -> Unit)? = null,
     onPickImage: () -> Unit,
     onPickFile: () -> Unit,
     onPickFromFiles: () -> Unit,
@@ -274,8 +274,12 @@ fun AttachmentSelectorBottomSheet(
                                     .padding(4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                listOf("Low", "Medium", "High").forEach { level ->
-                                    val isPrefSelected = thinkingPreference.equals(level, ignoreCase = true)
+                                listOf(
+                                    com.example.gemini.domain.model.ThinkingLevel.LOW to "Low",
+                                    com.example.gemini.domain.model.ThinkingLevel.MEDIUM to "Medium",
+                                    com.example.gemini.domain.model.ThinkingLevel.HIGH to "High"
+                                ).forEach { (lvl, level) ->
+                                    val isPrefSelected = thinkingPreference.level == lvl
                                     Surface(
                                         modifier = Modifier
                                             .weight(1f)
@@ -283,7 +287,7 @@ fun AttachmentSelectorBottomSheet(
                                             .clip(RoundedCornerShape(12.dp))
                                             .clickable {
                                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                onPreferenceSelected(level)
+                                                onPreferenceSelected?.invoke(thinkingPreference.copy(level = lvl))
                                             },
                                         shape = RoundedCornerShape(12.dp),
                                         color = if (isPrefSelected) Color(0xFF2F6FED).copy(alpha = 0.12f) else Color.Transparent,

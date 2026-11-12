@@ -49,6 +49,10 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.AnnotatedString
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -2312,13 +2316,14 @@ fun ChatScreen(
                                                     Box(
                                                         modifier = Modifier
                                                             .fillMaxWidth()
-                                                            .combinedClickable(
-                                                                onLongClick = {
-                                                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                                                    showAssistantMenu = true
-                                                                },
-                                                                onClick = {}
-                                                            )
+                                                            .pointerInput(feedItem.messageId) {
+                                                                detectTapGestures(
+                                                                    onLongPress = {
+                                                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                                        showAssistantMenu = true
+                                                                    }
+                                                                )
+                                                            }
                                                     ) {
                                                         SelectionContainer { blockView() }
                                                     }
@@ -2353,7 +2358,7 @@ fun ChatScreen(
                                                         text = { Text("Regenerate", fontSize = 14.sp, color = Color(0xFF1A1A1A)) },
                                                         leadingIcon = {
                                                             Icon(
-                                                                imageVector = Icons.Outlined.Refresh,
+                                                                imageVector = Icons.Default.Refresh,
                                                                 contentDescription = "Regenerate",
                                                                 tint = Color(0xFF1A1A1A),
                                                                 modifier = Modifier.size(18.dp)
