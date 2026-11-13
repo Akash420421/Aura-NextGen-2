@@ -225,7 +225,6 @@ fun ChatHistoryDrawer(
 
     val allFilteredIds = remember(filtered) { filtered.map { it.id }.toSet() }
 
-    val context = LocalContext.current
     var pinnedIds by remember {
         mutableStateOf(com.example.gemini.data.preferences.AuraCustomizePreferences.getPinnedConversationIds(context))
     }
