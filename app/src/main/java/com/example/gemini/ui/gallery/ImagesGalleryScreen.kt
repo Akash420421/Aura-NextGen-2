@@ -94,7 +94,7 @@ fun ImagesGalleryScreen(
 
             // 1. From Active Messages (Tool calls, attachments, markdown)
             messages.forEach { msg ->
-                val time = msg.timestamp
+                val time = msg.createdAt
                 msg.toolCalls.forEach { tc ->
                     val isImg = tc.toolType == ToolType.GENERATE_IMAGE ||
                             tc.output.startsWith("data:image/") ||
