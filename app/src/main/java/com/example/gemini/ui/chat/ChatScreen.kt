@@ -3945,6 +3945,7 @@ fun ChatScreen(
 
     if (showImagesGalleryScreen) {
         com.example.gemini.ui.gallery.ImagesGalleryScreen(
+            messages = messages,
             onBack = { showImagesGalleryScreen = false }
         )
     }

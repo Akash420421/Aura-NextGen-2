@@ -70,14 +70,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.0.9
-          name: Aura AI v2.0.9
+          tag_name: v2.1.0
+          name: Aura AI v2.1.0
           body: |
-            ### Aura AI v2.0.9 — Chat UI Polish, Skeleton Previews & Compact Model Selector
-            - **Streamlined Thinking Accordion:** Removed redundant bottom timer card; clean header-only thought accordion.
-            - **Pulsing Shimmer Image Skeletons:** Beautiful placeholder shimmer cards while images generate or load.
-            - **Clean User View:** Non-interactive technical tool calls (Ran bash, Read file, Edit file) hidden from normal chat view while keeping interactive approvals and thoughts pristine.
-            - **Compact Add-to-Chat Sheet:** 96dp proportional cards with unclipped text, expandable single-row active model picker with inline dropdown, and balanced thinking level controls.
+            ### Aura AI v2.1.0 — Images Gallery Screen & Interactive Customization Suite
+            - **Connected Images Gallery:** 2-column responsive grid indexing all chat-generated and local Aura images, with tap-to-enlarge, full view dialog, and 1-tap download.
+            - **Pixel-Perfect Customization Badges:** 36dp circular pastel badges for Personality, Memory, Plugins, Email, Calendar, Contacts, Passwords, and Location with zero icon cutoff.
+            - **Interactive Personality Setup:** 4 Assistant Tone presets (Jarvis, Professional, Friendly, Direct) and custom system instructions.
+            - **Personal Memory Management:** Add, review, and clear remembered facts and preferences across conversations.
+            - **Jarvis Voice Contacts Book:** Add and manage primary contacts with relationship tags for voice calling and messaging.
+            - **Secure Credentials Vault:** Store API keys and credentials with masked view, reveal toggle, and instant copy.
+            - **Location & Email Preferences:** Configure home/work commute addresses, real-time GPS toggle, and email digests.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
