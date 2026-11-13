@@ -66,6 +66,7 @@ import com.example.gemini.ui.components.AppToastHelper
 import com.example.gemini.ui.components.ChatToastType
 import android.widget.Toast
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material3.*
@@ -152,6 +153,7 @@ fun ChatHistoryDrawer(
     onOpenProjects: (() -> Unit)? = null,
     onOpenTasks: (() -> Unit)? = null,
     onOpenPlugins: (() -> Unit)? = null,
+    onOpenVoiceSettings: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -765,6 +767,12 @@ fun ChatHistoryDrawer(
                             label = "Plugins",
                             textColor = textPrimary,
                             onClick = { onOpenPlugins?.invoke() }
+                        )
+                        SidebarNavigationRow(
+                            icon = Icons.Outlined.RecordVoiceOver,
+                            label = "Voice Setting",
+                            textColor = textPrimary,
+                            onClick = { onOpenVoiceSettings?.invoke() }
                         )
                     }
                 }

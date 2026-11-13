@@ -34,17 +34,24 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -169,7 +176,11 @@ fun AuraSuggestionPillChip(
 }
 
 @Composable
-fun AuraVoiceWelcome(onStart: () -> Unit, modifier: Modifier = Modifier) {
+fun AuraVoiceWelcome(
+    userName: String? = null,
+    onStart: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val phase by com.example.gemini.data.jarvis.JarvisController.phase.collectAsState()
     val prompt = when (phase) {
         com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> "Listening — tap the orb to send"
@@ -177,17 +188,40 @@ fun AuraVoiceWelcome(onStart: () -> Unit, modifier: Modifier = Modifier) {
         com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> "Aura is speaking — tap to talk"
         else -> "Tap the orb to start conversation"
     }
+
+    val rawName = userName?.trim().orEmpty()
+    val greetingName = if (rawName.isNotBlank()) rawName.substringBefore(' ') else "Sir"
+    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    val timeGreeting = when (hour) {
+        in 4..11 -> "Good morning"
+        in 12..16 -> "Good afternoon"
+        in 17..21 -> "Good evening"
+        else -> "Hello"
+    }
+    val greetingTitle = "$timeGreeting, $greetingName"
+
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.weight(0.40f))
-        Text("Hi Sir,", color = AuraInk, fontSize = 38.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(10.dp))
-        Text(prompt, color = AuraMuted, fontSize = 19.sp, textAlign = TextAlign.Center)
+        Text(
+            text = greetingTitle,
+            color = AuraInk,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = prompt,
+            color = AuraMuted,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center
+        )
         Spacer(Modifier.weight(0.28f))
         com.example.gemini.ui.components.AuraOrbView(
-            modifier = Modifier.size(278.dp),
+            modifier = Modifier.size(260.dp),
             phase = phase,
             onOrbTapped = onStart
         )
@@ -213,12 +247,22 @@ fun AuraVoiceActions(
     modifier: Modifier = Modifier
 ) {
     val phase by com.example.gemini.data.jarvis.JarvisController.phase.collectAsState()
+    val isSharing by com.example.gemini.data.vision.ScreenCaptureManager.getInstance().isSharing.collectAsState()
+    val currentLang by com.example.gemini.data.voice.AgyVoicePreferences.language.collectAsState()
+    var showLanguageDialog by remember { mutableStateOf(false) }
+
     val startLabel = when (phase) {
         com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> "Tap to Send"
         com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> "Thinking…"
         com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> "Tap to Talk"
         else -> "Tap to Start"
     }
+
+    val languageLabel = remember(currentLang) {
+        if (currentLang == com.example.gemini.data.voice.AgyVoicePreferences.LANGUAGE_AUTO) "Auto"
+        else com.example.gemini.data.voice.AgyVoicePreferences.languages.firstOrNull { it.first == currentLang }?.second ?: "Language"
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -234,7 +278,8 @@ fun AuraVoiceActions(
         ) {
             VoiceSideAction(
                 icon = Icons.Outlined.DesktopWindows,
-                label = "Screen",
+                label = if (isSharing) "Sharing" else "Screen",
+                iconTint = if (isSharing) Color(0xFF16A34A) else AuraInk,
                 onClick = onScreen
             )
         }
@@ -255,22 +300,27 @@ fun AuraVoiceActions(
                 .height(56.dp)
                 .defaultMinSize(minWidth = 160.dp)
         ) {
+            val (accentColor, iconVector) = when (phase) {
+                com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> Color(0xFF16A34A) to Icons.Rounded.Mic
+                com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> Color(0xFFDC2626) to Icons.Filled.Stop
+                com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> Color(0xFFD97706) to Icons.Default.HourglassEmpty
+                else -> AuraBlue to Icons.Rounded.Mic
+            }
             Row(
                 modifier = Modifier.padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = if (phase == com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING) Icons.Filled.Stop
-                    else Icons.Rounded.Mic,
+                    imageVector = iconVector,
                     contentDescription = null,
-                    tint = AuraBlue,
+                    tint = accentColor,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = startLabel,
-                    color = AuraBlue,
+                    color = accentColor,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
@@ -285,15 +335,129 @@ fun AuraVoiceActions(
         ) {
             VoiceSideAction(
                 icon = Icons.Outlined.Language,
-                label = if (autoSend) "Auto on" else "Auto",
-                onClick = onToggleAuto
+                label = languageLabel,
+                iconTint = if (currentLang != com.example.gemini.data.voice.AgyVoicePreferences.LANGUAGE_AUTO) Color(0xFF2F6FED) else AuraInk,
+                onClick = { showLanguageDialog = true }
             )
+        }
+    }
+
+    if (showLanguageDialog) {
+        VoiceLanguagePickerModal(
+            currentLang = currentLang,
+            onSelect = { tag ->
+                com.example.gemini.data.voice.AgyVoicePreferences.setLanguage(tag)
+                showLanguageDialog = false
+            },
+            onDismiss = { showLanguageDialog = false }
+        )
+    }
+}
+
+@Composable
+fun VoiceLanguagePickerModal(
+    currentLang: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = Color.White,
+            shadowElevation = 8.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Voice Spoken Language",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF1A1A1A)
+                    )
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color(0xFF8A8A8E),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                val options = listOf(
+                    Triple(com.example.gemini.data.voice.AgyVoicePreferences.LANGUAGE_AUTO, "Auto Detect", "Phone system language")
+                ) + com.example.gemini.data.voice.AgyVoicePreferences.languages
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    options.forEach { (tag, label, desc) ->
+                        val isSelected = currentLang == tag
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isSelected) Color(0xFF2F6FED).copy(alpha = 0.08f) else Color(0xFFF8F7FA),
+                            border = if (isSelected) BorderStroke(1.dp, Color(0xFF2F6FED).copy(alpha = 0.4f)) else null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onSelect(tag) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 15.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                        color = if (isSelected) Color(0xFF2F6FED) else Color(0xFF1A1A1A)
+                                    )
+                                    Text(
+                                        text = desc,
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF8A8A8E)
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = Color(0xFF2F6FED),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun VoiceSideAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+private fun VoiceSideAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    iconTint: Color = AuraInk,
+    onClick: () -> Unit
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.wrapContentWidth()
@@ -309,7 +473,7 @@ private fun VoiceSideAction(icon: androidx.compose.ui.graphics.vector.ImageVecto
                 Icon(
                     imageVector = icon,
                     contentDescription = label,
-                    tint = AuraInk,
+                    tint = iconTint,
                     modifier = Modifier.size(24.dp)
                 )
             }

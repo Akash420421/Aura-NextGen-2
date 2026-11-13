@@ -437,15 +437,38 @@ fun ChatScreen(
         )
     }
     val startAuraJarvis: () -> Unit = {
+        if (!com.example.gemini.data.jarvis.JarvisPreferences.enabled.value) {
+            com.example.gemini.data.jarvis.JarvisPreferences.enabled.set(true)
+        }
+        if (!com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.value) {
+            com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.set(true)
+        }
         when {
-            !com.example.gemini.data.jarvis.JarvisPreferences.enabled.value ||
-                !com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.value -> {
-                requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS
-                showSettingsDialog = true
-            }
             !com.example.gemini.data.jarvis.JarvisController.hasMic() ->
                 auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
             else -> com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+        }
+    }
+
+    val screenCaptureLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
+            val projectionManager = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
+            if (projectionManager != null) {
+                try {
+                    val projection = projectionManager.getMediaProjection(result.resultCode, result.data!!)
+                    val metrics = context.resources.displayMetrics
+                    val started = com.example.gemini.data.vision.ScreenCaptureManager.getInstance().startCapture(projection, metrics)
+                    if (started) {
+                        Toast.makeText(context, "Screen sharing started", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Could not start screen sharing", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Screen share error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
     // before the first call: pick a voice (swipe through them and hear each one)
@@ -1378,6 +1401,11 @@ fun ChatScreen(
                     requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.WEBVIEW_EXTENSIONS
                     showSettingsDialog = true
                 },
+                onOpenVoiceSettings = {
+                    scope.launch { drawerState.close() }
+                    requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS_VOICE
+                    showSettingsDialog = true
+                },
                 // the sidebar stays open: the picker floats over it so the new look shows on the sidebar and the chat
                 onOpenThemes = { showThemePanel = !showThemePanel },
                 agyEnabled =com.example.gemini.domain.model.AgentKind.AGY in enabledAgents,
@@ -1961,7 +1989,10 @@ fun ChatScreen(
                     Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, error=$conversationError, isServerStopped=$isServerStopped")
 
                     if (auraHomeVoice) {
-                        com.example.gemini.ui.home.AuraVoiceWelcome(onStart = startAuraJarvis)
+                        com.example.gemini.ui.home.AuraVoiceWelcome(
+                            userName = agyAuthInfo.displayName,
+                            onStart = startAuraJarvis
+                        )
                     } else if (messages.isEmpty()) {
                         com.example.gemini.ui.home.AuraChatWelcome(
                             onPromptSelected = { prompt ->
@@ -2859,8 +2890,18 @@ fun ChatScreen(
                         autoSend = auraAutoSend,
                         onStart = startAuraJarvis,
                         onScreen = {
-                            requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS_SCREEN
-                            showSettingsDialog = true
+                            val scm = com.example.gemini.data.vision.ScreenCaptureManager.getInstance()
+                            if (scm.isSharing.value) {
+                                scm.stopCapture()
+                                Toast.makeText(context, "Screen sharing stopped", Toast.LENGTH_SHORT).show()
+                            } else {
+                                val projectionManager = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
+                                if (projectionManager != null) {
+                                    screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
+                                } else {
+                                    Toast.makeText(context, "Screen sharing not supported on this device", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         },
                         onToggleAuto = { com.example.gemini.data.jarvis.JarvisPreferences.autoSend.set(!auraAutoSend) }
                     )
