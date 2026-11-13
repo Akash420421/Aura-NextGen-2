@@ -70,16 +70,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.0.8
-          name: Aura AI v2.0.8
+          tag_name: v2.0.9
+          name: Aura AI v2.0.9
           body: |
-            ### Aura AI v2.0.8 — Permanent Clean Chat UI, Modern Attachment Sheet & Model Picker
-            - **Permanent Aura Chat UI:** Single, unified chat screen for new and loaded conversations, eliminating jump-back to the legacy interface.
-            - **Polished Conversation View:** 80% max-width user bubbles with light gray fill, clean full-width markdown assistant responses.
-            - **Stop Button & Dynamic Pill:** Floating input bar switches dynamically between Stop (streaming), Send (text typed), and Mic/Voice note (idle).
-            - **56dp Image Thumbnail & File Previews:** Thumbnails and document chips preview inside the input pill with instant remove buttons.
-            - **Redesigned Add-to-Chat Sheet:** Equal top cards (Photo / Image, Document / File, From Files) with caption, plus built-in Model Picker and Thinking Preference control.
-            - **Long-Press Menu & Inline Retry:** Clean floating context menu for Copy and Regenerate, with a soft-elevated white Retry button on failure.
+            ### Aura AI v2.0.9 — Chat UI Polish, Skeleton Previews & Compact Model Selector
+            - **Streamlined Thinking Accordion:** Removed redundant bottom timer card; clean header-only thought accordion.
+            - **Pulsing Shimmer Image Skeletons:** Beautiful placeholder shimmer cards while images generate or load.
+            - **Clean User View:** Non-interactive technical tool calls (Ran bash, Read file, Edit file) hidden from normal chat view while keeping interactive approvals and thoughts pristine.
+            - **Compact Add-to-Chat Sheet:** 96dp proportional cards with unclipped text, expandable single-row active model picker with inline dropdown, and balanced thinking level controls.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

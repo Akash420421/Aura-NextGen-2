@@ -14,11 +14,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,31 +72,31 @@ fun AttachmentSelectorBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(bottom = 16.dp)
+                .padding(bottom = 12.dp)
         ) {
-            // Header row (56dp)
+            // Header row (52dp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp)
+                    .height(52.dp)
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
                     onClick = onDismiss,
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close",
                         tint = Color(0xFF1A1A1A),
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
                 Text(
                     text = "Add to chat",
-                    fontSize = 18.sp,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color(0xFF1A1A1A),
                     textAlign = TextAlign.Center,
@@ -102,7 +104,7 @@ fun AttachmentSelectorBottomSheet(
                 )
 
                 // Balanced spacing on the right
-                Spacer(modifier = Modifier.size(48.dp))
+                Spacer(modifier = Modifier.size(44.dp))
             }
 
             // Scrollable Content
@@ -111,12 +113,12 @@ fun AttachmentSelectorBottomSheet(
                     .fillMaxWidth()
                     .verticalScroll(scrollState)
             ) {
-                // Row of 3 EQUAL cards
+                // Row of 3 EQUAL cards (96dp height, perfectly proportional)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     AttachmentCard(
                         icon = Icons.Outlined.Image,
@@ -149,57 +151,80 @@ fun AttachmentSelectorBottomSheet(
                     )
                 }
 
-                // Caption 12dp below card row
+                // Subtle caption
                 Text(
                     text = "For large files, use From Files",
-                    fontSize = 12.sp,
+                    fontSize = 11.5.sp,
                     color = Color(0xFF8A8A8E),
-                    modifier = Modifier.padding(start = 20.dp, top = 12.dp, end = 20.dp)
+                    modifier = Modifier.padding(start = 20.dp, top = 8.dp, end = 20.dp)
                 )
 
-                // Model Section
+                // Model Section - Compact expandable single row
                 if (availableModels.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(20.dp))
+                    var isModelExpanded by remember { mutableStateOf(false) }
+                    val currentModel = availableModels.find { it.id == selectedModelId }
+                        ?: availableModels.firstOrNull()
 
-                    Text(
-                        text = "Model",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF8A8A8E),
-                        modifier = Modifier.padding(horizontal = 20.dp)
-                    )
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Model",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF8A8A8E)
+                        )
+                        if (availableModels.size > 1) {
+                            Text(
+                                text = if (isModelExpanded) "Collapse" else "Change",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF2F6FED),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { isModelExpanded = !isModelExpanded }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
-                        shape = RoundedCornerShape(20.dp),
+                        shape = RoundedCornerShape(18.dp),
                         color = Color.White,
                         shadowElevation = 2.dp,
                         border = BorderStroke(1.dp, Color(0x10000000))
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            availableModels.forEachIndexed { index, model ->
-                                val isSelected = model.id == selectedModelId
-                                val displayName = model.displayName.ifBlank { model.id }
-
+                            // Active Model Row (Always visible)
+                            if (currentModel != null) {
+                                val displayName = currentModel.displayName.ifBlank { currentModel.id }
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .defaultMinSize(minHeight = 56.dp)
+                                        .defaultMinSize(minHeight = 52.dp)
                                         .clip(
-                                            when {
-                                                availableModels.size == 1 -> RoundedCornerShape(20.dp)
-                                                index == 0 -> RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
-                                                index == availableModels.lastIndex -> RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
-                                                else -> RoundedCornerShape(0.dp)
+                                            if (isModelExpanded && availableModels.size > 1) {
+                                                RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+                                            } else {
+                                                RoundedCornerShape(18.dp)
                                             }
                                         )
                                         .clickable {
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            onSelectModel(model.id)
+                                            if (availableModels.size > 1) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                isModelExpanded = !isModelExpanded
+                                            }
                                         }
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
@@ -207,15 +232,16 @@ fun AttachmentSelectorBottomSheet(
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = displayName,
-                                            fontSize = 16.sp,
-                                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Medium,
                                             color = Color(0xFF1A1A1A)
                                         )
-                                        val tierOrDesc = model.tier?.let { "$it effort" } ?: model.description.takeIf { it.isNotBlank() }
+                                        val tierOrDesc = currentModel.tier?.let { "$it effort" }
+                                            ?: currentModel.description.takeIf { it.isNotBlank() }
                                         if (!tierOrDesc.isNullOrBlank()) {
                                             Text(
                                                 text = tierOrDesc,
-                                                fontSize = 13.sp,
+                                                fontSize = 12.sp,
                                                 color = Color(0xFF8A8A8E),
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
@@ -223,26 +249,81 @@ fun AttachmentSelectorBottomSheet(
                                         }
                                     }
 
-                                    AnimatedVisibility(
-                                        visible = isSelected,
-                                        enter = fadeIn(),
-                                        exit = fadeOut()
-                                    ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = Color(0xFF2F6FED),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+
+                                    if (availableModels.size > 1) {
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Selected",
-                                            tint = Color(0xFF2F6FED),
-                                            modifier = Modifier.size(22.dp)
+                                            imageVector = if (isModelExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                            contentDescription = if (isModelExpanded) "Collapse" else "Expand",
+                                            tint = Color(0xFF8A8A8E),
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
                                 }
+                            }
 
-                                if (index < availableModels.lastIndex) {
-                                    HorizontalDivider(
-                                        thickness = 0.5.dp,
-                                        color = Color(0xFFECECEE),
-                                        modifier = Modifier.padding(horizontal = 16.dp)
-                                    )
+                            // Expanded list of other available models
+                            AnimatedVisibility(
+                                visible = isModelExpanded && availableModels.size > 1,
+                                enter = fadeIn(),
+                                exit = fadeOut()
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    val otherModels = availableModels.filter { it.id != currentModel?.id }
+                                    otherModels.forEachIndexed { index, model ->
+                                        HorizontalDivider(
+                                            thickness = 0.5.dp,
+                                            color = Color(0xFFECECEE),
+                                            modifier = Modifier.padding(horizontal = 16.dp)
+                                        )
+
+                                        val displayName = model.displayName.ifBlank { model.id }
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .defaultMinSize(minHeight = 50.dp)
+                                                .clip(
+                                                    if (index == otherModels.lastIndex) {
+                                                        RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
+                                                    } else {
+                                                        RoundedCornerShape(0.dp)
+                                                    }
+                                                )
+                                                .clickable {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                    onSelectModel(model.id)
+                                                    isModelExpanded = false
+                                                }
+                                                .padding(horizontal = 16.dp, vertical = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = displayName,
+                                                    fontSize = 15.sp,
+                                                    fontWeight = FontWeight.Normal,
+                                                    color = Color(0xFF1A1A1A)
+                                                )
+                                                val tierOrDesc = model.tier?.let { "$it effort" }
+                                                    ?: model.description.takeIf { it.isNotBlank() }
+                                                if (!tierOrDesc.isNullOrBlank()) {
+                                                    Text(
+                                                        text = tierOrDesc,
+                                                        fontSize = 12.sp,
+                                                        color = Color(0xFF8A8A8E),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -253,12 +334,14 @@ fun AttachmentSelectorBottomSheet(
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = "Thinking Level",
-                            fontSize = 14.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFF8A8A8E),
                             modifier = Modifier.padding(horizontal = 20.dp)
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -283,11 +366,11 @@ fun AttachmentSelectorBottomSheet(
                                     Surface(
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(38.dp)
+                                            .height(36.dp)
                                             .clip(RoundedCornerShape(12.dp))
                                             .clickable {
                                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                onPreferenceSelected?.invoke(thinkingPreference.copy(level = lvl))
+                                                onPreferenceSelected.invoke(thinkingPreference.copy(level = lvl))
                                             },
                                         shape = RoundedCornerShape(12.dp),
                                         color = if (isPrefSelected) Color(0xFF2F6FED).copy(alpha = 0.12f) else Color.Transparent,
@@ -299,7 +382,7 @@ fun AttachmentSelectorBottomSheet(
                                         ) {
                                             Text(
                                                 text = level,
-                                                fontSize = 14.sp,
+                                                fontSize = 13.5.sp,
                                                 fontWeight = if (isPrefSelected) FontWeight.SemiBold else FontWeight.Normal,
                                                 color = if (isPrefSelected) Color(0xFF2F6FED) else Color(0xFF1A1A1A)
                                             )
@@ -310,6 +393,9 @@ fun AttachmentSelectorBottomSheet(
                         }
                     }
                 }
+
+                // Generous bottom spacing for navigation bar and shadows
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -323,8 +409,8 @@ private fun AttachmentCard(
     onClick: () -> Unit
 ) {
     SoftElevatedBox(
-        modifier = modifier.height(104.dp),
-        shape = RoundedCornerShape(20.dp),
+        modifier = modifier.height(96.dp),
+        shape = RoundedCornerShape(18.dp),
         backgroundColor = Color.White,
         elevation = 2.dp,
         border = BorderStroke(1.dp, Color(0x10000000)),
@@ -333,13 +419,13 @@ private fun AttachmentCard(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(vertical = 12.dp, horizontal = 6.dp),
+                .padding(vertical = 8.dp, horizontal = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(38.dp)
                     .clip(CircleShape)
                     .background(Color(0xFFF0EFED)),
                 contentAlignment = Alignment.Center
@@ -348,20 +434,21 @@ private fun AttachmentCard(
                     imageVector = icon,
                     contentDescription = label.replace("\n", " "),
                     tint = Color(0xFF2B2B2B),
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Text(
                 text = label,
-                fontSize = 13.5.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Normal,
                 color = Color(0xFF1A1A1A),
                 textAlign = TextAlign.Center,
                 maxLines = 2,
-                lineHeight = 17.sp
+                lineHeight = 15.sp,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

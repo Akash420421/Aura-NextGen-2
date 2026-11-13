@@ -120,12 +120,31 @@ fun AgentToolCallCard(
         }
     }
 
+    val authPrefs = remember(context) { com.example.gemini.data.preferences.AuthPreferences(context) }
+    val isDevMode by authPrefs.isDevModeEnabled.collectAsState(initial = false)
+
     val isPendingApproval = toolCall.status == "PENDING_APPROVAL"
     val isRunning = toolCall.status == "RUNNING"
     val isTerminated = toolCall.status == "TERMINATED"
     val isRejected = toolCall.status == "REJECTED"
     val isSuccess = toolCall.status == "SUCCESS" || (toolCall.status != "FAILED" && !isTerminated && !isRejected && !isPendingApproval && toolCall.exitCode == 0)
     val isFailed = toolCall.status == "FAILED" || (toolCall.exitCode != null && toolCall.exitCode != 0 && !isTerminated && !isRejected)
+
+    // Hide non-interactive technical tool calls from normal chat view
+    if (!isDevMode && !isPendingApproval && !isImageOutput) {
+        return
+    }
+
+    // In normal user view during image generation/resolution, display the shimmering skeleton preview
+    if (!isDevMode && isImageOutput && (isRunning || isResolvingImage)) {
+        ImageGeneratingSkeletonCard(
+            label = if (isRunning) "Generating image..." else "Loading image...",
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        )
+        return
+    }
 
     val actionPrefix = when {
         isPendingApproval && isMcp -> "Approve MCP:"
@@ -180,15 +199,16 @@ fun AgentToolCallCard(
             .fillMaxWidth()
             .padding(vertical = 2.dp)
     ) {
-        // Flat, borderless single-line Header Row
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .clickable { ToolCallExpansionCache.setExpanded(toolCall, !isExpanded) }
-                .padding(horizontal = 4.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // Flat, borderless single-line Header Row (shown in Dev Mode or for Pending Approvals)
+        if (isDevMode || isPendingApproval) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { ToolCallExpansionCache.setExpanded(toolCall, !isExpanded) }
+                    .padding(horizontal = 4.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
             // Frontend Expand Chevron (-> / rotating arrow)
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -350,6 +370,7 @@ fun AgentToolCallCard(
                 }
             }
         }
+        }
 
         // Always-visible Image Preview for Generate Image tool (once generated)
         if (isImageOutput && !isRunning && (toolCall.output.isNotBlank() || isSuccess)) {
@@ -402,18 +423,12 @@ fun AgentToolCallCard(
                             contentAlignment = Alignment.Center
                         ) {
                             if (isResolvingImage) {
-                                Box(
+                                ImageGeneratingSkeletonCard(
+                                    label = "Loading image...",
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(180.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "Loading image...",
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                        .height(200.dp)
+                                )
                             } else {
                                 AsyncImage(
                                     model = ImageRequest.Builder(context)
@@ -481,8 +496,9 @@ fun AgentToolCallCard(
                 }
             }
 
-        // Expanded Terminal / Tool Output
-        AnimatedVisibility(
+        // Expanded Terminal / Tool Output (only rendered in Developer Mode)
+        if (isDevMode) {
+            AnimatedVisibility(
             visible = isExpanded,
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
@@ -597,6 +613,7 @@ fun AgentToolCallCard(
                     }
                 }
             }
+        }
         }
     }
 

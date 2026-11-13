@@ -1,15 +1,13 @@
 {
-  "version_code": 208,
-  "version_name": "2.0.8",
+  "version_code": 209,
+  "version_name": "2.0.9",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.0.8 Permanent Clean Chat UI, Modern Attachment Sheet & Model Picker",
-    "Permanent Aura Chat UI: Single seamless screen for all conversations, eliminating legacy header/footer and jump-back bugs",
-    "Clean Conversation View: Right-aligned user bubbles (max 80% width, 20dp corners), clean full-width markdown assistant replies",
-    "Restyled Generating & Error States: Playful decoded verb status animation and soft-elevated white Retry button on failure",
-    "Inline Actions: Long-press context menu on assistant messages with instant 'Copy' and 'Regenerate'",
-    "Floating Input Pill: Dynamic action button (Stop button during streaming, Send arrow when typed, Voice note / mic when idle) with 56dp image thumbnail & file chip previews",
-    "Redesigned Add-to-Chat Sheet: 3 equal top cards (Photo / Image, Document / File, From Files) with integrated Model Picker & Thinking Preference control"
+    "Aura AI v2.0.9 Chat UI Polish, Skeleton Previews & Compact Model Selector",
+    "Streamlined Thinking Accordion: Removed redundant bottom timer card; clean header-only thought accordion",
+    "Pulsing Shimmer Image Skeletons: Beautiful placeholder shimmer cards while images generate or load",
+    "Clean User View: Hidden non-interactive technical tool calls (Ran bash, Read file, Edit file) while keeping approvals and thoughts pristine",
+    "Compact Add-to-Chat Sheet: 96dp proportional cards with unclipped text, expandable single-row active model picker with inline dropdown, and balanced thinking level controls"
   ],
   "is_critical": false
 }

@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Login
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.PowerSettingsNew
@@ -146,6 +147,52 @@ fun shimmerBrush(): Brush {
         start = Offset(translateAnim - 400f, translateAnim - 400f),
         end = Offset(translateAnim, translateAnim)
     )
+}
+
+/**
+ * Modern, shimmering skeleton placeholder displayed inline while an image is being generated or loaded.
+ */
+@Composable
+fun ImageGeneratingSkeletonCard(
+    modifier: Modifier = Modifier,
+    label: String = "Generating image..."
+) {
+    val brush = shimmerBrush()
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(240.dp)
+            .padding(vertical = 6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(brush),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Image,
+                    contentDescription = label,
+                    tint = ClaudeTerracotta.copy(alpha = 0.7f),
+                    modifier = Modifier.size(36.dp)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = label,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            }
+        }
+    }
 }
 
 @Composable

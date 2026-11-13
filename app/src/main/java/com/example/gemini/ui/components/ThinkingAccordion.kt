@@ -167,17 +167,6 @@ fun ThinkingAccordion(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
                         modifier = Modifier.fillMaxWidth()
                     )
-
-                    if (!isStreaming && durationMs != null && durationMs > 0) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "⏱️ Thought for ${formatDuration(durationMs)}",
-                            fontSize = 11.5.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Medium,
-                            color = ClaudeTerracotta.copy(alpha = 0.9f)
-                        )
-                    }
                 }
             }
         }

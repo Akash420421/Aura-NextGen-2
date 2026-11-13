@@ -1625,10 +1625,11 @@ fun MarkdownImageView(
                 )
 
                 if (isImageLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary
+                    ImageGeneratingSkeletonCard(
+                        label = "Loading image...",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
                     )
                 }
 
