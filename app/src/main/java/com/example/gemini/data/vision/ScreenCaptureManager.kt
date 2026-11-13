@@ -71,10 +71,14 @@ class ScreenCaptureManager private constructor() {
 
     @SuppressLint("WrongConstant")
     fun startCapture(
-        projection: MediaProjection,
+        projection: MediaProjection?,
         metrics: DisplayMetrics,
         frameListener: ((ByteArray) -> Unit)? = null
     ): Boolean {
+        if (projection == null) {
+            Log.e(TAG, "Cannot start screen capture: MediaProjection is null")
+            return false
+        }
         if (_isSharing.value) {
             Log.w(TAG, "Screen capture is already active")
             return false

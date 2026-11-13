@@ -458,12 +458,16 @@ fun ChatScreen(
             if (projectionManager != null) {
                 try {
                     val projection = projectionManager.getMediaProjection(result.resultCode, result.data!!)
-                    val metrics = context.resources.displayMetrics
-                    val started = com.example.gemini.data.vision.ScreenCaptureManager.getInstance().startCapture(projection, metrics)
-                    if (started) {
-                        Toast.makeText(context, "Screen sharing started", Toast.LENGTH_SHORT).show()
+                    if (projection != null) {
+                        val metrics = context.resources.displayMetrics
+                        val started = com.example.gemini.data.vision.ScreenCaptureManager.getInstance().startCapture(projection, metrics)
+                        if (started) {
+                            Toast.makeText(context, "Screen sharing started", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Could not start screen sharing", Toast.LENGTH_SHORT).show()
+                        }
                     } else {
-                        Toast.makeText(context, "Could not start screen sharing", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Could not obtain screen projection", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     Toast.makeText(context, "Screen share error: ${e.message}", Toast.LENGTH_SHORT).show()
