@@ -1,14 +1,14 @@
 {
-  "version_code": 211,
-  "version_name": "2.1.1",
+  "version_code": 212,
+  "version_name": "2.1.2",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.1.1 Voice Screen Polish, Native Screen Share & Language Picker",
-    "Voice Screen Greeting & Polish: Responsive greeting title with user name interpolation and live status states (Listening, Thinking, Speaking)",
-    "Instant Voice Start: Tapping 'Tap to Start' directly initiates voice conversation without setup detours",
-    "Voice Spoken Language Picker: Tapping the Language button opens a quick modal with Auto Detect, English, Hindi, and multi-language support",
-    "Hardware Screen Share Integration: Full MediaProjection screen sharing based on Playlist_part7 with active sharing indicator and toggle",
-    "Drawer Voice Setting Action: Added 'Voice Setting' entry in the sidebar More section for quick access to speech settings"
+    "Aura AI v2.1.2 Chat & Sidebar Polish, Gemini Image Flow, Gallery Delete & Pinned Chats",
+    "Thinking Accordion Collapsed: Thought processes now stay clean and collapsed by default without auto-expanding",
+    "Gemini-Style Image Flow: 'Creating your image' sparkle header, shimmer skeleton preview card, and input locking with Stop button",
+    "Images Gallery Auto-Indexing: Instant indexing of all chat-generated images and local folders, plus full Delete support",
+    "Sidebar Sub-Agents Cleanup: Clean top-level chat list with no subagent noise or nested badge popups",
+    "Context Menu & Pin to Top: Redesigned Porcelain long-press menu with Pin to Top, Rename, Share, Export Markdown, Archive, and Delete"
   ],
   "is_critical": false
 }

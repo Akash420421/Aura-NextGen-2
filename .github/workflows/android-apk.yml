@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.1-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.2-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,15 +70,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.1.1
-          name: Aura AI v2.1.1
+          tag_name: v2.1.2
+          name: Aura AI v2.1.2
           body: |
-            ### Aura AI v2.1.1 — Voice Screen Polish, Native Screen Share & Language Picker
-            - **Voice Screen Greeting & Polish:** Responsive greeting title with user name interpolation and live status states (Listening, Thinking, Speaking).
-            - **Instant Voice Start:** Tapping 'Tap to Start' directly initiates voice conversation without setup detours.
-            - **Voice Spoken Language Picker:** Tapping the Language button opens a quick modal with Auto Detect, English, Hindi, and multi-language support.
-            - **Hardware Screen Share Integration:** Full MediaProjection screen sharing based on Playlist_part7 with active sharing indicator and toggle.
-            - **Drawer Voice Setting Action:** Added 'Voice Setting' entry in the sidebar More section for quick access to speech settings.
+            ### Aura AI v2.1.2 — Chat & Sidebar Polish, Gemini Image Flow, Gallery Delete & Pinned Chats
+            - **Collapsed Thinking Process:** Thought accordion stays clean and collapsed by default (`Thought for X.Xs`), only expanding when tapped.
+            - **Gemini-Style Image Flow:** Added 'Creating your image' sparkle header, shimmer skeleton card, and active Stop button locking input during generation.
+            - **Images Gallery Auto-Indexing:** Real-time scanning and auto-indexing of all chat-generated images across conversations, plus full image Delete action with confirmation.
+            - **Clean Sidebar Chat List:** Sub-agents and tool tasks are hidden from the drawer list, eliminating clutter and nested badge rows.
+            - **Context Menu & Pin to Top:** Redesigned long-press menu matching the Porcelain 3D theme with Pin to Top, Rename, Share, Export Markdown, Archive, and Delete.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

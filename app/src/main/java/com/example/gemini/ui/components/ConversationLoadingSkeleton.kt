@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.*
@@ -155,40 +156,51 @@ fun shimmerBrush(): Brush {
 @Composable
 fun ImageGeneratingSkeletonCard(
     modifier: Modifier = Modifier,
-    label: String = "Generating image..."
+    label: String = "Creating your image"
 ) {
     val brush = shimmerBrush()
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(240.dp)
             .padding(vertical = 6.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(brush),
-            contentAlignment = Alignment.Center
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 8.dp, start = 2.dp)
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+            Icon(
+                imageVector = Icons.Outlined.AutoAwesome,
+                contentDescription = null,
+                tint = Color(0xFF2F6FED),
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = label,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF1A1A1A)
+            )
+        }
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFFF2F1F5),
+            border = BorderStroke(1.dp, Color(0x0F000000)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(260.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(brush),
+                contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.Image,
                     contentDescription = label,
-                    tint = ClaudeTerracotta.copy(alpha = 0.7f),
-                    modifier = Modifier.size(36.dp)
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = label,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    tint = Color(0xFF2F6FED).copy(alpha = 0.45f),
+                    modifier = Modifier.size(44.dp)
                 )
             }
         }

@@ -1047,7 +1047,17 @@ fun ChatScreen(
     // Smart auto-scroll during streaming & tool execution: follows live stream and tool calls smoothly without getting stuck
     val lastMsg = messages.lastOrNull()
     val lastToolCalls = lastMsg?.toolCalls.orEmpty()
-    val isRunningOrStreaming = isActivelyRunning || (lastMsg?.isStreaming == true)
+    val hasActiveImageGen by remember(messages) {
+        derivedStateOf {
+            messages.any { msg ->
+                msg.toolCalls.any { tc ->
+                    (tc.toolType == ToolType.GENERATE_IMAGE || tc.name.contains("image", ignoreCase = true)) &&
+                        tc.status == "RUNNING"
+                }
+            }
+        }
+    }
+    val isRunningOrStreaming = isActivelyRunning || (lastMsg?.isStreaming == true) || hasActiveImageGen
 
     // The end of a turn is one step: the working row stays until the reply's footer (tokens, actions) exists, then
     // the two cross-fade in place while the end of the chat stays pinned (no animated scroll afterwards)
@@ -2942,7 +2952,7 @@ fun ChatScreen(
                         keyboardController?.hide()
                         showThinkingSelector = true
                     },
-                    isStreaming = isActivelyRunning,
+                    isStreaming = isActivelyRunning || hasActiveImageGen,
                     isBackgroundActive = isBackgroundActive,
                     onSendMessage = { text ->
                         val appCmd = if (isClaudeChat && attachments.isEmpty()) claudeBackend.appCommand(text) else null

@@ -65,7 +65,9 @@ import androidx.compose.material.icons.outlined.Person
 import com.example.gemini.ui.components.AppToastHelper
 import com.example.gemini.ui.components.ChatToastType
 import android.widget.Toast
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Palette
@@ -223,22 +225,23 @@ fun ChatHistoryDrawer(
 
     val allFilteredIds = remember(filtered) { filtered.map { it.id }.toSet() }
 
-    // Map parentConversationId -> List<Conversation> (subagents)
-    // Only if parentConversationId != null and parentConversationId is found in allFilteredIds!
-    val subagentsByParent = remember(filtered, allFilteredIds) {
-        filtered.filter { conv ->
-            conv.parentConversationId != null &&
-                    conv.parentConversationId != conv.id &&
-                    conv.parentConversationId in allFilteredIds
-        }.groupBy { it.parentConversationId!! }
+    val context = LocalContext.current
+    var pinnedIds by remember {
+        mutableStateOf(com.example.gemini.data.preferences.AuraCustomizePreferences.getPinnedConversationIds(context))
     }
 
-    // Top-level conversations (conversations without a valid parent in the list)
-    val topLevelChats = remember(filtered, allFilteredIds) {
+    // Subagents/nested tool threads are hidden from the drawer to keep a clean, premium chat list
+    val subagentsByParent = remember { emptyMap<String, List<Conversation>>() }
+
+    // Top-level conversations (filter out subagent tasks so only user conversations appear, sorted by pinned first)
+    val topLevelChats = remember(filtered, pinnedIds) {
         filtered.filter { conv ->
-            val pId = conv.parentConversationId
-            pId == null || pId == conv.id || !allFilteredIds.contains(pId)
-        }
+            (conv.parentConversationId == null || conv.parentConversationId == conv.id) &&
+                    conv.subagentTypeName == null
+        }.sortedWith(
+            compareByDescending<Conversation> { pinnedIds.contains(it.id) }
+                .thenByDescending { it.updatedAt }
+        )
     }
 
     var expandedParentIds by remember { mutableStateOf(setOf<String>()) }
@@ -1138,6 +1141,12 @@ fun ChatHistoryDrawer(
                                         conv = conv,
                                         isJarvis = conv.id in jarvisIds,
                                         isSelected = isSelected,
+                                        isPinned = pinnedIds.contains(conv.id),
+                                        onTogglePin = {
+                                            val nowPinned = com.example.gemini.data.preferences.AuraCustomizePreferences.togglePinConversation(context, conv.id)
+                                            pinnedIds = com.example.gemini.data.preferences.AuraCustomizePreferences.getPinnedConversationIds(context)
+                                            AppToastHelper.showToast(if (nowPinned) "Chat pinned to top" else "Chat unpinned", ChatToastType.SUCCESS)
+                                        },
                                         activeInst = activeInst,
                                         isActivelyRunning = isActivelyRunning,
                                         isScheduledOrBackground = isScheduledOrBackground,
@@ -1248,6 +1257,12 @@ fun ChatHistoryDrawer(
                                             conv = conv,
                                             isJarvis = conv.id in jarvisIds,
                                             isSelected = isSelected,
+                                            isPinned = pinnedIds.contains(conv.id),
+                                            onTogglePin = {
+                                                val nowPinned = com.example.gemini.data.preferences.AuraCustomizePreferences.togglePinConversation(context, conv.id)
+                                                pinnedIds = com.example.gemini.data.preferences.AuraCustomizePreferences.getPinnedConversationIds(context)
+                                                AppToastHelper.showToast(if (nowPinned) "Chat pinned to top" else "Chat unpinned", ChatToastType.SUCCESS)
+                                            },
                                             activeInst = activeInst,
                                             isActivelyRunning = isActivelyRunning,
                                             isScheduledOrBackground = isScheduledOrBackground,
@@ -1586,6 +1601,8 @@ private fun ChatHistoryItemRow(
     isSelected: Boolean,
     /** A Jarvis chat: marked with Jarvis' robot face instead of the chat bubble. */
     isJarvis: Boolean = false,
+    isPinned: Boolean = false,
+    onTogglePin: () -> Unit = {},
     activeInst: com.example.gemini.data.remote.AgyActiveInstance?,
     isActivelyRunning: Boolean,
     isScheduledOrBackground: Boolean,
@@ -1676,6 +1693,17 @@ private fun ChatHistoryItemRow(
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
+            if (isPinned) {
+                Icon(
+                    imageVector = Icons.Outlined.PushPin,
+                    contentDescription = "Pinned",
+                    tint = Color(0xFF2F6FED),
+                    modifier = Modifier
+                        .size(15.dp)
+                        .padding(end = 4.dp)
+                )
+            }
+
             Text(
                 text = displayName,
                 fontSize = 16.sp,
@@ -1763,200 +1791,142 @@ private fun ChatHistoryItemRow(
         DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
-            shape = RoundedCornerShape(12.dp),
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+            shape = RoundedCornerShape(18.dp),
+            containerColor = Color.White,
+            tonalElevation = 0.dp,
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, Color(0x0F000000)),
             modifier = Modifier.widthIn(min = 210.dp)
         ) {
-                DropdownMenuItem(
-                    text = { Text("Copy Conversation ID", fontSize = 13.5.sp) },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Outlined.ContentCopy,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    onClick = {
-                        menuExpanded = false
-                        clipboardManager.setText(AnnotatedString(conv.id))
-                        AppToastHelper.showToast("Conversation ID copied", ChatToastType.SUCCESS)
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Fork Conversation", fontSize = 13.5.sp) },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.CallSplit,
-                            contentDescription = null,
-                            tint = textPrimary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    onClick = {
-                        menuExpanded = false
-                        onForkConversation(conv.id)
-                    }
-                )
-                if (claudeActions != null) {  // every agent: AGY renames go to the daemon annotations
-                    DropdownMenuItem(
-                        text = { Text("Rename", fontSize = 13.5.sp) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Outlined.Edit,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            showRename = true
-                        }
+            DropdownMenuItem(
+                text = { Text(if (isPinned) "Unpin" else "Pin to Top", fontSize = 13.5.sp, color = Color(0xFF1A1A1A)) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.PushPin,
+                        contentDescription = null,
+                        tint = if (isPinned) Color(0xFF2F6FED) else Color(0xFF6E6E73),
+                        modifier = Modifier.size(18.dp)
                     )
+                },
+                onClick = {
+                    menuExpanded = false
+                    onTogglePin()
                 }
-                if (isClaudeConv && claudeActions != null) {
-                    DropdownMenuItem(
-                        text = { Text("Restart chat", fontSize = 13.5.sp) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Outlined.Refresh,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            claudeActions.restart(conv.id) { msg ->
-                                scope.launch { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show() }
-                            }
-                        }
-                    )
-                }
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
+            )
+            if (claudeActions != null) {
                 DropdownMenuItem(
-                    text = { Text("Export Markdown (.md)", fontSize = 13.5.sp) },
+                    text = { Text("Rename", fontSize = 13.5.sp, color = Color(0xFF1A1A1A)) },
                     leadingIcon = {
                         Icon(
-                            imageVector = Icons.Outlined.Description,
+                            imageVector = Icons.Outlined.Edit,
                             contentDescription = null,
-                            tint = GeminiBlue,
+                            tint = Color(0xFF6E6E73),
                             modifier = Modifier.size(18.dp)
                         )
                     },
                     onClick = {
                         menuExpanded = false
-                        com.example.gemini.ui.components.AppToastHelper.showToast("Exporting Markdown...", com.example.gemini.ui.components.ChatToastType.INFO)
-                        scope.launch(Dispatchers.IO) {
-                            ConversationExportHelper.exportConversation(
-                                context = context,
-                                conversationId = conv.id,
-                                title = conv.title,
-                                activeMessages = if (isAgentConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
-                                format = ConversationExportHelper.ExportFormat.MARKDOWN,
-                                snackbarHostState = snackbarHostState
-                            )
-                        }
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Export Standalone HTML", fontSize = 13.5.sp) },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Outlined.Code,
-                            contentDescription = null,
-                            tint = com.example.gemini.theme.AppColors.success,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    onClick = {
-                        menuExpanded = false
-                        com.example.gemini.ui.components.AppToastHelper.showToast("Exporting HTML...", com.example.gemini.ui.components.ChatToastType.INFO)
-                        scope.launch(Dispatchers.IO) {
-                            ConversationExportHelper.exportConversation(
-                                context = context,
-                                conversationId = conv.id,
-                                title = conv.title,
-                                activeMessages = if (isAgentConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
-                                format = ConversationExportHelper.ExportFormat.HTML,
-                                snackbarHostState = snackbarHostState
-                            )
-                        }
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("Share", fontSize = 13.5.sp) },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Outlined.Share,
-                            contentDescription = null,
-                            tint = textPrimary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    onClick = {
-                        menuExpanded = false
-                        com.example.gemini.ui.components.AppToastHelper.showToast("Preparing .antigem share...", com.example.gemini.ui.components.ChatToastType.INFO)
-                        scope.launch(Dispatchers.IO) {
-                            ConversationShareHelper.shareConversation(
-                                context = context,
-                                conversationId = conv.id,
-                                title = conv.title,
-                                activeMessages = if (isAgentConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
-                                snackbarHostState = snackbarHostState
-                            )
-                        }
-                    }
-                )
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-                if (claudeActions != null) {
-                    DropdownMenuItem(
-                        text = { Text(if (conv.archived) "Unarchive" else "Archive", fontSize = 13.5.sp) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = if (conv.archived) Icons.Outlined.Unarchive else Icons.Filled.Archive,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            claudeActions.archive(conv.id, !conv.archived)
-                            AppToastHelper.showToast(if (conv.archived) "Chat unarchived" else "Chat archived", ChatToastType.SUCCESS)
-                        }
-                    )
-                }
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            "Delete Conversation",
-                            fontSize = 13.5.sp,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    },
-                    onClick = {
-                        menuExpanded = false
-                        onRequestDelete(conv)
+                        showRename = true
                     }
                 )
             }
+            HorizontalDivider(
+                color = Color(0x0F000000),
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+            DropdownMenuItem(
+                text = { Text("Export Markdown (.md)", fontSize = 13.5.sp, color = Color(0xFF1A1A1A)) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.Description,
+                        contentDescription = null,
+                        tint = GeminiBlue,
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                onClick = {
+                    menuExpanded = false
+                    com.example.gemini.ui.components.AppToastHelper.showToast("Exporting Markdown...", com.example.gemini.ui.components.ChatToastType.INFO)
+                    scope.launch(Dispatchers.IO) {
+                        ConversationExportHelper.exportConversation(
+                            context = context,
+                            conversationId = conv.id,
+                            title = conv.title,
+                            activeMessages = if (isAgentConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
+                            format = ConversationExportHelper.ExportFormat.MARKDOWN,
+                            snackbarHostState = snackbarHostState
+                        )
+                    }
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Share", fontSize = 13.5.sp, color = Color(0xFF1A1A1A)) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.Share,
+                        contentDescription = null,
+                        tint = Color(0xFF6E6E73),
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                onClick = {
+                    menuExpanded = false
+                    com.example.gemini.ui.components.AppToastHelper.showToast("Preparing .antigem share...", com.example.gemini.ui.components.ChatToastType.INFO)
+                    scope.launch(Dispatchers.IO) {
+                        ConversationShareHelper.shareConversation(
+                            context = context,
+                            conversationId = conv.id,
+                            title = conv.title,
+                            activeMessages = if (isAgentConv) claudeActions?.loadMessages?.invoke(conv.id) else null,
+                            snackbarHostState = snackbarHostState
+                        )
+                    }
+                }
+            )
+            HorizontalDivider(
+                color = Color(0x0F000000),
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+            if (claudeActions != null) {
+                DropdownMenuItem(
+                    text = { Text(if (conv.archived) "Unarchive" else "Archive", fontSize = 13.5.sp, color = Color(0xFF1A1A1A)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (conv.archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive,
+                            contentDescription = null,
+                            tint = Color(0xFF6E6E73),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        claudeActions.archive(conv.id, !conv.archived)
+                        AppToastHelper.showToast(if (conv.archived) "Chat unarchived" else "Chat archived", ChatToastType.SUCCESS)
+                    }
+                )
+            }
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        "Delete Conversation",
+                        fontSize = 13.5.sp,
+                        color = Color(0xFFDC2626)
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = Color(0xFFDC2626),
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                onClick = {
+                    menuExpanded = false
+                    onRequestDelete(conv)
+                }
+            )
+        }
         }
     }
 

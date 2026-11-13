@@ -33,15 +33,8 @@ fun ThinkingAccordion(
     isStreaming: Boolean,
     modifier: Modifier = Modifier
 ) {
-    var isExpanded by remember { mutableStateOf(isStreaming) }
+    var isExpanded by remember { mutableStateOf(false) }
     var hasUserManuallyToggled by remember { mutableStateOf(false) }
-
-    // Auto-expand while actively streaming thoughts if user hasn't manually toggled
-    LaunchedEffect(isStreaming) {
-        if (isStreaming && !hasUserManuallyToggled) {
-            isExpanded = true
-        }
-    }
 
     val rotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,

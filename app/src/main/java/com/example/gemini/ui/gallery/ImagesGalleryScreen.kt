@@ -11,9 +11,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import android.widget.Toast
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,7 +43,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 private val IMAGE_REGEX = Regex(".*\\.(png|jpe?g|webp|gif)(\\?.*)?$", RegexOption.IGNORE_CASE)
-private val MARKDOWN_IMAGE_REGEX = Regex("!\\[(.*?)\\]\\((https?://.*?|data:image/.*?|file://.*?)\\)")
+private val MARKDOWN_IMAGE_REGEX = Regex("!\\[(.*?)\\]\\((.*?)\\)")
 
 data class GalleryItem(
     val id: String,
@@ -67,6 +69,7 @@ fun ImagesGalleryScreen(
     var galleryItems by remember { mutableStateOf<List<GalleryItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var fullScreenItem by remember { mutableStateOf<GalleryItem?>(null) }
+    var itemToDelete by remember { mutableStateOf<GalleryItem?>(null) }
 
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = LocalSnackbarHostState.current
@@ -92,28 +95,40 @@ fun ImagesGalleryScreen(
                 }
             }
 
-            // 1. From Active Messages (Tool calls, attachments, markdown)
+            // 1. From Active Messages (Tool calls, attachments, markdown, raw file paths)
             messages.forEach { msg ->
                 val time = msg.createdAt
                 msg.toolCalls.forEach { tc ->
+                    val out = tc.output.trim()
                     val isImg = tc.toolType == ToolType.GENERATE_IMAGE ||
-                            tc.output.startsWith("data:image/") ||
-                            (tc.output.startsWith("file://") && tc.output.matches(IMAGE_REGEX))
-                    if (isImg && tc.output.isNotBlank()) {
-                        addItem(tc.output, tc.command.ifBlank { "Generated image" }, time)
+                            out.startsWith("data:image/") ||
+                            out.matches(IMAGE_REGEX) ||
+                            out.contains(Regex("\\.(png|jpe?g|webp|gif)", RegexOption.IGNORE_CASE))
+                    if (isImg && out.isNotBlank()) {
+                        val cleanUri = if (out.startsWith("/") && !out.startsWith("file://")) "file://$out" else out
+                        addItem(cleanUri, tc.command.ifBlank { "Generated image" }, time)
                     }
                 }
                 msg.attachments.forEach { att ->
                     if (att.isImage && att.path.isNotBlank()) {
-                        val uri = if (att.path.startsWith("file://") || att.path.startsWith("http")) att.path else "file://${att.path}"
+                        val uri = if (att.path.startsWith("file://") || att.path.startsWith("http") || att.path.startsWith("data:")) att.path
+                        else if (att.path.startsWith("/")) "file://${att.path}" else "file://${att.path}"
                         addItem(uri, att.name.ifBlank { "Attached image" }, time)
                     }
                 }
                 MARKDOWN_IMAGE_REGEX.findAll(msg.content).forEach { match ->
                     val alt = match.groupValues.getOrNull(1) ?: "Chat image"
-                    val url = match.groupValues.getOrNull(2) ?: ""
-                    if (url.isNotBlank()) {
-                        addItem(url, alt, time)
+                    val rawUrl = match.groupValues.getOrNull(2)?.trim().orEmpty()
+                    if (rawUrl.isNotBlank()) {
+                        val cleanUrl = if (rawUrl.startsWith("/") && !rawUrl.startsWith("file://")) "file://$rawUrl" else rawUrl
+                        addItem(cleanUrl, alt, time)
+                    }
+                }
+                // Also scan for file paths matching image extension inside assistant text response
+                Regex("(/[^\\s\"'<>]+?\\.(png|jpe?g|webp|gif))", RegexOption.IGNORE_CASE).findAll(msg.content).forEach { match ->
+                    val path = match.groupValues[1].trim()
+                    if (File(path).exists()) {
+                        addItem("file://$path", File(path).nameWithoutExtension.replace('_', ' '), time)
                     }
                 }
             }
@@ -124,12 +139,19 @@ fun ImagesGalleryScreen(
                 File("/sdcard/Pictures/AURA_Vision"),
                 File("/sdcard/DCIM/AURA_AI_Chats"),
                 File(context.filesDir, "images"),
-                File(context.cacheDir, "images")
+                File(context.cacheDir, "images"),
+                File("/data/user/0/com.termux/files/home/.antigem/uploads"),
+                File("/data/user/0/com.termux/files/home/.gemini/antigravity-cli/brain")
             )
 
             scanFolders.forEach { folder ->
                 if (folder.exists() && folder.isDirectory) {
-                    folder.listFiles()?.filter { it.isFile && it.name.matches(IMAGE_REGEX) }?.forEach { f ->
+                    val files = if (folder.name == "brain") {
+                        folder.walkTopDown().maxDepth(4).filter { it.isFile && it.name.matches(IMAGE_REGEX) }.toList()
+                    } else {
+                        folder.listFiles()?.filter { it.isFile && it.name.matches(IMAGE_REGEX) } ?: emptyList()
+                    }
+                    files.forEach { f ->
                         addItem(f.absolutePath, f.nameWithoutExtension.replace('_', ' '), f.lastModified())
                     }
                 }
@@ -284,11 +306,58 @@ fun ImagesGalleryScreen(
                                 coroutineScope = coroutineScope,
                                 snackbarHostState = snackbarHostState
                             )
-                        }
+                        },
+                        onDelete = { itemToDelete = item }
                     )
                 }
             }
         }
+    }
+
+    if (itemToDelete != null) {
+        val target = itemToDelete!!
+        AlertDialog(
+            onDismissRequest = { itemToDelete = null },
+            title = {
+                Text(
+                    text = "Delete Image",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 18.sp,
+                    color = textColor
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to delete \"${target.title}\"?",
+                    fontSize = 14.sp,
+                    color = descColor
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val path = target.uri.removePrefix("file://")
+                        val file = File(path)
+                        if (file.exists() && file.isFile) {
+                            file.delete()
+                        }
+                        galleryItems = galleryItems.filter { it.id != target.id }
+                        Toast.makeText(context, "Image deleted", Toast.LENGTH_SHORT).show()
+                        itemToDelete = null
+                        if (fullScreenItem?.id == target.id) fullScreenItem = null
+                    }
+                ) {
+                    Text("Delete", color = Color(0xFFDC2626), fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { itemToDelete = null }) {
+                    Text("Cancel", color = textColor)
+                }
+            },
+            containerColor = cardBg,
+            shape = RoundedCornerShape(20.dp)
+        )
     }
 
     if (fullScreenItem != null) {
@@ -306,7 +375,8 @@ private fun GalleryCard(
     cardBg: Color,
     textColor: Color,
     onClick: () -> Unit,
-    onDownload: () -> Unit
+    onDownload: () -> Unit,
+    onDelete: () -> Unit
 ) {
     val context = LocalContext.current
     Surface(
@@ -347,6 +417,24 @@ private fun GalleryCard(
                             )
                         )
                 )
+
+                // Delete icon overlay (top left)
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp)
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.40f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
 
                 // Quick Fullscreen Icon overlay (top right)
                 IconButton(

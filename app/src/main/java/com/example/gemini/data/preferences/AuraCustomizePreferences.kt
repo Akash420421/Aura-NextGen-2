@@ -220,4 +220,22 @@ object AuraCustomizePreferences {
     fun setEmail(context: Context, email: String) {
         getPrefs(context).edit().putString("key_email", email).apply()
     }
+
+    // Pinned Conversations
+    fun getPinnedConversationIds(context: Context): Set<String> {
+        return getPrefs(context).getStringSet("key_pinned_conv_ids", emptySet()) ?: emptySet()
+    }
+
+    fun togglePinConversation(context: Context, conversationId: String): Boolean {
+        val current = getPinnedConversationIds(context).toMutableSet()
+        val isNowPinned = if (current.contains(conversationId)) {
+            current.remove(conversationId)
+            false
+        } else {
+            current.add(conversationId)
+            true
+        }
+        getPrefs(context).edit().putStringSet("key_pinned_conv_ids", current).apply()
+        return isNowPinned
+    }
 }

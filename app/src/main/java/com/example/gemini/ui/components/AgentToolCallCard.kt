@@ -138,7 +138,7 @@ fun AgentToolCallCard(
     // In normal user view during image generation/resolution, display the shimmering skeleton preview
     if (!isDevMode && isImageOutput && (isRunning || isResolvingImage)) {
         ImageGeneratingSkeletonCard(
-            label = if (isRunning) "Generating image..." else "Loading image...",
+            label = if (isRunning) "Creating your image" else "Loading image...",
             modifier = modifier
                 .fillMaxWidth()
                 .padding(vertical = 4.dp)
