@@ -1,16 +1,13 @@
 {
-  "version_code": 213,
-  "version_name": "2.1.3",
+  "version_code": 214,
+  "version_name": "2.1.4",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.1.3 — Complete Design Refinement & Walkthrough Bugfixes",
-    "Consolidated Thinking Accordions: Multi-turn thoughts merged into a single block with clean chevron and no redundant bulb icon",
-    "Images Gallery Strict Indexing: Filtered out blank/ghost cards; balanced 32dp circular glassmorphism floating actions",
-    "Sidebar Drawer Category Tabs: New functional category pills [ All ] [ Pin ] [ Project ] [ Archive ] with search margin fixes",
-    "Porcelain 3D Rename Dialog: Custom white rounded dialog with 22dp smooth corners and tactile 3D buttons",
-    "Porcelain Workspace Picker: Horizontal 'Active' badge pill, clean folder icon, and elevated action buttons",
-    "Spoken Language Picker: Scrollable sheet container displaying full list beyond Tamil",
-    "Add to Chat (+) Overhaul: Horizontal attachment cards with new Camera option, clean active model without checkmark, removed thinking level, and Gemini-only scrollable models"
+    "Aura AI v2.1.4 — Camera Permission, Image Gen Polish, Voice Resilience & Drawer Archive Fixes",
+    "Camera Attachment Permission: Added runtime CAMERA permission check preventing SecurityException intent crashes",
+    "Image Generation Streamlining: Eliminated dark technical box and duplicate cards in normal chat; smooth shimmering skeleton while generating",
+    "Voice Call & Chat Collision Resilience: Automatic micro-retry on initial socket drops, and graceful adoption of existing daemon conversations",
+    "Sidebar Drawer Archive Tab Fix: Fixed tab list filtering and two-way sync so [ Archive ] immediately displays all archived chats"
   ],
   "is_critical": false
 }

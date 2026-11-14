@@ -464,15 +464,24 @@ object AgyVoiceCall {
             }
             return
         }
-        // the link to the hub dropped mid-call (network change, hub restart): reconnect a few times
-        if (network && st.connectedAt > 0 && s.linkRetries < MAX_LINK_RETRIES) {
+        // the link to the hub dropped mid-call or during initial connection: reconnect a few times
+        if (network && s.linkRetries < MAX_LINK_RETRIES) {
             s.linkRetries++
             val attempt = s.linkRetries
-            _state.update { it.copy(phase = Phase.RECONNECTING, attempt = attempt, maxAttempts = MAX_LINK_RETRIES, statusText = "Reconnecting…", agentSpeaking = false) }
+            _state.update {
+                it.copy(
+                    phase = if (st.connectedAt > 0) Phase.RECONNECTING else Phase.CONNECTING,
+                    attempt = attempt,
+                    maxAttempts = MAX_LINK_RETRIES,
+                    statusText = if (st.connectedAt > 0) "Reconnecting…" else "Connecting to voice agent…",
+                    agentSpeaking = false
+                )
+            }
             s.player.clear()
             s.startPulses()
             scope.launch {
-                delay(1000L shl (attempt - 1))
+                val delayMs = if (st.connectedAt > 0) (1000L shl (attempt - 1)) else (500L * attempt)
+                delay(delayMs)
                 if (session === s && !s.endRequested) openSocket(s)
             }
             return

@@ -722,6 +722,32 @@ fun ChatScreen(
             }
         }
     }
+
+    val launchCamera: () -> Unit = {
+        try {
+            val photoFile = java.io.File.createTempFile("camera_", ".jpg", context.cacheDir)
+            val photoUri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                photoFile
+            )
+            pendingCameraUri = photoUri
+            cameraLauncher.launch(photoUri)
+        } catch (e: Exception) {
+            android.util.Log.e("ChatScreen", "Failed to launch camera", e)
+            Toast.makeText(context, "Could not open camera: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchCamera()
+        } else {
+            Toast.makeText(context, "Camera permission is required to take photos", Toast.LENGTH_SHORT).show()
+        }
+    }
     var activeConversationKey by remember { mutableStateOf(currentConv?.id ?: "new") }
     // The keyboard edits this buffer directly (like a native EditText). Holding the text as a TextFieldValue here made
     // every key press round-trip through this screen; with long text that lagged and some keyboards (e.g. Samsung)
@@ -3690,13 +3716,14 @@ fun ChatScreen(
             thinkingPreference = thinkingPref,
             onPreferenceSelected = { pref -> viewModel.setThinkingPreference(pref) },
             onPickCamera = {
-                runCatching {
-                    val photoFile = java.io.File(context.cacheDir, "camera_photo_${System.currentTimeMillis()}.jpg")
-                    val photoUri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
-                    pendingCameraUri = photoUri
-                    cameraLauncher.launch(photoUri)
-                }.onFailure { e ->
-                    Toast.makeText(context, "Could not open camera: ${e.message}", Toast.LENGTH_SHORT).show()
+                if (androidx.core.content.ContextCompat.checkSelfPermission(
+                        context,
+                        android.Manifest.permission.CAMERA
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    launchCamera()
+                } else {
+                    cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
                 }
             },
             onPickImage = { photoPickerLauncher.launch("image/*") },

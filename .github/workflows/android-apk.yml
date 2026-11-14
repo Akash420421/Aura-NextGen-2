@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.3-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.4-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,17 +70,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.1.3
-          name: Aura AI v2.1.3
+          tag_name: v2.1.4
+          name: Aura AI v2.1.4
           body: |
-            ### Aura AI v2.1.3 — Complete Design Refinement & Walkthrough Bugfixes
-            - **Consolidated Thinking Accordions:** Multi-turn thoughts merged into a single block with clean chevron and no redundant bulb icon.
-            - **Images Gallery Strict Indexing:** Filtered out blank/ghost cards; balanced 32dp circular glassmorphism floating actions.
-            - **Sidebar Drawer Category Tabs:** New functional category pills [ All ] [ Pin ] [ Project ] [ Archive ] with search margin fixes.
-            - **Porcelain 3D Rename Dialog:** Custom white rounded dialog with 22dp smooth corners and tactile 3D buttons.
-            - **Porcelain Workspace Picker:** Horizontal 'Active' badge pill, clean folder icon, and elevated action buttons.
-            - **Spoken Language Picker:** Scrollable sheet container displaying full list beyond Tamil.
-            - **Add to Chat (+) Overhaul:** Horizontal attachment cards with new Camera option, clean active model without checkmark, removed thinking level, and Gemini-only scrollable models.
+            ### Aura AI v2.1.4 — Camera Permission, Image Gen Polish, Voice Resilience & Drawer Archive Fixes
+            - **Camera Attachment Permission:** Added runtime CAMERA permission check and request launcher, preventing `SecurityException` intent crashes.
+            - **Image Generation Streamlining:** Eliminated dark technical box and duplicate preview cards in normal chat; smooth shimmering skeleton while generating.
+            - **Voice Call & Chat Collision Resilience:** Automatic micro-retry on initial socket drops, and graceful adoption of existing daemon conversations.
+            - **Sidebar Drawer Archive Tab Fix:** Fixed tab list filtering and two-way sync so [ Archive ] immediately displays all archived chats.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

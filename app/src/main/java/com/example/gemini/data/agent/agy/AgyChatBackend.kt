@@ -1135,7 +1135,15 @@ class AgyChatBackend(
         if (!onDaemon) {
             val modelEnum = AgyHubClient.resolveModelEnum(_selectedModelId.value)
             val ws = conv.workspaceUri.takeIf { it.isNotBlank() }?.let { if (it.startsWith("file://")) it else "file://$it" } ?: ""
-            agyHubClient.startCascade(cascadeId = id, modelEnum = modelEnum, workspaceUri = ws, cloudProjectId = conv.cloudProjectId).getOrThrow()
+            runCatching {
+                agyHubClient.startCascade(cascadeId = id, modelEnum = modelEnum, workspaceUri = ws, cloudProjectId = conv.cloudProjectId).getOrThrow()
+            }.onFailure { err ->
+                if (err.message?.contains("already exists", ignoreCase = true) == true) {
+                    Log.d("ChatViewModel", "Cascade $id already exists on daemon, adopting")
+                } else {
+                    throw err
+                }
+            }
             knownDaemonCascadeIds.add(id)
             // no longer an unsaved "New Chat": the live stream may start (the hub names the chat later)
             val named = conv.copy(title = if (conv.title == "New Chat") "Voice chat" else conv.title, workspaceUri = ws)
@@ -2007,32 +2015,37 @@ class AgyChatBackend(
                     )
                     if (startRes.isFailure) {
                         val rawErr = startRes.exceptionOrNull()?.message ?: "Failed to start conversation on daemon"
-                        val err = if (conv.isCloud) AgyCloud.friendlyError(rawErr) else rawErr
-                        Log.e("ChatViewModel", "startCascade error: $rawErr")
-                        val formattedErr = formatStructuredErrorMessage(
-                            title = if (conv.isCloud) "The cloud agent couldn't start"
-                                else if (err.contains("auth", ignoreCase = true)) "Authentication Required" else "Failed to Start Conversation",
-                            userMessage = err,
-                            shortError = err
-                        )
-                        if (queued) {
-                            failQueued(err)
+                        if (rawErr.contains("already exists", ignoreCase = true)) {
+                            Log.d("ChatViewModel", "Conversation ${conv.id} already exists on daemon, adopting...")
+                            knownDaemonCascadeIds.add(conv.id)
+                        } else {
+                            val err = if (conv.isCloud) AgyCloud.friendlyError(rawErr) else rawErr
+                            Log.e("ChatViewModel", "startCascade error: $rawErr")
+                            val formattedErr = formatStructuredErrorMessage(
+                                title = if (conv.isCloud) "The cloud agent couldn't start"
+                                    else if (err.contains("auth", ignoreCase = true)) "Authentication Required" else "Failed to Start Conversation",
+                                userMessage = err,
+                                shortError = err
+                            )
+                            if (queued) {
+                                failQueued(err)
+                                return@launch
+                            }
+                            withContext(Dispatchers.Main) {
+                                clearOptimisticSend()
+                                isPromptInFlight = false
+                                _isStreaming.value = false
+                                hasSeenTurnActivity = false
+                                trajectoryEngine.cancelRunning()
+                                updateAssistantMessage(
+                                    msgId = assistantMsgId,
+                                    content = formattedErr,
+                                    isStreaming = false,
+                                    forceImmediate = true
+                                )
+                            }
                             return@launch
                         }
-                        withContext(Dispatchers.Main) {
-                            clearOptimisticSend()
-                            isPromptInFlight = false
-                            _isStreaming.value = false
-                            hasSeenTurnActivity = false
-                            trajectoryEngine.cancelRunning()
-                            updateAssistantMessage(
-                                msgId = assistantMsgId,
-                                content = formattedErr,
-                                isStreaming = false,
-                                forceImmediate = true
-                            )
-                        }
-                        return@launch
                     }
                     knownDaemonCascadeIds.add(conv.id)
                     if (workspaceUri.isNotBlank()) {

@@ -214,10 +214,9 @@ fun ChatHistoryDrawer(
         }
         byId.values.filter(::isArchived).map { it.id }.toSet()
     }
-    val filtered = remember(conversations, jarvisConversations, searchQuery, agentFilter, jarvisFilter, showArchived, archivedIds) {
-        val byAgent = (if (jarvisFilter) jarvisConversations
-        else agentFilter?.let { a -> conversations.filter { it.agent == a } } ?: conversations)
-            .filter { (it.id in archivedIds) == showArchived }
+    val filtered = remember(conversations, jarvisConversations, searchQuery, agentFilter, jarvisFilter) {
+        val byAgent = if (jarvisFilter) jarvisConversations
+        else agentFilter?.let { a -> conversations.filter { it.agent == a } } ?: conversations
         if (searchQuery.isBlank()) byAgent
         else byAgent.filter {
             it.title.contains(searchQuery, ignoreCase = true) ||
@@ -230,7 +229,15 @@ fun ChatHistoryDrawer(
     var pinnedIds by remember {
         mutableStateOf(com.example.gemini.data.preferences.AuraCustomizePreferences.getPinnedConversationIds(context))
     }
-    var activeTabFilter by remember { mutableStateOf(DrawerTabFilter.ALL) }
+    var activeTabFilter by remember { mutableStateOf(if (showArchived) DrawerTabFilter.ARCHIVE else DrawerTabFilter.ALL) }
+
+    LaunchedEffect(showArchived) {
+        if (showArchived && activeTabFilter != DrawerTabFilter.ARCHIVE) {
+            activeTabFilter = DrawerTabFilter.ARCHIVE
+        } else if (!showArchived && activeTabFilter == DrawerTabFilter.ARCHIVE) {
+            activeTabFilter = DrawerTabFilter.ALL
+        }
+    }
 
     // Subagents/nested tool threads are hidden from the drawer to keep a clean, premium chat list
     val subagentsByParent = remember { emptyMap<String, List<Conversation>>() }
@@ -242,10 +249,10 @@ fun ChatHistoryDrawer(
                     conv.subagentTypeName == null
         }
         val tabFiltered = when (activeTabFilter) {
-            DrawerTabFilter.ALL -> baseChats.filter { it.id !in archivedIds }
-            DrawerTabFilter.PIN -> baseChats.filter { it.id in pinnedIds && it.id !in archivedIds }
+            DrawerTabFilter.ALL -> baseChats.filter { it.id !in archivedIds && !it.archived }
+            DrawerTabFilter.PIN -> baseChats.filter { it.id in pinnedIds && it.id !in archivedIds && !it.archived }
             DrawerTabFilter.PROJECT -> baseChats.filter {
-                it.id !in archivedIds && (
+                it.id !in archivedIds && !it.archived && (
                     it.workspaceUri.isNotBlank() ||
                     it.cloudProjectId != null ||
                     it.title.contains("project", ignoreCase = true) ||
@@ -953,14 +960,21 @@ fun ChatHistoryDrawer(
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
                             .background(if (selected) accent.copy(alpha = 0.14f) else Color.Transparent)
-                            .clickable { activeTabFilter = cat }
+                            .clickable {
+                                activeTabFilter = cat
+                                if (cat == DrawerTabFilter.ARCHIVE) {
+                                    onToggleShowArchived(true)
+                                } else if (showArchived) {
+                                    onToggleShowArchived(false)
+                                }
+                            }
                             .padding(horizontal = 12.dp, vertical = 5.dp)
                     )
                 }
             }
 
             // archive view: say so, or the list looks like chats went missing
-            if (showArchived) {
+            if (showArchived || activeTabFilter == DrawerTabFilter.ARCHIVE) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -987,14 +1001,17 @@ fun ChatHistoryDrawer(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
-                            .clickable { onToggleShowArchived(false) }
+                            .clickable {
+                                activeTabFilter = DrawerTabFilter.ALL
+                                onToggleShowArchived(false)
+                            }
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     )
                 }
             }
 
             // the Jarvis tab: start a Jarvis text chat (a command center that leads teams of agents)
-            if (jarvisEnabled && jarvisFilter && onNewJarvisChat != null && !showArchived) {
+            if (jarvisEnabled && jarvisFilter && onNewJarvisChat != null && !showArchived && activeTabFilter != DrawerTabFilter.ARCHIVE) {
                 JarvisNewChatRow(agents = visibleAgents, onNew = onNewJarvisChat)
             }
 
@@ -1090,9 +1107,10 @@ fun ChatHistoryDrawer(
                                 .padding(top = 40.dp),
                             contentAlignment = Alignment.TopCenter
                         ) {
+                            val isArchiveActive = activeTabFilter == DrawerTabFilter.ARCHIVE || showArchived
                             Text(
-                                text = if (searchQuery.isNotBlank()) "No ${if (showArchived) "archived " else ""}chats found matching \"$searchQuery\""
-                                    else if (showArchived) "No archived chats. Archive a chat from its ⋮ menu to keep it here, out of the main list."
+                                text = if (searchQuery.isNotBlank()) "No ${if (isArchiveActive) "archived " else ""}chats found matching \"$searchQuery\""
+                                    else if (isArchiveActive) "No archived chats. Archive a chat from its ⋮ menu to keep it here, out of the main list."
                                     else if (jarvisFilter) "No Jarvis chats yet. Start one above: type a big job and Jarvis plans it, runs it with teams of agents and keeps going until it's done."
                                     else "No recent chats",
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -1435,10 +1453,11 @@ fun ChatHistoryDrawer(
                             )
 
                             // 2. Archived Chats Toggle
+                            val isArchiveActive = activeTabFilter == DrawerTabFilter.ARCHIVE || showArchived
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        text = if (showArchived) "Hide Archived Chats" else "Show Archived Chats",
+                                        text = if (isArchiveActive) "Hide Archived Chats" else "Show Archived Chats",
                                         fontSize = 14.sp,
                                         color = textPrimary
                                     )
@@ -1453,7 +1472,9 @@ fun ChatHistoryDrawer(
                                 },
                                 onClick = {
                                     showOverflowMenu = false
-                                    onToggleShowArchived(!showArchived)
+                                    val next = !isArchiveActive
+                                    activeTabFilter = if (next) DrawerTabFilter.ARCHIVE else DrawerTabFilter.ALL
+                                    onToggleShowArchived(next)
                                 }
                             )
 
