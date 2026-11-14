@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.4-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.5-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,14 +70,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.1.4
-          name: Aura AI v2.1.4
+          tag_name: v2.1.5
+          name: Aura AI v2.1.5
           body: |
-            ### Aura AI v2.1.4 — Camera Permission, Image Gen Polish, Voice Resilience & Drawer Archive Fixes
-            - **Camera Attachment Permission:** Added runtime CAMERA permission check and request launcher, preventing `SecurityException` intent crashes.
-            - **Image Generation Streamlining:** Eliminated dark technical box and duplicate preview cards in normal chat; smooth shimmering skeleton while generating.
-            - **Voice Call & Chat Collision Resilience:** Automatic micro-retry on initial socket drops, and graceful adoption of existing daemon conversations.
-            - **Sidebar Drawer Archive Tab Fix:** Fixed tab list filtering and two-way sync so [ Archive ] immediately displays all archived chats.
+            ### Aura AI v2.1.5 — Voice Call Daemon Sync, Gallery Frosted Buttons, Image Indexing & Scroll Polish
+            - **Voice Call Lifecycle Sync:** Fixed EOFException loop by guaranteeing conversation registration on hub language server before voice connection.
+            - **Voice Reconnect Logic:** Move retry reset to confirmed listening state so diagnostics surface properly on failures instead of looping.
+            - **Gallery Frosted White Controls:** Removed black circular backgrounds from image action buttons in favor of clean frosted glassmorphism.
+            - **Comprehensive Image Indexing:** Added in-memory RAM cache and deep filesystem scanning (depth 6) so all generated images appear in gallery.
+            - **Chat Scroll Smoothness:** Eliminated image skeleton height recalculations and layout jitter during feed scrolling.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

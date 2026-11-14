@@ -1581,7 +1581,14 @@ fun MarkdownImageView(
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        var isImageLoading by remember(resolvedUrl) { mutableStateOf(resolvedUrl.isNotBlank()) }
+        val isAlreadyCached = remember(resolvedUrl) {
+            resolvedUrl.isNotBlank() && (
+                resolvedUrl.startsWith("data:") ||
+                resolvedUrl.startsWith("file://") ||
+                HubMediaResolver.isLocalOrCached(context, resolvedUrl)
+            )
+        }
+        var isImageLoading by remember(resolvedUrl) { mutableStateOf(!isAlreadyCached && resolvedUrl.isNotBlank()) }
         var isImageError by remember(resolvedUrl) { mutableStateOf(false) }
 
         Surface(
@@ -1605,12 +1612,12 @@ fun MarkdownImageView(
             ) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
-                        .data(resolvedUrl)
-                        .crossfade(true)
+                        .data(if (resolvedUrl.isNotBlank()) resolvedUrl else image.url)
+                        .crossfade(!isAlreadyCached)
                         .setHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36 AntiGem/1.0")
                         .decoderFactory(SvgDecoder.Factory())
                         .listener(
-                            onStart = { isImageLoading = true; isImageError = false },
+                            onStart = { if (!isAlreadyCached) isImageLoading = true },
                             onSuccess = { _, _ -> isImageLoading = false; isImageError = false },
                             onError = { _, res ->
                                 isImageLoading = false
@@ -1629,7 +1636,7 @@ fun MarkdownImageView(
                         label = "Loading image...",
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(220.dp)
+                            .height(200.dp)
                     )
                 }
 

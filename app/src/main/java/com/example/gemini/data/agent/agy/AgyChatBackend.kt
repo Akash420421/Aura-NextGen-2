@@ -1131,25 +1131,23 @@ class AgyChatBackend(
         }
         if (conv.cloudProjectId != null) throw com.example.gemini.data.voice.AgyVoiceCall.CallRefused(com.example.gemini.data.voice.AgyVoiceCall.CLOUD_CHAT_NO_VOICE)
         val id = conv.id
-        val onDaemon = knownDaemonCascadeIds.contains(id) || _conversations.value.any { it.id == id } || _messages.value.isNotEmpty()
-        if (!onDaemon) {
-            val modelEnum = AgyHubClient.resolveModelEnum(_selectedModelId.value)
-            val ws = conv.workspaceUri.takeIf { it.isNotBlank() }?.let { if (it.startsWith("file://")) it else "file://$it" } ?: ""
-            runCatching {
-                agyHubClient.startCascade(cascadeId = id, modelEnum = modelEnum, workspaceUri = ws, cloudProjectId = conv.cloudProjectId).getOrThrow()
-            }.onFailure { err ->
-                if (err.message?.contains("already exists", ignoreCase = true) == true) {
-                    Log.d("ChatViewModel", "Cascade $id already exists on daemon, adopting")
-                } else {
-                    throw err
-                }
+        val ws = conv.workspaceUri.takeIf { it.isNotBlank() }?.let { if (it.startsWith("file://")) it else "file://$it" } ?: ""
+        val modelEnum = AgyHubClient.resolveModelEnum(_selectedModelId.value)
+        // Ensure the conversation is actively registered on the hub language server so /voice/ws never fails with NotFound / conversation_gone
+        runCatching {
+            agyHubClient.startCascade(cascadeId = id, modelEnum = modelEnum, workspaceUri = ws, cloudProjectId = conv.cloudProjectId).getOrThrow()
+        }.onFailure { err ->
+            if (err.message?.contains("already exists", ignoreCase = true) == true) {
+                Log.d("ChatViewModel", "Cascade $id already exists on daemon, adopting")
+            } else {
+                Log.w("ChatViewModel", "startCascade warning for voice call: ${err.message}")
             }
-            knownDaemonCascadeIds.add(id)
-            // no longer an unsaved "New Chat": the live stream may start (the hub names the chat later)
-            val named = conv.copy(title = if (conv.title == "New Chat") "Voice chat" else conv.title, workspaceUri = ws)
-            withContext(Dispatchers.Main) {
-                if (_currentConversation.value?.id == id) _currentConversation.value = named
-            }
+        }
+        knownDaemonCascadeIds.add(id)
+        // no longer an unsaved "New Chat": the live stream may start (the hub names the chat later)
+        val named = conv.copy(title = if (conv.title == "New Chat") "Voice chat" else conv.title, workspaceUri = ws)
+        withContext(Dispatchers.Main) {
+            if (_currentConversation.value?.id == id) _currentConversation.value = named
         }
         withContext(Dispatchers.Main) { startPersistentStream(id) }
         return id to planModelNumber()

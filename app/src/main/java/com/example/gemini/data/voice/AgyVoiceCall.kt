@@ -390,7 +390,6 @@ object AgyVoiceCall {
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             if (!current(webSocket)) return
-            s.linkRetries = 0
             s.socketOpen = true
             s.openedAt = SystemClock.elapsedRealtime()
             note(s, "Connected to the hub (voice ${s.voice}, language ${AgyVoicePreferences.acceptLanguage(s.language)})")
@@ -537,6 +536,7 @@ object AgyVoiceCall {
                 if (it.connectedAt > 0) it else it.copy(phase = Phase.CONNECTING, statusText = "Starting the voice agent…")
             }
             LinkState.LISTENING -> {
+                s.linkRetries = 0 // Successfully reached live listening state; reset retry count
                 val first = _state.value.connectedAt == 0L
                 _state.update {
                     it.copy(

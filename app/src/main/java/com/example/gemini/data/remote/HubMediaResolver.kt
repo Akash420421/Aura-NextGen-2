@@ -213,6 +213,9 @@ object HubMediaResolver {
         documentRamCache.clear()
     }
 
+    /** Returns a snapshot copy of all in-RAM cached image data URIs. */
+    fun getAllCachedImages(): Map<String, String> = HashMap(imageRamCache)
+
     /**
      * Checks if the URI is already local or already cached in RAM memory.
      */

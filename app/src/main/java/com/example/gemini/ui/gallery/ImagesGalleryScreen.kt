@@ -120,6 +120,16 @@ fun ImagesGalleryScreen(
                 }
             }
 
+            // 0. From In-RAM Image Cache (HubMediaResolver)
+            com.example.gemini.data.remote.HubMediaResolver.getAllCachedImages().forEach { (k, v) ->
+                if (v.isNotBlank()) {
+                    val title = if (k.startsWith("/") || k.startsWith("file://")) {
+                        File(k.removePrefix("file://")).nameWithoutExtension.replace('_', ' ').replace('-', ' ').replaceFirstChar { it.uppercase() }
+                    } else "Generated Image"
+                    addItem(v, title, System.currentTimeMillis())
+                }
+            }
+
             // 1. From Active Messages (Tool calls, attachments, markdown, raw file paths)
             messages.forEach { msg ->
                 val time = msg.createdAt
@@ -159,17 +169,25 @@ fun ImagesGalleryScreen(
             val scanFolders = listOf(
                 File("/sdcard/Download/AntiGem"),
                 File("/sdcard/Pictures/AURA_Vision"),
+                File("/sdcard/Pictures"),
                 File("/sdcard/DCIM/AURA_AI_Chats"),
                 File(context.filesDir, "images"),
                 File(context.cacheDir, "images"),
+                File(context.cacheDir, "image_cache"),
+                File(context.cacheDir, "claude-attachments"),
+                File(context.filesDir, "claude-attachments"),
+                context.cacheDir,
                 File("/data/user/0/com.termux/files/home/.antigem/uploads"),
-                File("/data/user/0/com.termux/files/home/.gemini/antigravity-cli/brain")
+                File("/data/user/0/com.termux/files/home/.gemini/antigravity-cli/brain"),
+                File("/data/user/0/com.termux/files/home/projects")
             )
 
             scanFolders.forEach { folder ->
                 if (folder.exists() && folder.isDirectory) {
-                    val files = if (folder.name == "brain") {
-                        folder.walkTopDown().maxDepth(4).filter { it.isFile && it.name.matches(IMAGE_REGEX) }.toList()
+                    val files = if (folder.name == "brain" || folder.name == "projects") {
+                        folder.walkTopDown().maxDepth(6).filter {
+                            it.isFile && it.name.matches(IMAGE_REGEX) && !it.path.contains("/node_modules/") && !it.path.contains("/.git/")
+                        }.toList()
                     } else {
                         folder.listFiles()?.filter { it.isFile && it.name.matches(IMAGE_REGEX) } ?: emptyList()
                     }
@@ -448,7 +466,7 @@ private fun GalleryCard(
                         .padding(8.dp)
                         .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.50f))
+                        .background(Color.White.copy(alpha = 0.22f))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
@@ -466,7 +484,7 @@ private fun GalleryCard(
                         .padding(8.dp)
                         .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.50f))
+                        .background(Color.White.copy(alpha = 0.22f))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Fullscreen,
@@ -484,7 +502,7 @@ private fun GalleryCard(
                         .padding(8.dp)
                         .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.50f))
+                        .background(Color.White.copy(alpha = 0.22f))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Download,
