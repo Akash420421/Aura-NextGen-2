@@ -1135,12 +1135,33 @@ class AgyChatBackend(
         if (!onDaemon) {
             val modelEnum = AgyHubClient.resolveModelEnum(_selectedModelId.value)
             val ws = conv.workspaceUri.takeIf { it.isNotBlank() }?.let { if (it.startsWith("file://")) it else "file://$it" } ?: ""
-            agyHubClient.startCascade(cascadeId = id, modelEnum = modelEnum, workspaceUri = ws, cloudProjectId = conv.cloudProjectId).getOrThrow()
-            knownDaemonCascadeIds.add(id)
+            val startRes = agyHubClient.startCascade(cascadeId = id, modelEnum = modelEnum, workspaceUri = ws, cloudProjectId = conv.cloudProjectId)
+            if (startRes.isFailure) {
+                val err = startRes.exceptionOrNull()?.message.orEmpty()
+                if (err.contains("already exists", ignoreCase = true) ||
+                    err.contains("already registered", ignoreCase = true) ||
+                    err.contains("duplicate", ignoreCase = true)
+                ) {
+                    Log.d("ChatViewModel", "Cascade $id already exists on daemon, adopting for voice call")
+                    knownDaemonCascadeIds.add(id)
+                } else {
+                    startRes.getOrThrow()
+                }
+            } else {
+                knownDaemonCascadeIds.add(id)
+            }
             // no longer an unsaved "New Chat": the live stream may start (the hub names the chat later)
             val named = conv.copy(title = if (conv.title == "New Chat") "Voice chat" else conv.title, workspaceUri = ws)
             withContext(Dispatchers.Main) {
                 if (_currentConversation.value?.id == id) _currentConversation.value = named
+            }
+        } else {
+            knownDaemonCascadeIds.add(id)
+            if (conv.title == "New Chat") {
+                val named = conv.copy(title = "Voice chat")
+                withContext(Dispatchers.Main) {
+                    if (_currentConversation.value?.id == id) _currentConversation.value = named
+                }
             }
         }
         withContext(Dispatchers.Main) { startPersistentStream(id) }

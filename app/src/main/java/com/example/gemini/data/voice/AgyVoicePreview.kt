@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit
 internal fun Request.Builder.agyHubHeaders(): Request.Builder {
     header("User-Agent", "antiGem-Android-Native")
     val token = AgyCsrfManager.instance.token
-    if (token.isNotBlank()) header(AuthPreferences.currentFramedHeader, token)
+    header(AuthPreferences.currentFramedHeader, token.ifBlank { "true" })
     AuthPreferences.edgeHeader()?.let { (n, v) -> header(n, v) }
     return this
 }

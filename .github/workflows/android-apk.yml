@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.6-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.7-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,14 +70,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.1.6
-          name: Aura AI v2.1.6
+          tag_name: v2.1.7
+          name: Aura AI v2.1.7
           body: |
-            ### Aura AI v2.1.6 — Upstream AntiGem Voice Call Sync, Chat Scroll Smoothness & Aura Gallery Filter
-            - **Voice Call Upstream Sync:** Clean port of upstream AntiGem voice calling architecture, protocols and preview components.
-            - **Chat Feed Smooth Scrolling:** Removed per-block touch gesture interceptors and guarded layout measurements to eliminate scroll lag and stutter.
-            - **Aura-Only Image Gallery:** Filtered gallery to strictly show Aura-generated images, excluding device photos and user-uploaded media.
-            - **Restored Assistant Message Actions:** Footer controls for copying, retry, and details seamlessly rendered below assistant responses.
+            ### Aura AI v2.1.7 — Fix Voice Call Handshake & Stream Sync
+            - **Voice Call Handshake Fix:** Gracefully adopt conversations already registered on the hub language server instead of failing with ServerError.
+            - **Persistent Stream Title Sync:** Mark voice-initiated conversations with title 'Voice chat' so live agent speech and tool actions stream seamlessly.
+            - **Robust Hub Header Framing:** Ensure framed CSRF token fallback header is sent on WebSocket handshakes to prevent connection rejections.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
