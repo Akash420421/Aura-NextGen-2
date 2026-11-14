@@ -442,12 +442,7 @@ fun ProjectPickerDialog(
                         )
                     }
                 }
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
             }
         }
     }
-}
 }

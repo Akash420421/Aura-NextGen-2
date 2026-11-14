@@ -2895,7 +2895,7 @@ fun parseMarkdownBlocks(
         rawText
             .replace(CHAT_TITLE_REGEX, "")
             .replace(INFLIGHT_CHAT_TITLE_REGEX, "")
-            .replace(Regex("""^[•\-\*]?\s*Direct File:\s*.*$""", RegexOption.MULTILINE or RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""^[•\-\*]?\s*Direct File:\s*.*$""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)), "")
     } else rawText
 
     val lines = cleanedText.lines()

@@ -246,8 +246,8 @@ fun ChatHistoryDrawer(
             DrawerTabFilter.PIN -> baseChats.filter { it.id in pinnedIds && it.id !in archivedIds }
             DrawerTabFilter.PROJECT -> baseChats.filter {
                 it.id !in archivedIds && (
-                    it.projectPath != null ||
-                    it.workspaceId != null ||
+                    it.workspaceUri.isNotBlank() ||
+                    it.cloudProjectId != null ||
                     it.title.contains("project", ignoreCase = true) ||
                     it.title.contains("workspace", ignoreCase = true)
                 )
