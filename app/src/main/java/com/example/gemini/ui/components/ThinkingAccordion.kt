@@ -11,7 +11,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -52,7 +51,7 @@ fun ThinkingAccordion(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp)
+            .padding(vertical = 1.dp)
     ) {
         // Clean borderless inline header row
         Row(
@@ -63,7 +62,7 @@ fun ThinkingAccordion(
                     hasUserManuallyToggled = true
                     isExpanded = !isExpanded
                 }
-                .padding(horizontal = 4.dp, vertical = 3.dp),
+                .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -73,15 +72,6 @@ fun ThinkingAccordion(
                 modifier = Modifier
                     .size(15.dp)
                     .rotate(rotation)
-            )
-
-            Spacer(modifier = Modifier.width(4.dp))
-
-            Icon(
-                imageVector = Icons.Outlined.Psychology,
-                contentDescription = "Thinking",
-                tint = ClaudeTerracotta.copy(alpha = 0.85f),
-                modifier = Modifier.size(15.dp)
             )
 
             Spacer(modifier = Modifier.width(6.dp))

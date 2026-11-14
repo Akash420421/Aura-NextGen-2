@@ -108,13 +108,13 @@ fun ProjectPickerDialog(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(ClaudeTerracotta.copy(alpha = 0.14f)),
+                                .background(Color(0xFF2F6FED).copy(alpha = 0.12f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Outlined.FolderSpecial,
+                                imageVector = Icons.Default.Folder,
                                 contentDescription = null,
-                                tint = ClaudeTerracotta,
+                                tint = Color(0xFF2F6FED),
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -178,15 +178,16 @@ fun ProjectPickerDialog(
                     item {
                         val isSelected = !cloudSelected && (activeProject == null || activeProject.path.isBlank())
                         Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (isSelected) Color(0xFF2F6FED).copy(alpha = 0.08f) else Color.White,
                             border = BorderStroke(
-                                1.5.dp,
-                                if (isSelected) ClaudeTerracotta.copy(alpha = 0.7f) else Color.Transparent
+                                1.dp,
+                                if (isSelected) Color(0xFF2F6FED).copy(alpha = 0.5f) else Color(0x12000000)
                             ),
+                            shadowElevation = if (isSelected) 0.dp else 1.dp,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
+                                .clip(RoundedCornerShape(16.dp))
                                 .clickable {
                                     onSelectProject(null)
                                     onDismiss()
@@ -198,62 +199,69 @@ fun ProjectPickerDialog(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(34.dp)
+                                        .size(36.dp)
                                         .clip(CircleShape)
-                                        .background(if (isSelected) ClaudeTerracotta.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)),
+                                        .background(if (isSelected) Color(0xFF2F6FED).copy(alpha = 0.15f) else Color(0xFFF2F1F5)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Outlined.Public,
                                         contentDescription = null,
-                                        tint = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
+                                        tint = if (isSelected) Color(0xFF2F6FED) else Color(0xFF6E6E73),
+                                        modifier = Modifier.size(19.dp)
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
                                         Text(
                                             text = "General (No Workspace)",
-                                            fontSize = 13.5.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            fontSize = 14.sp,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                            color = Color(0xFF1A1A1A),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
                                         )
                                         if (isSelected) {
-                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
                                             Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = ClaudeTerracotta.copy(alpha = 0.2f)
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = Color(0xFF2F6FED).copy(alpha = 0.14f)
                                             ) {
                                                 Text(
                                                     text = "Active",
-                                                    fontSize = 10.sp,
+                                                    fontSize = 10.5.sp,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = ClaudeTerracotta,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    color = Color(0xFF2F6FED),
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                                 )
                                             }
                                         }
                                     }
                                     Text(
                                         text = "Chat without attaching to a directory",
-                                        fontSize = 11.5.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF8A8A8E)
                                     )
                                 }
                                 if (isSelected) {
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Box(
                                         modifier = Modifier
-                                            .size(24.dp)
+                                            .size(22.dp)
                                             .clip(CircleShape)
-                                            .background(ClaudeTerracotta),
+                                            .background(Color(0xFF2F6FED)),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = Icons.Outlined.Check,
                                             contentDescription = "Selected",
                                             tint = Color.White,
-                                            modifier = Modifier.size(15.dp)
+                                            modifier = Modifier.size(14.dp)
                                         )
                                     }
                                 }
@@ -267,15 +275,16 @@ fun ProjectPickerDialog(
                         val folderName = proj.name.ifBlank { File(proj.path).name.ifBlank { "Workspace" } }
 
                         Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (isSelected) Color(0xFF2F6FED).copy(alpha = 0.08f) else Color.White,
                             border = BorderStroke(
-                                1.5.dp,
-                                if (isSelected) ClaudeTerracotta.copy(alpha = 0.7f) else Color.Transparent
+                                1.dp,
+                                if (isSelected) Color(0xFF2F6FED).copy(alpha = 0.5f) else Color(0x12000000)
                             ),
+                            shadowElevation = if (isSelected) 0.dp else 1.dp,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
+                                .clip(RoundedCornerShape(16.dp))
                                 .clickable {
                                     onSelectProject(proj)
                                     onDismiss()
@@ -287,66 +296,71 @@ fun ProjectPickerDialog(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(34.dp)
+                                        .size(36.dp)
                                         .clip(RoundedCornerShape(10.dp))
-                                        .background(if (isSelected) ClaudeTerracotta.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)),
+                                        .background(if (isSelected) Color(0xFF2F6FED).copy(alpha = 0.15f) else Color(0xFFF2F1F5)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Folder,
                                         contentDescription = null,
-                                        tint = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
+                                        tint = if (isSelected) Color(0xFF2F6FED) else Color(0xFF2F6FED),
+                                        modifier = Modifier.size(19.dp)
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
                                         Text(
                                             text = folderName,
-                                            fontSize = 13.5.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 14.sp,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                            color = Color(0xFF1A1A1A),
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
                                         )
                                         if (isSelected) {
-                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
                                             Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = ClaudeTerracotta.copy(alpha = 0.2f)
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = Color(0xFF2F6FED).copy(alpha = 0.14f)
                                             ) {
                                                 Text(
                                                     text = "Active",
-                                                    fontSize = 10.sp,
+                                                    fontSize = 10.5.sp,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = ClaudeTerracotta,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    color = Color(0xFF2F6FED),
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                                 )
                                             }
                                         }
                                     }
                                     Text(
                                         text = proj.path,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                        fontSize = 11.5.sp,
+                                        color = Color(0xFF8A8A8E),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
                                 if (isSelected) {
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Box(
                                         modifier = Modifier
-                                            .size(24.dp)
+                                            .size(22.dp)
                                             .clip(CircleShape)
-                                            .background(ClaudeTerracotta),
+                                            .background(Color(0xFF2F6FED)),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = Icons.Outlined.Check,
                                             contentDescription = "Selected",
                                             tint = Color.White,
-                                            modifier = Modifier.size(15.dp)
+                                            modifier = Modifier.size(14.dp)
                                         )
                                     }
                                 }
@@ -359,55 +373,75 @@ fun ProjectPickerDialog(
 
                 // Bottom Action: Clone a public git repository into home
                 if (onCloneRepo != null) {
-                    OutlinedButton(
+                    Surface(
                         onClick = {
                             onDismiss()
                             onCloneRepo()
                         },
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.dp, Color(0x1F000000)),
+                        shadowElevation = 1.dp,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.dp, ClaudeTerracotta.copy(alpha = 0.6f))
+                            .height(48.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.CloudDownload,
-                            contentDescription = null,
-                            tint = ClaudeTerracotta,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Use Git Repository...",
-                            fontSize = 13.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = ClaudeTerracotta
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.CloudDownload,
+                                contentDescription = null,
+                                tint = Color(0xFF2F6FED),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Use Git Repository...",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF2F6FED)
+                            )
+                        }
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                 }
 
                 // Bottom Action: Add / Browse Folder in File Manager
-                Button(
+                Surface(
                     onClick = {
                         onDismiss()
                         onBrowseFolder()
                     },
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFF2F6FED),
+                    shadowElevation = 2.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(46.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                        .height(48.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.FolderOpen,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Browse or Open Other Folder...",
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FolderOpen,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Browse or Open Other Folder...",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
+                        )
+                    }
+                }
                         fontSize = 13.5.sp,
                         fontWeight = FontWeight.Bold
                     )

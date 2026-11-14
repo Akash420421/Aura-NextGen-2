@@ -711,6 +711,17 @@ fun ChatScreen(
             viewModel.addAttachmentsFromUris(uris, context)
         }
     }
+
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            pendingCameraUri?.let { uri ->
+                viewModel.addAttachmentsFromUris(listOf(uri), context)
+            }
+        }
+    }
     var activeConversationKey by remember { mutableStateOf(currentConv?.id ?: "new") }
     // The keyboard edits this buffer directly (like a native EditText). Holding the text as a TextFieldValue here made
     // every key press round-trip through this screen; with long text that lagged and some keyboards (e.g. Samsung)
@@ -3678,6 +3689,16 @@ fun ChatScreen(
             onSelectModel = { modelId -> viewModel.selectModel(modelId) },
             thinkingPreference = thinkingPref,
             onPreferenceSelected = { pref -> viewModel.setThinkingPreference(pref) },
+            onPickCamera = {
+                runCatching {
+                    val photoFile = java.io.File(context.cacheDir, "camera_photo_${System.currentTimeMillis()}.jpg")
+                    val photoUri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
+                    pendingCameraUri = photoUri
+                    cameraLauncher.launch(photoUri)
+                }.onFailure { e ->
+                    Toast.makeText(context, "Could not open camera: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            },
             onPickImage = { photoPickerLauncher.launch("image/*") },
             onPickFile = { filePickerLauncher.launch("*/*") },
             onPickFromFiles = { showAttachFromFiles = true },

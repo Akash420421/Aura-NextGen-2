@@ -83,12 +83,37 @@ fun ImagesGalleryScreen(
 
             fun addItem(uri: String, title: String, timestamp: Long) {
                 val clean = uri.trim()
-                if (clean.isNotBlank() && seenUris.add(clean)) {
+                if (clean.isBlank()) return
+                // Check physical existence for local files
+                if (clean.startsWith("file://") || clean.startsWith("/")) {
+                    val filePath = clean.removePrefix("file://")
+                    val file = File(filePath)
+                    if (!file.exists() || !file.isFile || file.length() <= 0) return
+                    if (!file.name.matches(IMAGE_REGEX)) return
+                } else if (!clean.startsWith("http://") && !clean.startsWith("https://") && !clean.startsWith("data:image/")) {
+                    return
+                }
+
+                val cleanTitle = if (title.startsWith("python", ignoreCase = true) ||
+                    title.startsWith("ls ", ignoreCase = true) ||
+                    title.startsWith("Message from", ignoreCase = true) ||
+                    title.equals("caption", ignoreCase = true) ||
+                    title.startsWith("/")
+                ) {
+                    val filename = if (clean.startsWith("file://") || clean.startsWith("/")) {
+                        File(clean.removePrefix("file://")).nameWithoutExtension
+                    } else "Generated Image"
+                    filename.replace('_', ' ').replace('-', ' ').replaceFirstChar { it.uppercase() }
+                } else {
+                    title.ifBlank { "Generated Image" }
+                }
+
+                if (seenUris.add(clean)) {
                     list.add(
                         GalleryItem(
                             id = "img_${list.size}_${clean.hashCode()}",
                             uri = clean,
-                            title = title.ifBlank { "Generated Image" },
+                            title = cleanTitle,
                             timestamp = timestamp
                         )
                     )
@@ -100,19 +125,19 @@ fun ImagesGalleryScreen(
                 val time = msg.createdAt
                 msg.toolCalls.forEach { tc ->
                     val out = tc.output.trim()
-                    val isImg = tc.toolType == ToolType.GENERATE_IMAGE ||
-                            out.startsWith("data:image/") ||
-                            out.matches(IMAGE_REGEX) ||
-                            out.contains(Regex("\\.(png|jpe?g|webp|gif)", RegexOption.IGNORE_CASE))
-                    if (isImg && out.isNotBlank()) {
-                        val cleanUri = if (out.startsWith("/") && !out.startsWith("file://")) "file://$out" else out
-                        addItem(cleanUri, tc.command.ifBlank { "Generated image" }, time)
+                    if (out.startsWith("data:image/")) {
+                        addItem(out, "Generated image", time)
+                    } else {
+                        Regex("(/[^\\s\"'<>]+?\\.(png|jpe?g|webp|gif))", RegexOption.IGNORE_CASE).findAll(out).forEach { m ->
+                            val p = m.groupValues[1]
+                            addItem("file://$p", File(p).nameWithoutExtension.replace('_', ' '), time)
+                        }
                     }
                 }
                 msg.attachments.forEach { att ->
                     if (att.isImage && att.path.isNotBlank()) {
                         val uri = if (att.path.startsWith("file://") || att.path.startsWith("http") || att.path.startsWith("data:")) att.path
-                        else if (att.path.startsWith("/")) "file://${att.path}" else "file://${att.path}"
+                        else "file://${att.path}"
                         addItem(uri, att.name.ifBlank { "Attached image" }, time)
                     }
                 }
@@ -124,12 +149,9 @@ fun ImagesGalleryScreen(
                         addItem(cleanUrl, alt, time)
                     }
                 }
-                // Also scan for file paths matching image extension inside assistant text response
                 Regex("(/[^\\s\"'<>]+?\\.(png|jpe?g|webp|gif))", RegexOption.IGNORE_CASE).findAll(msg.content).forEach { match ->
                     val path = match.groupValues[1].trim()
-                    if (File(path).exists()) {
-                        addItem("file://$path", File(path).nameWithoutExtension.replace('_', ' '), time)
-                    }
+                    addItem("file://$path", File(path).nameWithoutExtension.replace('_', ' '), time)
                 }
             }
 
@@ -423,10 +445,10 @@ private fun GalleryCard(
                     onClick = onDelete,
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(4.dp)
-                        .size(30.dp)
+                        .padding(8.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.40f))
+                        .background(Color.Black.copy(alpha = 0.50f))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
@@ -441,10 +463,10 @@ private fun GalleryCard(
                     onClick = onClick,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(30.dp)
+                        .padding(8.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.35f))
+                        .background(Color.Black.copy(alpha = 0.50f))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Fullscreen,
@@ -459,10 +481,10 @@ private fun GalleryCard(
                     onClick = onDownload,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(6.dp)
-                        .size(30.dp)
+                        .padding(8.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.45f))
+                        .background(Color.Black.copy(alpha = 0.50f))
                 ) {
                     Icon(
                         imageVector = Icons.Default.Download,
@@ -482,7 +504,7 @@ private fun GalleryCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(start = 8.dp, bottom = 8.dp, end = 40.dp)
+                        .padding(start = 10.dp, bottom = 10.dp, end = 44.dp)
                 )
             }
         }

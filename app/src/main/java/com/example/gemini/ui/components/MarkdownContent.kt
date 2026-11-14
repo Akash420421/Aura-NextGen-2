@@ -185,7 +185,7 @@ fun MarkdownBlockView(
                 thoughtText = block.thought,
                 durationMs = block.durationMs,
                 isStreaming = block.isStreaming,
-                modifier = modifier.padding(vertical = 4.dp)
+                modifier = modifier.padding(vertical = 1.dp)
             )
         }
         is MarkdownBlock.AgentTool -> {
@@ -2877,9 +2877,25 @@ fun parseMarkdownBlocks(
 ): List<MarkdownBlock> {
     val result = mutableListOf<MarkdownBlock>()
 
-    // Filter out <chat_title> so it never appears in UI
-    val cleanedText = if (rawText.contains('<')) {
-        rawText.replace(CHAT_TITLE_REGEX, "").replace(INFLIGHT_CHAT_TITLE_REGEX, "")
+    fun addThought(thought: String, duration: Long?, streaming: Boolean) {
+        val prev = result.lastOrNull()
+        if (prev is MarkdownBlock.AgentThought) {
+            result.removeAt(result.lastIndex)
+            val combinedThought = if (prev.thought.isBlank() || prev.thought == "Thinking...") thought
+            else "${prev.thought}\n\n$thought"
+            val totalDuration = (prev.durationMs ?: 0L) + (duration ?: 0L)
+            result.add(MarkdownBlock.AgentThought(combinedThought, if (totalDuration > 0) totalDuration else null, isStreaming = streaming || prev.isStreaming))
+        } else {
+            result.add(MarkdownBlock.AgentThought(thought, duration, isStreaming = streaming))
+        }
+    }
+
+    // Filter out <chat_title> and Direct File lines so they never appear in UI
+    val cleanedText = if (rawText.contains('<') || rawText.contains("Direct File", ignoreCase = true)) {
+        rawText
+            .replace(CHAT_TITLE_REGEX, "")
+            .replace(INFLIGHT_CHAT_TITLE_REGEX, "")
+            .replace(Regex("""^[•\-\*]?\s*Direct File:\s*.*$""", RegexOption.MULTILINE or RegexOption.IGNORE_CASE), "")
     } else rawText
 
     val lines = cleanedText.lines()
@@ -2937,7 +2953,7 @@ fun parseMarkdownBlocks(
                 if (line.contains("</thought>", ignoreCase = true) || line.contains("<!-- /thought -->", ignoreCase = true)) {
                     val raw = line.replace(THOUGHT_START_REGEX, "").replace(THOUGHT_END_REGEX, "").trim()
                     if (raw.isNotBlank()) {
-                        result.add(MarkdownBlock.AgentThought(raw, durationMs, isStreaming = isExplicitStreaming))
+                        addThought(raw, durationMs, isExplicitStreaming)
                     }
                     i++
                     continue
@@ -2964,9 +2980,9 @@ fun parseMarkdownBlocks(
                 val finalThought = thoughtLines.joinToString("\n").trim()
                 val isStreamingThought = isExplicitStreaming || !closed
                 if (finalThought.isNotBlank()) {
-                    result.add(MarkdownBlock.AgentThought(finalThought, durationMs, isStreaming = isStreamingThought))
+                    addThought(finalThought, durationMs, isStreamingThought)
                 } else if (!closed || isExplicitStreaming) {
-                    result.add(MarkdownBlock.AgentThought("Thinking...", durationMs, isStreaming = true))
+                    addThought("Thinking...", durationMs, true)
                 }
                 continue
             }

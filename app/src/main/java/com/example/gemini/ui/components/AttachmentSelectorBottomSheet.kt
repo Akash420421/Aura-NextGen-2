@@ -6,19 +6,20 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,6 +44,7 @@ fun AttachmentSelectorBottomSheet(
     onSelectModel: (String) -> Unit = {},
     thinkingPreference: com.example.gemini.domain.model.ThinkingPreference = com.example.gemini.domain.model.ThinkingPreference(),
     onPreferenceSelected: ((com.example.gemini.domain.model.ThinkingPreference) -> Unit)? = null,
+    onPickCamera: () -> Unit = {},
     onPickImage: () -> Unit,
     onPickFile: () -> Unit,
     onPickFromFiles: () -> Unit,
@@ -113,17 +115,28 @@ fun AttachmentSelectorBottomSheet(
                     .fillMaxWidth()
                     .verticalScroll(scrollState)
             ) {
-                // Row of 3 EQUAL cards (96dp height, perfectly proportional)
+                // Horizontally scrollable attachment cards
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     AttachmentCard(
+                        icon = Icons.Outlined.PhotoCamera,
+                        label = "Camera /\nPhoto",
+                        modifier = Modifier.width(96.dp),
+                        onClick = {
+                            onDismiss()
+                            onPickCamera()
+                        }
+                    )
+
+                    AttachmentCard(
                         icon = Icons.Outlined.Image,
                         label = "Photo /\nImage",
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.width(96.dp),
                         onClick = {
                             onDismiss()
                             onPickImage()
@@ -133,7 +146,7 @@ fun AttachmentSelectorBottomSheet(
                     AttachmentCard(
                         icon = Icons.Outlined.Description,
                         label = "Document /\nFile",
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.width(96.dp),
                         onClick = {
                             onDismiss()
                             onPickFile()
@@ -143,7 +156,7 @@ fun AttachmentSelectorBottomSheet(
                     AttachmentCard(
                         icon = Icons.Outlined.FolderOpen,
                         label = "From\nFiles",
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.width(96.dp),
                         onClick = {
                             onDismiss()
                             onPickFromFiles()
@@ -159,11 +172,20 @@ fun AttachmentSelectorBottomSheet(
                     modifier = Modifier.padding(start = 20.dp, top = 8.dp, end = 20.dp)
                 )
 
-                // Model Section - Compact expandable single row
-                if (availableModels.isNotEmpty()) {
+                // Model Section - Filtered to Gemini models only (Low, Medium, High)
+                val geminiModels = remember(availableModels) {
+                    val filtered = availableModels.filter {
+                        it.family == com.example.gemini.domain.model.ModelFamily.GEMINI ||
+                        it.id.contains("gemini", ignoreCase = true) ||
+                        it.displayName.contains("gemini", ignoreCase = true)
+                    }
+                    if (filtered.isNotEmpty()) filtered else availableModels
+                }
+
+                if (geminiModels.isNotEmpty()) {
                     var isModelExpanded by remember { mutableStateOf(false) }
-                    val currentModel = availableModels.find { it.id == selectedModelId }
-                        ?: availableModels.firstOrNull()
+                    val currentModel = geminiModels.find { it.id == selectedModelId }
+                        ?: geminiModels.firstOrNull()
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -180,7 +202,7 @@ fun AttachmentSelectorBottomSheet(
                             fontWeight = FontWeight.Medium,
                             color = Color(0xFF8A8A8E)
                         )
-                        if (availableModels.size > 1) {
+                        if (geminiModels.size > 1) {
                             Text(
                                 text = if (isModelExpanded) "Collapse" else "Change",
                                 fontSize = 12.sp,
@@ -206,7 +228,7 @@ fun AttachmentSelectorBottomSheet(
                         border = BorderStroke(1.dp, Color(0x10000000))
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            // Active Model Row (Always visible)
+                            // Active Model Row (Always visible, checkmark removed)
                             if (currentModel != null) {
                                 val displayName = currentModel.displayName.ifBlank { currentModel.id }
                                 Row(
@@ -214,14 +236,14 @@ fun AttachmentSelectorBottomSheet(
                                         .fillMaxWidth()
                                         .defaultMinSize(minHeight = 52.dp)
                                         .clip(
-                                            if (isModelExpanded && availableModels.size > 1) {
+                                            if (isModelExpanded && geminiModels.size > 1) {
                                                 RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
                                             } else {
                                                 RoundedCornerShape(18.dp)
                                             }
                                         )
                                         .clickable {
-                                            if (availableModels.size > 1) {
+                                            if (geminiModels.size > 1) {
                                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                                 isModelExpanded = !isModelExpanded
                                             }
@@ -249,14 +271,7 @@ fun AttachmentSelectorBottomSheet(
                                         }
                                     }
 
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Selected",
-                                        tint = Color(0xFF2F6FED),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-
-                                    if (availableModels.size > 1) {
+                                    if (geminiModels.size > 1) {
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Icon(
                                             imageVector = if (isModelExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -268,14 +283,19 @@ fun AttachmentSelectorBottomSheet(
                                 }
                             }
 
-                            // Expanded list of other available models
+                            // Expanded list of other available models (Scrollable ~140dp max height)
                             AnimatedVisibility(
-                                visible = isModelExpanded && availableModels.size > 1,
+                                visible = isModelExpanded && geminiModels.size > 1,
                                 enter = fadeIn(),
                                 exit = fadeOut()
                             ) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    val otherModels = availableModels.filter { it.id != currentModel?.id }
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 140.dp)
+                                        .verticalScroll(rememberScrollState())
+                                ) {
+                                    val otherModels = geminiModels.filter { it.id != currentModel?.id }
                                     otherModels.forEachIndexed { index, model ->
                                         HorizontalDivider(
                                             thickness = 0.5.dp,
@@ -322,70 +342,6 @@ fun AttachmentSelectorBottomSheet(
                                                     )
                                                 }
                                             }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Thinking preference segmented control if available
-                    if (onPreferenceSelected != null) {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Thinking Level",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color(0xFF8A8A8E),
-                            modifier = Modifier.padding(horizontal = 20.dp)
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            color = Color.White,
-                            shadowElevation = 2.dp,
-                            border = BorderStroke(1.dp, Color(0x10000000))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                listOf(
-                                    com.example.gemini.domain.model.ThinkingLevel.LOW to "Low",
-                                    com.example.gemini.domain.model.ThinkingLevel.MEDIUM to "Medium",
-                                    com.example.gemini.domain.model.ThinkingLevel.HIGH to "High"
-                                ).forEach { (lvl, level) ->
-                                    val isPrefSelected = thinkingPreference.level == lvl
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(36.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .clickable {
-                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                onPreferenceSelected.invoke(thinkingPreference.copy(level = lvl))
-                                            },
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = if (isPrefSelected) Color(0xFF2F6FED).copy(alpha = 0.12f) else Color.Transparent,
-                                        border = if (isPrefSelected) BorderStroke(1.dp, Color(0xFF2F6FED).copy(alpha = 0.4f)) else null
-                                    ) {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier.fillMaxSize()
-                                        ) {
-                                            Text(
-                                                text = level,
-                                                fontSize = 13.5.sp,
-                                                fontWeight = if (isPrefSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                                color = if (isPrefSelected) Color(0xFF2F6FED) else Color(0xFF1A1A1A)
-                                            )
                                         }
                                     }
                                 }

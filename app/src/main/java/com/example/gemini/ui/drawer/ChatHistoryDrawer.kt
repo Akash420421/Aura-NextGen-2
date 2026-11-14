@@ -106,6 +106,8 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+enum class DrawerTabFilter { ALL, PIN, PROJECT, ARCHIVE }
+
 @Composable
 fun ChatHistoryDrawer(
     conversations: List<Conversation>,
@@ -228,16 +230,31 @@ fun ChatHistoryDrawer(
     var pinnedIds by remember {
         mutableStateOf(com.example.gemini.data.preferences.AuraCustomizePreferences.getPinnedConversationIds(context))
     }
+    var activeTabFilter by remember { mutableStateOf(DrawerTabFilter.ALL) }
 
     // Subagents/nested tool threads are hidden from the drawer to keep a clean, premium chat list
     val subagentsByParent = remember { emptyMap<String, List<Conversation>>() }
 
-    // Top-level conversations (filter out subagent tasks so only user conversations appear, sorted by pinned first)
-    val topLevelChats = remember(filtered, pinnedIds) {
-        filtered.filter { conv ->
+    // Top-level conversations filtered by category tabs (All, Pin, Project, Archive) and search query
+    val topLevelChats = remember(filtered, pinnedIds, activeTabFilter, archivedIds) {
+        val baseChats = filtered.filter { conv ->
             (conv.parentConversationId == null || conv.parentConversationId == conv.id) &&
                     conv.subagentTypeName == null
-        }.sortedWith(
+        }
+        val tabFiltered = when (activeTabFilter) {
+            DrawerTabFilter.ALL -> baseChats.filter { it.id !in archivedIds }
+            DrawerTabFilter.PIN -> baseChats.filter { it.id in pinnedIds && it.id !in archivedIds }
+            DrawerTabFilter.PROJECT -> baseChats.filter {
+                it.id !in archivedIds && (
+                    it.projectPath != null ||
+                    it.workspaceId != null ||
+                    it.title.contains("project", ignoreCase = true) ||
+                    it.title.contains("workspace", ignoreCase = true)
+                )
+            }
+            DrawerTabFilter.ARCHIVE -> baseChats.filter { it.id in archivedIds || it.archived }
+        }
+        tabFiltered.sortedWith(
             compareByDescending<Conversation> { pinnedIds.contains(it.id) }
                 .thenByDescending { it.updatedAt }
         )
@@ -799,14 +816,14 @@ fun ChatHistoryDrawer(
                         else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)
                     ),
                     modifier = Modifier
-                        .padding(top = 10.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
                         .fillMaxWidth()
-                        .height(40.dp)
+                        .height(42.dp)
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(start = 12.dp, end = 4.dp),
+                            .padding(horizontal = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -911,62 +928,34 @@ fun ChatHistoryDrawer(
             // breathing room between the header and the list
             Spacer(modifier = Modifier.height(10.dp))
 
-            if (showFilterBar) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 2.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val allItems = buildList {
-                        add(null to "All")
-                        visibleAgents.forEach { agent ->
-                            val label = when (agent) {
-                                com.example.gemini.domain.model.AgentKind.AGY -> "Antigravity"
-                                com.example.gemini.domain.model.AgentKind.CLAUDE -> "Claude"
-                                com.example.gemini.domain.model.AgentKind.OPENCODE -> "OpenCode"
-                                com.example.gemini.domain.model.AgentKind.CODEX -> "Codex"
-                            }
-                            add(agent to label)
-                        }
-                    }
-                    allItems.forEach { (agent, label) ->
-                        val selected = !jarvisFilter && agentFilter == agent
-                        val accent = agent?.accent() ?: textPrimary
-                        Text(
-                            text = label,
-                            fontSize = 11.5.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (selected) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (selected) accent.copy(alpha = 0.14f) else Color.Transparent)
-                                .clickable { jarvisFilter = false; agentFilter = agent }
-                                .padding(horizontal = 10.dp, vertical = 4.dp)
-                        )
-                    }
-                    if (jarvisEnabled) {
-                        val jarvisAccent = com.example.gemini.ui.jarvis.Cyan
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (jarvisFilter) jarvisAccent.copy(alpha = 0.14f) else Color.Transparent)
-                                .clickable { agentFilter = null; jarvisFilter = true }
-                                .padding(start = 7.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            com.example.gemini.ui.jarvis.JarvisBotIcon(15.dp, if (jarvisFilter) jarvisAccent else jarvisAccent.copy(alpha = 0.7f))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Jarvis",
-                                fontSize = 11.5.sp,
-                                fontWeight = if (jarvisFilter) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (jarvisFilter) jarvisAccent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
-                        }
-                    }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 2.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val tabItems = listOf(
+                    DrawerTabFilter.ALL to "All",
+                    DrawerTabFilter.PIN to "Pin",
+                    DrawerTabFilter.PROJECT to "Project",
+                    DrawerTabFilter.ARCHIVE to "Archive"
+                )
+                tabItems.forEach { (cat, label) ->
+                    val selected = activeTabFilter == cat
+                    val accent = Color(0xFF2F6FED)
+                    Text(
+                        text = label,
+                        fontSize = 12.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (selected) accent.copy(alpha = 0.14f) else Color.Transparent)
+                            .clickable { activeTabFilter = cat }
+                            .padding(horizontal = 12.dp, vertical = 5.dp)
+                    )
                 }
             }
 
@@ -1640,17 +1629,75 @@ private fun ChatHistoryItemRow(
         var newTitle by remember { mutableStateOf(conv.title) }
         AlertDialog(
             onDismissRequest = { showRename = false },
-            title = { Text("Rename chat", fontWeight = FontWeight.Bold) },
+            containerColor = Color.White,
+            shape = RoundedCornerShape(22.dp),
+            tonalElevation = 6.dp,
+            title = {
+                Text(
+                    text = "Rename chat",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF1A1A1A)
+                )
+            },
             text = {
-                OutlinedTextField(value = newTitle, onValueChange = { newTitle = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Column(modifier = Modifier.padding(top = 2.dp)) {
+                    OutlinedTextField(
+                        value = newTitle,
+                        onValueChange = { newTitle = it },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF2F6FED),
+                            unfocusedBorderColor = Color(0x1F000000),
+                            focusedContainerColor = Color(0xFFF8F7FA),
+                            unfocusedContainerColor = Color(0xFFF8F7FA),
+                            focusedTextColor = Color(0xFF1A1A1A),
+                            unfocusedTextColor = Color(0xFF1A1A1A)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    claudeActions.rename(conv.id, newTitle)
-                    showRename = false
-                }, enabled = newTitle.isNotBlank()) { Text("Save") }
+                Surface(
+                    onClick = {
+                        if (newTitle.isNotBlank()) {
+                            claudeActions.rename(conv.id, newTitle)
+                            showRename = false
+                        }
+                    },
+                    enabled = newTitle.isNotBlank(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (newTitle.isNotBlank()) Color(0xFF2F6FED) else Color(0xFFE5E5EA),
+                    shadowElevation = if (newTitle.isNotBlank()) 2.dp else 0.dp
+                ) {
+                    Text(
+                        "Save",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (newTitle.isNotBlank()) Color.White else Color(0xFF8E8E93),
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 9.dp)
+                    )
+                }
             },
-            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } }
+            dismissButton = {
+                Surface(
+                    onClick = { showRename = false },
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFFF2F1F5),
+                    border = BorderStroke(1.dp, Color(0x0A000000)),
+                    modifier = Modifier.padding(end = 6.dp)
+                ) {
+                    Text(
+                        "Cancel",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF555555),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+                    )
+                }
+            }
         )
     }
 
@@ -1697,10 +1744,9 @@ private fun ChatHistoryItemRow(
                     imageVector = Icons.Outlined.PushPin,
                     contentDescription = "Pinned",
                     tint = Color(0xFF2F6FED),
-                    modifier = Modifier
-                        .size(15.dp)
-                        .padding(end = 4.dp)
+                    modifier = Modifier.size(17.dp)
                 )
+                Spacer(modifier = Modifier.width(6.dp))
             }
 
             Text(
@@ -1790,6 +1836,7 @@ private fun ChatHistoryItemRow(
         DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
+            offset = androidx.compose.ui.unit.DpOffset(x = 16.dp, y = 0.dp),
             shape = RoundedCornerShape(18.dp),
             containerColor = Color.White,
             tonalElevation = 0.dp,

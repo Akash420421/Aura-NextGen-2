@@ -1,14 +1,16 @@
 {
-  "version_code": 212,
-  "version_name": "2.1.2",
+  "version_code": 213,
+  "version_name": "2.1.3",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.1.2 Chat & Sidebar Polish, Gemini Image Flow, Gallery Delete & Pinned Chats",
-    "Thinking Accordion Collapsed: Thought processes now stay clean and collapsed by default without auto-expanding",
-    "Gemini-Style Image Flow: 'Creating your image' sparkle header, shimmer skeleton preview card, and input locking with Stop button",
-    "Images Gallery Auto-Indexing: Instant indexing of all chat-generated images and local folders, plus full Delete support",
-    "Sidebar Sub-Agents Cleanup: Clean top-level chat list with no subagent noise or nested badge popups",
-    "Context Menu & Pin to Top: Redesigned Porcelain long-press menu with Pin to Top, Rename, Share, Export Markdown, Archive, and Delete"
+    "Aura AI v2.1.3 — Complete Design Refinement & Walkthrough Bugfixes",
+    "Consolidated Thinking Accordions: Multi-turn thoughts merged into a single block with clean chevron and no redundant bulb icon",
+    "Images Gallery Strict Indexing: Filtered out blank/ghost cards; balanced 32dp circular glassmorphism floating actions",
+    "Sidebar Drawer Category Tabs: New functional category pills [ All ] [ Pin ] [ Project ] [ Archive ] with search margin fixes",
+    "Porcelain 3D Rename Dialog: Custom white rounded dialog with 22dp smooth corners and tactile 3D buttons",
+    "Porcelain Workspace Picker: Horizontal 'Active' badge pill, clean folder icon, and elevated action buttons",
+    "Spoken Language Picker: Scrollable sheet container displaying full list beyond Tamil",
+    "Add to Chat (+) Overhaul: Horizontal attachment cards with new Camera option, clean active model without checkmark, removed thinking level, and Gemini-only scrollable models"
   ],
   "is_critical": false
 }

@@ -221,7 +221,7 @@ internal fun openOptionsFor(entry: ExplorerEntry, ideAvailable: Boolean, content
     val textual = contentIsText ?: k.isTextual
     val ide = if (!ideAvailable) null else when {
         textual -> OpenOption(OpenChoice.IDE, Icons.Outlined.Code, "Code editor", "Edit in the IDE", recommended = true)
-        k == FileKind.IMAGE -> OpenOption(OpenChoice.IDE, Icons.Outlined.Code, "View in IDE", "Image viewer with zoom", recommended = false)
+        k == FileKind.IMAGE -> null // Hide "View in IDE" for images
         else -> OpenOption(OpenChoice.IDE, Icons.Outlined.Code, "Code editor", "Not a text file: it may not display or save correctly", recommended = false, warn = true)
     }
     val external = OpenOption(

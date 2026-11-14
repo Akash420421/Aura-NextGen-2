@@ -88,7 +88,10 @@ fun AgentToolCallCard(
     val isListDir = toolCall.toolType == ToolType.LIST_DIR
     val isFind = toolCall.toolType == ToolType.FIND
     val isGrep = toolCall.toolType == ToolType.GREP_SEARCH
-    val isGenImg = toolCall.toolType == ToolType.GENERATE_IMAGE
+    val isGenImg = toolCall.toolType == ToolType.GENERATE_IMAGE ||
+        toolCall.name.contains("image", ignoreCase = true) ||
+        (toolCall.toolType == ToolType.SUBAGENT && toolCall.input.contains("image", ignoreCase = true)) ||
+        toolCall.input.contains("image-generator", ignoreCase = true)
     val isMcp = toolCall.toolType == ToolType.MCP
     val isBash = toolCall.toolType == ToolType.BASH
     val isSystemNotice = toolCall.toolType == ToolType.SYSTEM_NOTIFICATION || toolCall.name == "system_notice"
