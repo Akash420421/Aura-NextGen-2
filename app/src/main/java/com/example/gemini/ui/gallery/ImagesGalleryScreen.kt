@@ -120,9 +120,9 @@ fun ImagesGalleryScreen(
                 }
             }
 
-            // 0. From In-RAM Image Cache (HubMediaResolver)
+            // 0. From In-RAM Image Cache (HubMediaResolver) - only generated data URIs
             com.example.gemini.data.remote.HubMediaResolver.getAllCachedImages().forEach { (k, v) ->
-                if (v.isNotBlank()) {
+                if (v.isNotBlank() && v.startsWith("data:image/")) {
                     val title = if (k.startsWith("/") || k.startsWith("file://")) {
                         File(k.removePrefix("file://")).nameWithoutExtension.replace('_', ' ').replace('-', ' ').replaceFirstChar { it.uppercase() }
                     } else "Generated Image"
@@ -130,8 +130,8 @@ fun ImagesGalleryScreen(
                 }
             }
 
-            // 1. From Active Messages (Tool calls, attachments, markdown, raw file paths)
-            messages.forEach { msg ->
+            // 1. From Assistant Messages only (Tool outputs, generated images, assistant markdown)
+            messages.filter { it.role == com.example.gemini.domain.model.MessageRole.ASSISTANT }.forEach { msg ->
                 val time = msg.createdAt
                 msg.toolCalls.forEach { tc ->
                     val out = tc.output.trim()
@@ -144,66 +144,44 @@ fun ImagesGalleryScreen(
                         }
                     }
                 }
-                msg.attachments.forEach { att ->
-                    if (att.isImage && att.path.isNotBlank()) {
-                        val uri = if (att.path.startsWith("file://") || att.path.startsWith("http") || att.path.startsWith("data:")) att.path
-                        else "file://${att.path}"
-                        addItem(uri, att.name.ifBlank { "Attached image" }, time)
-                    }
-                }
                 MARKDOWN_IMAGE_REGEX.findAll(msg.content).forEach { match ->
-                    val alt = match.groupValues.getOrNull(1) ?: "Chat image"
+                    val alt = match.groupValues.getOrNull(1) ?: "Generated image"
                     val rawUrl = match.groupValues.getOrNull(2)?.trim().orEmpty()
-                    if (rawUrl.isNotBlank()) {
+                    if (rawUrl.isNotBlank() && !rawUrl.contains(".user_uploaded") && !rawUrl.contains("camera_")) {
                         val cleanUrl = if (rawUrl.startsWith("/") && !rawUrl.startsWith("file://")) "file://$rawUrl" else rawUrl
                         addItem(cleanUrl, alt, time)
                     }
                 }
-                Regex("(/[^\\s\"'<>]+?\\.(png|jpe?g|webp|gif))", RegexOption.IGNORE_CASE).findAll(msg.content).forEach { match ->
-                    val path = match.groupValues[1].trim()
-                    addItem("file://$path", File(path).nameWithoutExtension.replace('_', ' '), time)
-                }
             }
 
-            // 2. Scan Aura & AntiGem Download/Picture directories
-            val scanFolders = listOf(
-                File("/sdcard/Download/AntiGem"),
+            // 2. Scan dedicated Aura AI creation directories only (exclude user uploads and general photos)
+            val auraCreationFolders = listOf(
                 File("/sdcard/Pictures/AURA_Vision"),
-                File("/sdcard/Pictures"),
                 File("/sdcard/DCIM/AURA_AI_Chats"),
+                File("/sdcard/Download/AntiGem"),
                 File(context.filesDir, "images"),
                 File(context.cacheDir, "images"),
-                File(context.cacheDir, "image_cache"),
-                File(context.cacheDir, "claude-attachments"),
-                File(context.filesDir, "claude-attachments"),
-                context.cacheDir,
-                File("/data/user/0/com.termux/files/home/.antigem/uploads"),
-                File("/data/user/0/com.termux/files/home/.gemini/antigravity-cli/brain"),
-                File("/data/user/0/com.termux/files/home/projects")
+                File("/data/user/0/com.termux/files/home/.gemini/antigravity-cli/brain")
             )
 
-            scanFolders.forEach { folder ->
+            auraCreationFolders.forEach { folder ->
                 if (folder.exists() && folder.isDirectory) {
-                    val files = if (folder.name == "brain" || folder.name == "projects") {
+                    val files = if (folder.name == "brain") {
                         folder.walkTopDown().maxDepth(6).filter {
-                            it.isFile && it.name.matches(IMAGE_REGEX) && !it.path.contains("/node_modules/") && !it.path.contains("/.git/")
+                            it.isFile && it.name.matches(IMAGE_REGEX) &&
+                                !it.path.contains(".user_uploaded") &&
+                                !it.path.contains("/uploads/") &&
+                                !it.name.startsWith("camera_") &&
+                                (it.path.contains(".system_generated") || it.path.contains("/artifacts/"))
                         }.toList()
                     } else {
-                        folder.listFiles()?.filter { it.isFile && it.name.matches(IMAGE_REGEX) } ?: emptyList()
+                        folder.listFiles()?.filter {
+                            it.isFile && it.name.matches(IMAGE_REGEX) && !it.name.startsWith("camera_")
+                        } ?: emptyList()
                     }
                     files.forEach { f ->
                         addItem(f.absolutePath, f.nameWithoutExtension.replace('_', ' '), f.lastModified())
                     }
-                }
-            }
-
-            // 3. Scan root Downloads for AI files (file_000...png, 179...png, IMG_...png/jpg)
-            val downloadsFolder = File("/sdcard/Download")
-            if (downloadsFolder.exists() && downloadsFolder.isDirectory) {
-                downloadsFolder.listFiles()?.filter { f ->
-                    f.isFile && (f.name.startsWith("file_000") || f.name.startsWith("IMG_") || f.name.startsWith("AURA_")) && f.name.matches(IMAGE_REGEX)
-                }?.forEach { f ->
-                    addItem(f.absolutePath, f.nameWithoutExtension.replace('_', ' '), f.lastModified())
                 }
             }
 

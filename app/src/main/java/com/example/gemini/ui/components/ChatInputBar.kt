@@ -812,29 +812,28 @@ fun ChatInputBar(
 
                             Spacer(modifier = Modifier.width(8.dp))
 
-                            // Waveform voice mode button
-                            if (onStartVoiceCall != null) {
-                                Box(
-                                    modifier = Modifier.size(48.dp),
-                                    contentAlignment = Alignment.Center
+                            // Antigravity Voice Call Button
+                            if (onStartVoiceCall != null && !isRecordingAudio && !isLiveDictating) {
+                                Surface(
+                                    onClick = onStartVoiceCall,
+                                    shape = CircleShape,
+                                    color = if (voiceCallActive) GeminiBlue else (if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4)),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (voiceCallActive) GeminiBlue else (if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6))
+                                    ),
+                                    modifier = Modifier.size(36.dp)
                                 ) {
-                                    Surface(
-                                        onClick = onStartVoiceCall,
-                                        shape = CircleShape,
-                                        color = if (voiceCallActive) GeminiBlue else Color(0xFF151B2A),
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.GraphicEq,
-                                                contentDescription = "Voice mode",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.HeadsetMic,
+                                            contentDescription = if (voiceCallActive) "Open voice call" else "Start voice call",
+                                            tint = if (voiceCallActive) Color.White else (if (isDark) Color.White else Color(0xFF1A1A1A)),
+                                            modifier = Modifier.size(18.dp)
+                                        )
                                     }
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                             }
 
                             // Mic / Send Button with 150ms crossfade
@@ -1595,23 +1594,19 @@ fun ChatInputBar(
                             Surface(
                                 onClick = onStartVoiceCall,
                                 shape = CircleShape,
-                                color = when {
-                                    voiceCallActive -> GeminiBlue
-                                    auraHomeStyle -> Color(0xFF151B2A)
-                                    else -> MaterialTheme.colorScheme.background
-                                },
+                                color = if (voiceCallActive) GeminiBlue else MaterialTheme.colorScheme.background,
                                 border = BorderStroke(
                                     1.dp,
-                                    if (voiceCallActive || auraHomeStyle) Color.Transparent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                                    if (voiceCallActive) GeminiBlue else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
                                 ),
-                                modifier = Modifier.size(if (auraHomeStyle) 52.dp else 34.dp)
+                                modifier = Modifier.size(34.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
-                                        imageVector = if (auraHomeStyle) Icons.Rounded.GraphicEq else Icons.Rounded.HeadsetMic,
-                                        contentDescription = if (voiceCallActive) "Open voice call" else "Start voice conversation",
-                                        tint = if (voiceCallActive || auraHomeStyle) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
-                                        modifier = Modifier.size(if (auraHomeStyle) 24.dp else 18.dp)
+                                        imageVector = Icons.Rounded.HeadsetMic,
+                                        contentDescription = if (voiceCallActive) "Open voice call" else "Start voice call",
+                                        tint = if (voiceCallActive) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
                             }

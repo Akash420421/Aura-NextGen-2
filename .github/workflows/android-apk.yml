@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.5-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.6-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,15 +70,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.1.5
-          name: Aura AI v2.1.5
+          tag_name: v2.1.6
+          name: Aura AI v2.1.6
           body: |
-            ### Aura AI v2.1.5 — Voice Call Daemon Sync, Gallery Frosted Buttons, Image Indexing & Scroll Polish
-            - **Voice Call Lifecycle Sync:** Fixed EOFException loop by guaranteeing conversation registration on hub language server before voice connection.
-            - **Voice Reconnect Logic:** Move retry reset to confirmed listening state so diagnostics surface properly on failures instead of looping.
-            - **Gallery Frosted White Controls:** Removed black circular backgrounds from image action buttons in favor of clean frosted glassmorphism.
-            - **Comprehensive Image Indexing:** Added in-memory RAM cache and deep filesystem scanning (depth 6) so all generated images appear in gallery.
-            - **Chat Scroll Smoothness:** Eliminated image skeleton height recalculations and layout jitter during feed scrolling.
+            ### Aura AI v2.1.6 — Upstream AntiGem Voice Call Sync, Chat Scroll Smoothness & Aura Gallery Filter
+            - **Voice Call Upstream Sync:** Clean port of upstream AntiGem voice calling architecture, protocols and preview components.
+            - **Chat Feed Smooth Scrolling:** Removed per-block touch gesture interceptors and guarded layout measurements to eliminate scroll lag and stutter.
+            - **Aura-Only Image Gallery:** Filtered gallery to strictly show Aura-generated images, excluding device photos and user-uploaded media.
+            - **Restored Assistant Message Actions:** Footer controls for copying, retry, and details seamlessly rendered below assistant responses.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -430,6 +430,46 @@ fun ChatScreen(
         ) beginVoiceCall()
         else voiceCallPermission.launch(android.Manifest.permission.RECORD_AUDIO)
     }
+
+    // before the first call: pick a voice (swipe through them and hear each one)
+    var showVoicePicker by remember { mutableStateOf(false) }
+    val onStartVoiceCall: () -> Unit = {
+        com.example.gemini.data.voice.AgyVoicePreferences.init(context)
+        when {
+            voiceCall.active -> com.example.gemini.data.voice.AgyVoiceCall.setMinimized(false)
+            !systemConnectionState.canSend -> com.example.gemini.ui.components.AppToastHelper.showToast(
+                "Start the server to call Antigravity.", com.example.gemini.ui.components.ChatToastType.ERROR
+            )
+            // agy refuses voice calls for cloud chats (its /voice/ws answers 404 for them)
+            currentConv?.cloudProjectId != null -> com.example.gemini.ui.components.AppToastHelper.showToast(
+                com.example.gemini.data.voice.AgyVoiceCall.CLOUD_CHAT_NO_VOICE, com.example.gemini.ui.components.ChatToastType.INFO
+            )
+            !com.example.gemini.data.voice.AgyVoicePreferences.picked.value -> showVoicePicker = true
+            else -> callWithMicPermission()
+        }
+    }
+    if (showVoicePicker) {
+        com.example.gemini.ui.voice.AgyVoicePickerDialog(
+            initialVoice = com.example.gemini.data.voice.AgyVoicePreferences.voice.value,
+            actionLabel = { "Call with $it" },
+            onChoose = { name ->
+                com.example.gemini.data.voice.AgyVoicePreferences.setVoice(name)
+                com.example.gemini.data.voice.AgyVoicePreferences.setPicked()
+                showVoicePicker = false
+                callWithMicPermission()
+            },
+            onDismiss = { showVoicePicker = false }
+        )
+    }
+    // the voice agent moved the call to another chat (it started a new one): show that chat
+    LaunchedEffect(Unit) {
+        com.example.gemini.data.voice.AgyVoiceCall.conversationMoved.collect { id -> viewModel.selectConversation(id) }
+    }
+    // the model picked for the chat changed during the call: the agent plans with it from now on
+    LaunchedEffect(agyPickedModel, voiceCall.inCall) {
+        if (voiceCall.inCall) com.example.gemini.data.voice.AgyVoiceCall.setPlanModel(viewModel.agyBackend.planModelNumber())
+    }
+
     val auraJarvisMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) com.example.gemini.data.jarvis.JarvisController.onMicPressed()
         else com.example.gemini.ui.components.AppToastHelper.showToast(
@@ -475,45 +515,6 @@ fun ChatScreen(
             }
         }
     }
-    // before the first call: pick a voice (swipe through them and hear each one)
-    var showVoicePicker by remember { mutableStateOf(false) }
-    val onStartVoiceCall: () -> Unit = {
-        com.example.gemini.data.voice.AgyVoicePreferences.init(context)
-        when {
-            voiceCall.active -> com.example.gemini.data.voice.AgyVoiceCall.setMinimized(false)
-            !systemConnectionState.canSend -> com.example.gemini.ui.components.AppToastHelper.showToast(
-                "Start the server to call Antigravity.", com.example.gemini.ui.components.ChatToastType.ERROR
-            )
-            // agy refuses voice calls for cloud chats (its /voice/ws answers 404 for them)
-            currentConv?.cloudProjectId != null -> com.example.gemini.ui.components.AppToastHelper.showToast(
-                com.example.gemini.data.voice.AgyVoiceCall.CLOUD_CHAT_NO_VOICE, com.example.gemini.ui.components.ChatToastType.INFO
-            )
-            !com.example.gemini.data.voice.AgyVoicePreferences.picked.value -> showVoicePicker = true
-            else -> callWithMicPermission()
-        }
-    }
-    if (showVoicePicker) {
-        com.example.gemini.ui.voice.AgyVoicePickerDialog(
-            initialVoice = com.example.gemini.data.voice.AgyVoicePreferences.voice.value,
-            actionLabel = { "Call with $it" },
-            onChoose = { name ->
-                com.example.gemini.data.voice.AgyVoicePreferences.setVoice(name)
-                com.example.gemini.data.voice.AgyVoicePreferences.setPicked()
-                showVoicePicker = false
-                callWithMicPermission()
-            },
-            onDismiss = { showVoicePicker = false }
-        )
-    }
-    // the voice agent moved the call to another chat (it started a new one): show that chat
-    LaunchedEffect(Unit) {
-        com.example.gemini.data.voice.AgyVoiceCall.conversationMoved.collect { id -> viewModel.selectConversation(id) }
-    }
-    // the model picked for the chat changed during the call: the agent plans with it from now on
-    LaunchedEffect(agyPickedModel, voiceCall.inCall) {
-        if (voiceCall.inCall) com.example.gemini.data.voice.AgyVoiceCall.setPlanModel(viewModel.agyBackend.planModelNumber())
-    }
-
     val pendingApprovals by viewModel.pendingApprovals.collectAsState()
 
     var currentToast by remember { mutableStateOf<ChatToast?>(null) }
@@ -861,7 +862,6 @@ fun ChatScreen(
             }
         }
     }
-    // Antigravity voice calls of this chat (saved by the hub) and the one going on now, as markers in the chat
     val agyVoiceChats by com.example.gemini.data.voice.AgyVoiceChats.chats.collectAsState()
     LaunchedEffect(currentConv?.id, isAgyChat) {
         if (isAgyChat) currentConv?.id?.let { com.example.gemini.data.voice.AgyVoiceChats.refresh(it) }
@@ -2364,10 +2364,6 @@ fun ChatScreen(
                                             }
                                         }
                                         is ChatFeedItem.AssistantBlock -> {
-                                            var showAssistantMenu by remember { mutableStateOf(false) }
-                                            val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-                                            val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -2381,11 +2377,7 @@ fun ChatScreen(
                                                         onRejectTool = if (isTool) { { toolCall -> if (toolCall.toolType == ToolType.ASK_CHOICE) viewModel.cancelUserChoices(toolCall, feedItem.messageId) else viewModel.rejectTerminalTool(toolCall, feedItem.messageId) } } else null,
                                                         onTerminateTool = if (isTool) { { toolCall -> viewModel.terminateRunningTerminalTool(toolCall, feedItem.messageId) } } else null,
                                                         onSubmitChoices = if (isTool) { { toolCall, responses, summaryPayload -> viewModel.submitUserChoices(toolCall, feedItem.messageId, responses, summaryPayload) } } else null,
-                                                        onSkipChoices = if (isTool) { { toolCall, responses -> viewModel.skipUserChoices(toolCall, feedItem.messageId, responses) } } else null,
-                                                        onRetry = {
-                                                            viewModel.retryMessage(feedItem.messageId)
-                                                            userSentMessageTrigger++
-                                                        }
+                                                        onSkipChoices = if (isTool) { { toolCall, responses -> viewModel.skipUserChoices(toolCall, feedItem.messageId, responses) } } else null
                                                     )
                                                 }
                                                 val selectable = when (feedItem.block) {
@@ -2394,70 +2386,25 @@ fun ChatScreen(
                                                     is MarkdownBlock.Alert, is MarkdownBlock.Table -> true
                                                     else -> false
                                                 }
-                                                if (selectable) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .pointerInput(feedItem.messageId) {
-                                                                detectTapGestures(
-                                                                    onLongPress = {
-                                                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                                                        showAssistantMenu = true
-                                                                    }
-                                                                )
-                                                            }
-                                                    ) {
-                                                        SelectionContainer { blockView() }
-                                                    }
-                                                } else blockView()
-
-                                                DropdownMenu(
-                                                    expanded = showAssistantMenu,
-                                                    onDismissRequest = { showAssistantMenu = false },
-                                                    shape = RoundedCornerShape(16.dp),
-                                                    containerColor = Color.White,
-                                                    tonalElevation = 6.dp,
-                                                    modifier = Modifier.widthIn(min = 160.dp)
-                                                ) {
-                                                    DropdownMenuItem(
-                                                        text = { Text("Copy", fontSize = 14.sp, color = Color(0xFF1A1A1A)) },
-                                                        leadingIcon = {
-                                                            Icon(
-                                                                imageVector = Icons.Outlined.ContentCopy,
-                                                                contentDescription = "Copy",
-                                                                tint = Color(0xFF1A1A1A),
-                                                                modifier = Modifier.size(18.dp)
-                                                            )
-                                                        },
-                                                        onClick = {
-                                                            showAssistantMenu = false
-                                                            val content = messages.find { it.id == feedItem.messageId }?.content ?: ""
-                                                            clipboard.setText(AnnotatedString(content))
-                                                            Toast.makeText(context, "Copied response", Toast.LENGTH_SHORT).show()
-                                                        }
-                                                    )
-                                                    DropdownMenuItem(
-                                                        text = { Text("Regenerate", fontSize = 14.sp, color = Color(0xFF1A1A1A)) },
-                                                        leadingIcon = {
-                                                            Icon(
-                                                                imageVector = Icons.Default.Refresh,
-                                                                contentDescription = "Regenerate",
-                                                                tint = Color(0xFF1A1A1A),
-                                                                modifier = Modifier.size(18.dp)
-                                                            )
-                                                        },
-                                                        onClick = {
-                                                            showAssistantMenu = false
-                                                            viewModel.retryMessage(feedItem.messageId)
-                                                            userSentMessageTrigger++
-                                                        }
-                                                    )
-                                                }
+                                                if (selectable) SelectionContainer { blockView() } else blockView()
                                             }
                                         }
                                         // with the working animation on, the working row below replaces these dots
                                         is ChatFeedItem.AssistantTyping -> Unit
-                                        is ChatFeedItem.AssistantFooter -> Unit
+                                        is ChatFeedItem.AssistantFooter -> {
+                                            AssistantMessageFooter(
+                                                message = feedItem.message,
+                                                modifier = Modifier.animateItem(fadeInSpec = tween(220), placementSpec = null, fadeOutSpec = null),
+                                                isDevModeEnabled = isDevModeEnabled,
+                                                onRetry = { targetMsg ->
+                                                    viewModel.retryMessage(targetMsg.id)
+                                                    userSentMessageTrigger++
+                                                },
+                                                onViewRawPayload = { payloadJson ->
+                                                    showRawPayloadDialog = payloadJson
+                                                }
+                                            )
+                                        }
                                         is ChatFeedItem.StreamingMessage -> {
                                             MessageBubble(
                                                 message = feedItem.message,
@@ -2916,10 +2863,7 @@ fun ChatScreen(
                     com.example.gemini.ui.jarvis.JarvisCommandStrip(chatId = currentConv!!.id, onOpenChat = openJarvisLinkedChat, toolsMissing = jarvisToolsMissing)
                 }
 
-                // a minimized Antigravity voice call
-                com.example.gemini.ui.voice.AgyVoiceCallPill(
-                    agentWorking = isActivelyRunning && currentConv?.id == voiceCall.conversationId
-                )
+
 
                 // an Antigravity cloud chat: its project, web preview, run a command, the chat on the web
                 if (isAgyChat && currentConv?.isCloud == true) {
@@ -2935,6 +2879,11 @@ fun ChatScreen(
                     )
                 }
 
+
+                // a minimized Antigravity voice call
+                com.example.gemini.ui.voice.AgyVoiceCallPill(
+                    agentWorking = isActivelyRunning && currentConv?.id == voiceCall.conversationId
+                )
 
                 if (isAuraHome && auraHomeVoice) {
                     com.example.gemini.ui.home.AuraVoiceActions(

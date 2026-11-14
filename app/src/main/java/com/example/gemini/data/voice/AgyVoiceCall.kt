@@ -390,6 +390,7 @@ object AgyVoiceCall {
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             if (!current(webSocket)) return
+            s.linkRetries = 0
             s.socketOpen = true
             s.openedAt = SystemClock.elapsedRealtime()
             note(s, "Connected to the hub (voice ${s.voice}, language ${AgyVoicePreferences.acceptLanguage(s.language)})")
@@ -463,24 +464,15 @@ object AgyVoiceCall {
             }
             return
         }
-        // the link to the hub dropped mid-call or during initial connection: reconnect a few times
-        if (network && s.linkRetries < MAX_LINK_RETRIES) {
+        // the link to the hub dropped mid-call (network change, hub restart): reconnect a few times
+        if (network && st.connectedAt > 0 && s.linkRetries < MAX_LINK_RETRIES) {
             s.linkRetries++
             val attempt = s.linkRetries
-            _state.update {
-                it.copy(
-                    phase = if (st.connectedAt > 0) Phase.RECONNECTING else Phase.CONNECTING,
-                    attempt = attempt,
-                    maxAttempts = MAX_LINK_RETRIES,
-                    statusText = if (st.connectedAt > 0) "Reconnecting…" else "Connecting to voice agent…",
-                    agentSpeaking = false
-                )
-            }
+            _state.update { it.copy(phase = Phase.RECONNECTING, attempt = attempt, maxAttempts = MAX_LINK_RETRIES, statusText = "Reconnecting…", agentSpeaking = false) }
             s.player.clear()
             s.startPulses()
             scope.launch {
-                val delayMs = if (st.connectedAt > 0) (1000L shl (attempt - 1)) else (500L * attempt)
-                delay(delayMs)
+                delay(1000L shl (attempt - 1))
                 if (session === s && !s.endRequested) openSocket(s)
             }
             return
@@ -536,7 +528,6 @@ object AgyVoiceCall {
                 if (it.connectedAt > 0) it else it.copy(phase = Phase.CONNECTING, statusText = "Starting the voice agent…")
             }
             LinkState.LISTENING -> {
-                s.linkRetries = 0 // Successfully reached live listening state; reset retry count
                 val first = _state.value.connectedAt == 0L
                 _state.update {
                     it.copy(

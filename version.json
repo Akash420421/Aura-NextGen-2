@@ -1,14 +1,13 @@
 {
-  "version_code": 215,
-  "version_name": "2.1.5",
+  "version_code": 216,
+  "version_name": "2.1.6",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.1.5 — Voice Call Daemon Sync, Gallery Frosted Buttons, Image Indexing & Scroll Polish",
-    "Voice Call Lifecycle Sync: Fixed EOFException loop by ensuring conversation registration on hub language server before voice connection",
-    "Voice Reconnect Logic: Move retry reset to confirmed listening state so diagnostics surface properly on failures instead of looping",
-    "Gallery Frosted White Controls: Removed black circular backgrounds from image action buttons in favor of clean frosted glassmorphism",
-    "Comprehensive Image Indexing: Added in-memory RAM cache and deep filesystem scanning (depth 6) so all generated images appear in gallery",
-    "Chat Scroll Smoothness: Eliminated image skeleton height recalculations and layout jitter during feed scrolling"
+    "Aura AI v2.1.6 — Upstream AntiGem Voice Call Sync, Chat Scroll Smoothness & Aura Gallery Filter",
+    "Voice Call Upstream Sync: Clean port of upstream AntiGem voice calling architecture, protocols and preview components",
+    "Chat Feed Smooth Scrolling: Removed per-block touch gesture interceptors and guarded layout measurements to eliminate scroll lag and stutter",
+    "Aura-Only Image Gallery: Filtered gallery to strictly show Aura-generated images, excluding device photos and user-uploaded media",
+    "Restored Assistant Message Actions: Footer controls for copying, retry, and details seamlessly rendered below assistant responses"
   ],
   "is_critical": false
 }

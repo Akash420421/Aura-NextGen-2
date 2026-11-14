@@ -480,7 +480,11 @@ fun UserMessageBubble(
                                 color = Color(0xFF1A1A1A),
                                 maxLines = if (isTextExpanded) Int.MAX_VALUE else 6,
                                 overflow = TextOverflow.Ellipsis,
-                                onTextLayout = { if (!isTextExpanded) isTextOverflowing = it.hasVisualOverflow }
+                                onTextLayout = {
+                                    if (!isTextExpanded && isTextOverflowing != it.hasVisualOverflow) {
+                                        isTextOverflowing = it.hasVisualOverflow
+                                    }
+                                }
                             )
                         }
                         if (isTextExpanded || isTextOverflowing) {
