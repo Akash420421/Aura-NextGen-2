@@ -2441,49 +2441,7 @@ fun ChatScreen(
                         }
                     }
 
-                    // Clean "Scroll to latest message" button (only in active chat when scrolled up)
-                    val showScrollToBottom = feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
 
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = showScrollToBottom,
-                        enter = fadeIn(animationSpec = tween(150)),
-                        exit = fadeOut(animationSpec = tween(150)),
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 76.dp)
-                    ) {
-                        val isDark = isAppInDarkTheme()
-                        Surface(
-                            onClick = {
-                                scope.launch {
-                                    try {
-                                        if (feedItems.isNotEmpty()) {
-                                            listState.animateScrollToItem(maxOf(0, feedItems.size - 1))
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.w("ChatScreen", "Scroll to bottom failed: ${e.message}")
-                                    }
-                                }
-                            },
-                            shape = CircleShape,
-                            color = if (isDark) Color(0xFF2A2A2C) else Color.White,
-                            shadowElevation = 2.dp,
-                            border = BorderStroke(1.dp, if (isDark) Color(0xFF3A3A3C) else Color(0xFFE8E8EC)),
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = "Scroll to latest message",
-                                    tint = if (isDark) Color(0xFFD1D1D6) else Color(0xFF4A4A4E),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
 
                     // Floating Slash Commands & Skills Autocomplete Suggestions
                     val slash = slashTrigger
@@ -2639,8 +2597,51 @@ fun ChatScreen(
 
             val chatBottomSection = @Composable {
                 Column(
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Floating "Scroll to latest message" button (centered horizontally directly above composer with safe clearance)
+                    val showScrollToBottom = feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
+
+                    AnimatedVisibility(
+                        visible = showScrollToBottom,
+                        enter = fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.8f, animationSpec = tween(150)),
+                        exit = fadeOut(animationSpec = tween(150)) + scaleOut(targetScale = 0.8f, animationSpec = tween(150)),
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    ) {
+                        val isDark = isAppInDarkTheme()
+                        Surface(
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        if (feedItems.isNotEmpty()) {
+                                            listState.animateScrollToItem(maxOf(0, feedItems.size - 1))
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.w("ChatScreen", "Scroll to bottom failed: ${e.message}")
+                                    }
+                                }
+                            },
+                            shape = CircleShape,
+                            color = if (isDark) Color(0xFF2A2A2C) else Color.White,
+                            shadowElevation = 4.dp,
+                            border = BorderStroke(1.dp, if (isDark) Color(0xFF3A3A3C) else Color(0xFFE5E7EB)),
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Scroll to latest message",
+                                    tint = if (isDark) Color(0xFFD1D1D6) else Color(0xFF4A4A4E),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
                     // Dynamic Bridge / Project / Model Initialization Banner
                     AnimatedVisibility(
                     visible = isAgyChat && !bridgeStatusMessage.isNullOrBlank(),
@@ -3066,7 +3067,7 @@ fun ChatScreen(
                         }
                     }
 
-                    // LAYER 3: Floating Bottom Input Overlay with Progressive Gradient Fade
+                    // LAYER 3: Floating Bottom Input Overlay with Translucent Progressive Gradient Fade
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -3077,13 +3078,12 @@ fun ChatScreen(
                                 Brush.verticalGradient(
                                     colors = listOf(
                                         Color.Transparent,
-                                        MaterialTheme.colorScheme.background.copy(alpha = 0.60f),
-                                        MaterialTheme.colorScheme.background.copy(alpha = 0.95f),
-                                        MaterialTheme.colorScheme.background
+                                        MaterialTheme.colorScheme.background.copy(alpha = 0.15f),
+                                        MaterialTheme.colorScheme.background.copy(alpha = 0.40f)
                                     )
                                 )
                             )
-                            .padding(bottom = 4.dp)
+                            .padding(bottom = 2.dp)
                     ) {
                         chatBottomSection()
                     }

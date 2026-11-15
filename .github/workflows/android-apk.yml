@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.2.1-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.2.2-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,15 +70,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.2.1
-          name: Aura AI v2.2.1
+          tag_name: v2.2.2
+          name: Aura AI v2.2.2
           body: |
-            ### Aura AI v2.2.1 — ChatGPT Android-Style Input Composer
-            • **Minimal Pill-Shaped Container:** Crisp, floating, fully rounded pill input container with subtle natural elevation shadow.
-            • **Single Horizontal Row (Empty State):** Circular [+] attachment on left, 'Ask anything...' placeholder in center, microphone icon and vibrant blue circular voice mode button with white waveform on right.
-            • **Dynamic Send Button:** Instant, smooth transition between blue voice mode button and blue send button (with white upward arrow) as soon as text is entered.
-            • **Auto-Growing Multiline Expansion:** Expands vertically up to 5 lines with natural text wrapping while keeping bottom action buttons neatly aligned.
-            • **Connected Voice Mode:** Blue voice mode button smoothly opens Aura's Voice Mode without calling mode regressions.
+            ### Aura AI v2.2.2 — Chat Screen UI Design Fix & Polish
+            • **Input Button Vertical Alignment:** Attachment (+), microphone, and blue Voice/Send buttons are now perfectly vertically centered inside the composer container.
+            • **Floating Pill Composer:** Soft, natural 5dp elevation shadow with subtle outline and clean edge radius without clipping.
+            • **Translucent Content Scroll-Through:** Completely removed the opaque white bottom footer. AI responses and generated images glide smoothly behind the floating composer with a delicate translucent fade.
+            • **Scroll-to-Bottom Button Positioning:** Centered horizontally 8dp above the floating composer, preventing any overlap and tracking keyboard insets synchronously.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

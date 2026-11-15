@@ -687,9 +687,9 @@ fun ChatInputBar(
                     color = if (isDark) Color(0xFF242426) else Color.White,
                     border = BorderStroke(
                         1.dp,
-                        if (isDark) Color(0xFF38383A) else Color(0xFFE5E7EB)
+                        if (isDark) Color(0xFF38383A) else Color(0xFFE2E4E8)
                     ),
-                    shadowElevation = 3.dp
+                    shadowElevation = 5.dp
                 ) {
                     if (isRecordingAudio) {
                         val infiniteTransition = rememberInfiniteTransition(label = "recPulse")
@@ -902,18 +902,22 @@ fun ChatInputBar(
                                 }
                             }
 
-                            // 2. MAIN HORIZONTAL INPUT ROW (Bottom-aligned for smooth multiline vertical expansion)
+                            // 2. MAIN HORIZONTAL INPUT ROW (Centered vertically when single-line, bottom-aligned when multiline)
+                            val textString = textFieldState.text.toString()
+                            val isMultiline = textString.contains('\n') || textString.length > 45
+
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(min = 44.dp),
-                                verticalAlignment = Alignment.Bottom
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                verticalAlignment = if (isMultiline) Alignment.Bottom else Alignment.CenterVertically
                             ) {
                                 // LEFT: Circular Plus (+) Attachment Button
                                 Box(
                                     modifier = Modifier
-                                        .size(40.dp)
-                                        .padding(bottom = 2.dp),
+                                        .size(38.dp)
+                                        .padding(bottom = if (isMultiline) 4.dp else 0.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Surface(
@@ -937,7 +941,7 @@ fun ChatInputBar(
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                        .padding(horizontal = 4.dp, vertical = if (isMultiline) 2.dp else 0.dp),
                                     contentAlignment = Alignment.CenterStart
                                 ) {
                                     TextField(
@@ -947,7 +951,7 @@ fun ChatInputBar(
                                                 text = "Ask anything...",
                                                 fontSize = 15.5.sp,
                                                 fontWeight = FontWeight.Normal,
-                                                color = if (isDark) Color(0xFF8E8E93) else Color(0xFF8E8E93),
+                                                color = if (isDark) Color(0xFF8E8E93) else Color(0xFF8A8A8E),
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )
@@ -982,9 +986,9 @@ fun ChatInputBar(
 
                                 // RIGHT ACTIONS: Microphone Button + Dynamic Blue Voice Mode / Send Button
                                 Row(
-                                    modifier = Modifier.padding(bottom = 2.dp),
+                                    modifier = Modifier.padding(bottom = if (isMultiline) 4.dp else 0.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                                 ) {
                                     // 1. Microphone Icon Button (Always beside Voice/Send)
                                     if (voiceEnabled) {
