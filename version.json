@@ -1,13 +1,13 @@
 {
-  "version_code": 222,
-  "version_name": "2.2.2",
+  "version_code": 223,
+  "version_name": "2.2.3",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.2.2 — Chat Screen UI Design Fix & Polish",
-    "Perfect Button Alignment: [+] attachment, microphone, and blue Voice/Send buttons mathematically centered vertically across horizontal axis",
-    "Refined Floating Composer: Soft 5dp elevation shadow with subtle border and zero clipping across all sides",
-    "Translucent Content Scroll-Through: Removed solid opaque white bottom container; AI replies and images now smoothly glide behind the floating composer with gentle gradient fade",
-    "Scroll-to-Bottom Button Clearance: Repositioned centered above input pill with 8dp safe margin, eliminating overlap and tracking keyboard animation smoothly"
+    "Aura AI v2.2.3 — True Edge-to-Edge Floating Composer, Soft Unclipped Shadow & Voice Mode Polish",
+    "True Edge-to-Edge Navigation Bar: window.isNavigationBarContrastEnforced disabled and navigationBarColor set to transparent for true system bar transparency",
+    "Full Viewport Scroll: Chat content glides smoothly behind the floating composer and through the gesture navigation bar with soft translucent fade",
+    "Soft Unclipped Pill Shadow: Ambient & spot dual-layer elevation with clip=false matching top toggle & drawer buttons with zero corner clipping",
+    "Strict Mode-Scoped Scroll Button: Scroll-to-bottom down-arrow strictly hidden when switched to Voice Mode"
   ],
   "is_critical": false
 }

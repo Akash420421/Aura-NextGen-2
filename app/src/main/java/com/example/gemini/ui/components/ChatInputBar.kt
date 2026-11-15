@@ -22,6 +22,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -656,14 +658,13 @@ fun ChatInputBar(
     if (auraHomeStyle) {
         var isInputFocused by remember { mutableStateOf(false) }
 
-        Surface(
-            modifier = modifier.fillMaxWidth(),
-            color = Color.Transparent
+        Box(
+            modifier = modifier.fillMaxWidth()
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             ) {
                 if (queuedMessages.isNotEmpty()) {
                     QueuedMessagesCard(
@@ -674,22 +675,31 @@ fun ChatInputBar(
                     )
                 }
 
-                Surface(
+                val pillShape = RoundedCornerShape(28.dp)
+                val pillBg = if (isDark) Color(0xFF242426) else Color.White
+                val pillBorder = BorderStroke(1.dp, if (isDark) Color(0xFF38383A) else Color(0xFFE2E4E8))
+                val ambientShadowColor = Color.Black.copy(alpha = if (isDark) 0.25f else 0.06f)
+                val spotShadowColor = Color.Black.copy(alpha = if (isDark) 0.35f else 0.08f)
+
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .shadow(
+                            elevation = 3.dp,
+                            shape = pillShape,
+                            clip = false,
+                            ambientColor = ambientShadowColor,
+                            spotColor = spotShadowColor
+                        )
+                        .clip(pillShape)
+                        .background(color = pillBg, shape = pillShape)
+                        .border(border = pillBorder, shape = pillShape)
                         .animateContentSize(
                             animationSpec = spring(
                                 dampingRatio = Spring.DampingRatioNoBouncy,
                                 stiffness = Spring.StiffnessMediumLow
                             )
-                        ),
-                    shape = RoundedCornerShape(26.dp),
-                    color = if (isDark) Color(0xFF242426) else Color.White,
-                    border = BorderStroke(
-                        1.dp,
-                        if (isDark) Color(0xFF38383A) else Color(0xFFE2E4E8)
-                    ),
-                    shadowElevation = 5.dp
+                        )
                 ) {
                     if (isRecordingAudio) {
                         val infiniteTransition = rememberInfiniteTransition(label = "recPulse")

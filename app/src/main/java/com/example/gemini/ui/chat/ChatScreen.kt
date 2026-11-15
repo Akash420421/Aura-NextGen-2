@@ -321,6 +321,11 @@ fun ChatScreen(
     DisposableEffect(isAuraHome, isAppDark, isDrawerOpen, showCustomizeScreen, showImagesGalleryScreen) {
         val window = (context as? Activity)?.window
         if (window != null && !view.isInEditMode) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                window.isNavigationBarContrastEnforced = false
+            }
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, view)
             val forceDarkIcons = isAuraHome || isDrawerOpen || showCustomizeScreen || showImagesGalleryScreen
             insetsController.isAppearanceLightStatusBars = if (forceDarkIcons) true else !isAppDark
@@ -2286,7 +2291,7 @@ fun ChatScreen(
                                     contentPadding = if (isAuraHome) {
                                         PaddingValues(
                                             top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 58.dp,
-                                            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 92.dp + WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+                                            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 130.dp + WindowInsets.ime.asPaddingValues().calculateBottomPadding()
                                         )
                                     } else {
                                         PaddingValues(top = 12.dp, bottom = 16.dp)
@@ -2600,8 +2605,9 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Floating "Scroll to latest message" button (centered horizontally directly above composer with safe clearance)
-                    val showScrollToBottom = feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
+                    // Floating "Scroll to latest message" button (centered horizontally directly above composer with safe clearance, strictly hidden in Voice Mode)
+                    val isChatMode = !auraHomeVoice
+                    val showScrollToBottom = isChatMode && feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
 
                     AnimatedVisibility(
                         visible = showScrollToBottom,
@@ -3067,25 +3073,38 @@ fun ChatScreen(
                         }
                     }
 
-                    // LAYER 3: Floating Bottom Input Overlay with Translucent Progressive Gradient Fade
+                    // LAYER 3: Floating Bottom Input Overlay with Full-Width Translucent Gradient & Edge-to-Edge Scroll Pass-Through
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .align(Alignment.BottomCenter)
                             .windowInsetsPadding(WindowInsets.imeAnimationTarget)
-                            .navigationBarsPadding()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        MaterialTheme.colorScheme.background.copy(alpha = 0.15f),
-                                        MaterialTheme.colorScheme.background.copy(alpha = 0.40f)
+                    ) {
+                        // Soft, semi-transparent gradient extending all the way to the bottom edge behind navigation bar
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .matchParentSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Transparent,
+                                            MaterialTheme.colorScheme.background.copy(alpha = if (isAppDark) 0.35f else 0.40f),
+                                            MaterialTheme.colorScheme.background.copy(alpha = if (isAppDark) 0.70f else 0.75f)
+                                        )
                                     )
                                 )
-                            )
-                            .padding(bottom = 2.dp)
-                    ) {
-                        chatBottomSection()
+                        )
+
+                        // Floating bottom composer and buttons padded to float cleanly above system navigation bar
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(bottom = 6.dp)
+                        ) {
+                            chatBottomSection()
+                        }
                     }
                 }
             } else {
