@@ -442,7 +442,10 @@ object AgyVoiceCall {
             when {
                 code != null && code in 400..599 && code != 101 ->
                     fail(s, "The hub refused the call (HTTP $code${if (body.isNotBlank()) ": $body" else ""}).")
-                else -> socketEnded(s, t.message ?: t.javaClass.simpleName, network = true)
+                else -> {
+                    val msg = if (t is java.io.EOFException) "Hub closed connection prematurely (EOF)" else (t.message ?: t.javaClass.simpleName)
+                    socketEnded(s, msg, network = true)
+                }
             }
         }
     }

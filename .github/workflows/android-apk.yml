@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.7-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.8-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,13 +70,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.1.7
-          name: Aura AI v2.1.7
+          tag_name: v2.1.8
+          name: Aura AI v2.1.8
           body: |
-            ### Aura AI v2.1.7 — Fix Voice Call Handshake & Stream Sync
-            - **Voice Call Handshake Fix:** Gracefully adopt conversations already registered on the hub language server instead of failing with ServerError.
-            - **Persistent Stream Title Sync:** Mark voice-initiated conversations with title 'Voice chat' so live agent speech and tool actions stream seamlessly.
-            - **Robust Hub Header Framing:** Ensure framed CSRF token fallback header is sent on WebSocket handshakes to prevent connection rejections.
+            ### Aura AI v2.1.8 — Fix Voice Call Daemon Session Registration & Prevent EOFException
+            - **Voice Call Lifecycle Fix:** Unconditionally ensure cascade conversation is registered on the daemon language server before voice WebSocket connection, preventing EOFException / entity not found drops.
+            - **Duplicate Cascade Adoption:** Smoothly handles both newly started and already-existing daemon cascades without error.
+            - **Enhanced Connection Diagnostics:** Clear diagnostics for premature socket closure.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
