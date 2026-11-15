@@ -307,6 +307,14 @@ class AgyMcpManager(
                                 val runtimeLibraries = com.example.gemini.data.local.LocalEnvironmentManager.getRuntimeLibraryPath(context)
                                 envMap["LD_LIBRARY_PATH"] = listOf(runtimeLibraries, envMap["LD_LIBRARY_PATH"])
                                     .filterNot { it.isNullOrBlank() }.distinct().joinToString(":")
+                                val sslConf = com.example.gemini.data.local.LocalEnvironmentManager.getOpenSslConfFile(context)
+                                envMap["OPENSSL_CONF"] = sslConf.absolutePath
+                                com.example.gemini.data.local.LocalEnvironmentManager.getSslCertFile(context)?.let {
+                                    envMap["SSL_CERT_FILE"] = it.absolutePath
+                                }
+                                com.example.gemini.data.local.LocalEnvironmentManager.getSslCertsDir(context)?.let {
+                                    envMap["SSL_CERT_DIR"] = it.absolutePath
+                                }
                             }
                             if (envMap.isNotEmpty()) {
                                 val envObj = org.json.JSONObject()

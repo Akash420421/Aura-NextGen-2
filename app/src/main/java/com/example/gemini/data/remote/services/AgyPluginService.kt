@@ -211,6 +211,22 @@ class AgyPluginService(
                         ).joinToString(":") { it.absolutePath }
                         envMap["LD_LIBRARY_PATH"] = listOf(runtimeLibraries, envMap["LD_LIBRARY_PATH"])
                             .filterNot { it.isNullOrBlank() }.distinct().joinToString(":")
+                        val sslCnf = java.io.File(prefix, "etc/tls/openssl.cnf")
+                        if (!sslCnf.exists()) {
+                            runCatching {
+                                sslCnf.parentFile?.mkdirs()
+                                sslCnf.writeText("# Minimal OpenSSL config for Aura AI\nHOME = .\n")
+                            }
+                        }
+                        envMap["OPENSSL_CONF"] = if (sslCnf.exists() && sslCnf.canRead()) sslCnf.absolutePath else "/dev/null"
+                        val certPem = java.io.File(prefix, "etc/tls/cert.pem")
+                        if (certPem.exists() && certPem.canRead()) {
+                            envMap["SSL_CERT_FILE"] = certPem.absolutePath
+                        }
+                        val certsDir = java.io.File(prefix, "etc/tls/certs")
+                        if (certsDir.exists() && certsDir.isDirectory) {
+                            envMap["SSL_CERT_DIR"] = certsDir.absolutePath
+                        }
                     }
 
                     if (envMap.isNotEmpty()) {

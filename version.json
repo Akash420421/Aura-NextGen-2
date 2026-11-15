@@ -1,13 +1,12 @@
 {
-  "version_code": 223,
-  "version_name": "2.2.3",
+  "version_code": 224,
+  "version_name": "2.2.4",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.2.3 — True Edge-to-Edge Floating Composer, Soft Unclipped Shadow & Voice Mode Polish",
-    "True Edge-to-Edge Navigation Bar: window.isNavigationBarContrastEnforced disabled and navigationBarColor set to transparent for true system bar transparency",
-    "Full Viewport Scroll: Chat content glides smoothly behind the floating composer and through the gesture navigation bar with soft translucent fade",
-    "Soft Unclipped Pill Shadow: Ambient & spot dual-layer elevation with clip=false matching top toggle & drawer buttons with zero corner clipping",
-    "Strict Mode-Scoped Scroll Button: Scroll-to-bottom down-arrow strictly hidden when switched to Voice Mode"
+    "Aura AI v2.2.4 — Fix Custom AntiGem Plugins OpenSSL / Extension Host Crash",
+    "Resolved OpenSSL configuration error (code 13 Permission Denied) caused by foreign /data/data/com.termux path traversal",
+    "Properly isolated OPENSSL_CONF, SSL_CERT_FILE, and SSL_CERT_DIR to Aura app's internal sandbox prefix ($PREFIX/etc/tls)",
+    "Ensured browser-runtime extension-host (Node.js) and custom plugins boot cleanly with full MCP tool support"
   ],
   "is_critical": false
 }

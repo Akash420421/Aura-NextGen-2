@@ -817,6 +817,8 @@ object RemoteServerManager {
             pids=${'$'}(pgrep -f '[e]xtension-host.mjs --serve --port $hostPort'); [ -n "${'$'}pids" ] && kill ${'$'}pids 2>/dev/null
             [ "${'$'}(wc -c < ${q(log)} 2>/dev/null || echo 0)" -gt 2000000 ] && : > ${q(log)}
             cd "${'$'}HOME"
+            export OPENSSL_CONF="${'$'}{PREFIX:-/dev/null}/etc/tls/openssl.cnf"
+            [ ! -r "${'$'}OPENSSL_CONF" ] && export OPENSSL_CONF=/dev/null
             if command -v tmux >/dev/null 2>&1; then
               tmux new-session -d -s $EXT_TMUX ${q("$core 2>&1 | tee -a ${q(log)}")}
             else

@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.2.3-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.2.4-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,14 +70,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.2.3
-          name: Aura AI v2.2.3
+          tag_name: v2.2.4
+          name: Aura AI v2.2.4
           body: |
-            ### Aura AI v2.2.3 — True Edge-to-Edge Floating Composer, Soft Unclipped Shadow & Voice Mode Polish
-            • **True Edge-to-Edge Navigation Bar:** `window.isNavigationBarContrastEnforced` disabled and navigationBarColor set to transparent for genuine system bar transparency.
-            • **Full Viewport Scroll:** Chat messages and images flow seamlessly behind the floating composer and through the gesture navigation bar with soft translucent fade.
-            • **Soft Unclipped Pill Shadow:** Ambient & spot dual-layer elevation with `clip = false` matching the top toggle and side drawer buttons with zero corner clipping.
-            • **Strict Mode-Scoped Scroll Button:** Scroll-to-bottom down-arrow button is strictly hidden when switched to Voice Mode.
+            ### Aura AI v2.2.4 — Fix Custom AntiGem Plugins OpenSSL / Extension Host Crash
+            • **Fix Extension Host Code 13 Crash:** Resolved Node.js OpenSSL configuration error caused by attempting to access foreign `/data/data/com.termux/files/usr/etc/tls/openssl.cnf` across Android UID boundaries.
+            • **Proper Sandbox Path Isolation:** Configured `OPENSSL_CONF`, `SSL_CERT_FILE`, and `SSL_CERT_DIR` dynamically to use the app's internal `$PREFIX/etc/tls` sandbox.
+            • **Custom Plugins & MCP Stability:** Extension host and plugins (like `google-flow`) now launch and maintain active worker status without permissions crashes.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

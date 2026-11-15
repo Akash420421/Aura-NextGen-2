@@ -172,6 +172,28 @@ object LocalEnvironmentManager {
     fun getHomeDir(context: Context): File = File(context.filesDir, "home")
     fun getProjectsDir(context: Context): File = File(getHomeDir(context), "projects")
     fun getUbuntuRootDir(context: Context): File = File(context.filesDir, "ubuntu")
+
+    fun getOpenSslConfFile(context: Context): File {
+        val tlsDir = File(getPrefixDir(context), "etc/tls")
+        val cnfFile = File(tlsDir, "openssl.cnf")
+        if (!cnfFile.exists()) {
+            runCatching {
+                tlsDir.mkdirs()
+                cnfFile.writeText("# Minimal OpenSSL config for Aura AI\nHOME = .\n")
+            }
+        }
+        return if (cnfFile.exists() && cnfFile.canRead()) cnfFile else File("/dev/null")
+    }
+
+    fun getSslCertFile(context: Context): File? {
+        val certFile = File(getPrefixDir(context), "etc/tls/cert.pem")
+        return if (certFile.exists() && certFile.canRead()) certFile else null
+    }
+
+    fun getSslCertsDir(context: Context): File? {
+        val certsDir = File(getPrefixDir(context), "etc/tls/certs")
+        return if (certsDir.exists() && certsDir.isDirectory) certsDir else null
+    }
     /**
      * The standalone Aura AI package and the Termux package use their own sandboxed Termux prefix. Older com.antigem
      * installs keep using Ubuntu when one is already installed, preserving their existing rootfs layout.
@@ -2545,6 +2567,10 @@ All files created here persist inside the application.
             env["LANG"] = "en_US.UTF-8"
             env["LC_ALL"] = "en_US.UTF-8"
             env["LD_LIBRARY_PATH"] = getRuntimeLibraryPath(context)
+            val sslConf = getOpenSslConfFile(context)
+            env["OPENSSL_CONF"] = sslConf.absolutePath
+            getSslCertFile(context)?.let { env["SSL_CERT_FILE"] = it.absolutePath }
+            getSslCertsDir(context)?.let { env["SSL_CERT_DIR"] = it.absolutePath }
             findTermuxExecLibrary(context)?.let { execLib ->
                 if (execLib.exists() && execLib.canRead()) {
                     env["LD_PRELOAD"] = execLib.absolutePath
