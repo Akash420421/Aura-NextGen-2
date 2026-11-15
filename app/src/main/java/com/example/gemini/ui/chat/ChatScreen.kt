@@ -2985,6 +2985,7 @@ fun ChatScreen(
                     onSendQueuedNow = { viewModel.sendQueuedNow(it) },
                     onDeleteQueued = { viewModel.deleteQueued(it) },
                     onStartVoiceCall = null,
+                    onStartVoiceMode = { auraHomeVoice = true },
                     voiceCallActive = voiceCall.active,
                     auraHomeStyle = isAuraHome
                 )

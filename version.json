@@ -1,14 +1,14 @@
 {
-  "version_code": 220,
-  "version_name": "2.2.0",
+  "version_code": 221,
+  "version_name": "2.2.1",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.2.0 — Claude-Style Floating Edge-to-Edge Chat Screen & Native Voice Recording",
-    "Removed broken calling mode headphone icon from chat input while preserving the top Chat | Voice toggle",
-    "Restored native voice note recording with pulsing indicator, timer, live waveform, cancel, and stop & send",
-    "Claude Android inspired compact floating input: slim single-row pill when idle, smoothly expands into a two-row card when typing",
-    "Full-screen edge-to-edge layout: messages scroll under floating top header and bottom input with progressive gradient fades",
-    "Fixed shadow clipping and corner radius on floating input container"
+    "Aura AI v2.2.1 — Exact ChatGPT Android-Style Input Composer",
+    "Minimal pill-shaped floating input container with soft natural shadow",
+    "Single horizontal row in empty state: circular [+] attachment, 'Ask anything...', mic, and blue circular voice button",
+    "Dynamic Send button: instant smooth transition between blue voice mode button and blue send arrow when typing",
+    "Auto-growing multiline text field expanding up to 5 lines with bottom-aligned action buttons",
+    "Voice mode button connected to Aura's Voice Mode interface without calling-mode regressions"
   ],
   "is_critical": false
 }
