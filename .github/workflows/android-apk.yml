@@ -56,7 +56,7 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.1.9-release.apk
+          cp app/build/outputs/apk/standard/debug/*.apk release_assets/AuraAI-v2.2.0-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -70,13 +70,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: success()
         with:
-          tag_name: v2.1.9
-          name: Aura AI v2.1.9
+          tag_name: v2.2.0
+          name: Aura AI v2.2.0
           body: |
-            ### Aura AI v2.1.9 — 60fps Smooth Chat Scrolling, Claude-Style Two-Row Composer & Clean Typography
-            - **Scroll Performance:** Virtualized list with native 60fps fling physics, eliminated micro-item layout thrashing, fixed aspect-ratio image pre-reservations with full disk caching, and removed redundant spacers.
-            - **Response Formatting:** 1.5 line height, true hanging indent bullets & numbers, prominent bold headings, soft compact error cards, and 40dp action touch targets.
-            - **Claude-Style Composer:** Two-row card with full-width text input, auto-growing upward smoothly from 1 to 6 lines, and floating above the keyboard.
+            ### Aura AI v2.2.0 — Claude-Style Floating Edge-to-Edge Chat Screen & Native Voice Recording
+            - **Removed Broken Calling Mode:** Headphone icon removed from chat input while preserving the top Chat | Voice segmented toggle.
+            - **Restored Voice Note Recording:** Microphone records voice notes with pulsing dot, timer, animated waveform, cancel, and stop & send.
+            - **Claude-Style Input Box:** Slim single-row pill when idle, smoothly expands into a two-row card with multi-line auto-grow when typing.
+            - **Full-Screen Edge-to-Edge:** Messages scroll under floating top header and bottom input with progressive gradient fades.
+            - **Fixed Shadows & Corners:** Soft, unclipped elevation shadows across all 4 rounded corners.
           files: release_assets/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

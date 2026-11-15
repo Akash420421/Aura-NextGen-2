@@ -1,12 +1,14 @@
 {
-  "version_code": 219,
-  "version_name": "2.1.9",
+  "version_code": 220,
+  "version_name": "2.2.0",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.1.9 — 60fps Smooth Chat Scrolling, Claude-Style Two-Row Composer & Clean Typography",
-    "Scroll Performance: Virtualized list with native 60fps fling physics, eliminated micro-item layout thrashing, fixed aspect-ratio image pre-reservations with full disk caching, and removed redundant spacers",
-    "Response Formatting: 1.5 line height, true hanging indent bullets & numbers, prominent bold headings, soft compact error cards, and 40dp action touch targets",
-    "Claude-Style Composer: Two-row card with full-width text input, auto-growing upward smoothly from 1 to 6 lines, and floating above the keyboard"
+    "Aura AI v2.2.0 — Claude-Style Floating Edge-to-Edge Chat Screen & Native Voice Recording",
+    "Removed broken calling mode headphone icon from chat input while preserving the top Chat | Voice toggle",
+    "Restored native voice note recording with pulsing indicator, timer, live waveform, cancel, and stop & send",
+    "Claude Android inspired compact floating input: slim single-row pill when idle, smoothly expands into a two-row card when typing",
+    "Full-screen edge-to-edge layout: messages scroll under floating top header and bottom input with progressive gradient fades",
+    "Fixed shadow clipping and corner radius on floating input container"
   ],
   "is_critical": false
 }

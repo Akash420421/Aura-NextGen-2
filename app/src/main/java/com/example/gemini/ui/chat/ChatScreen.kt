@@ -49,6 +49,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.AnnotatedString
@@ -1659,16 +1660,17 @@ fun ChatScreen(
         Scaffold(
             snackbarHost = {},
             topBar = {
-                // The chat's title on the left, the agents' status dot with the project on the right. A thin line shows
-                // under the bar only once messages scroll beneath it.
-                val scrolledUnder by remember(listState) { derivedStateOf { listState.canScrollBackward } }
-                val topBarLineAlpha by androidx.compose.animation.core.animateFloatAsState(
-                    targetValue = if (scrolledUnder && messages.isNotEmpty()) 1f else 0f,
-                    animationSpec = tween(180),
-                    label = "top_bar_line"
-                )
-                val topBarLineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-                TopAppBar(
+                if (!isAuraHome) {
+                    // The chat's title on the left, the agents' status dot with the project on the right. A thin line shows
+                    // under the bar only once messages scroll beneath it.
+                    val scrolledUnder by remember(listState) { derivedStateOf { listState.canScrollBackward } }
+                    val topBarLineAlpha by androidx.compose.animation.core.animateFloatAsState(
+                        targetValue = if (scrolledUnder && messages.isNotEmpty()) 1f else 0f,
+                        animationSpec = tween(180),
+                        label = "top_bar_line"
+                    )
+                    val topBarLineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                    TopAppBar(
                     // shorter than Material's 64dp: one line of title and the small project pill need less
                     expandedHeight = 52.dp,
                     modifier = Modifier.drawWithContent {
@@ -2014,22 +2016,14 @@ fun ChatScreen(
                         containerColor = MaterialTheme.colorScheme.background
                     )
                 )
+                }
             },
             containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = WindowInsets.statusBars
+            contentWindowInsets = if (isAuraHome) WindowInsets(0, 0, 0, 0) else WindowInsets.statusBars
         ) { paddingValues ->
-            // Synchronized container that moves seamlessly with the IME keyboard
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .navigationBarsPadding()
-                    .windowInsetsPadding(WindowInsets.imeAnimationTarget)
-            ) {
+            val chatFeedContent = @Composable { contentModifier: Modifier ->
                 Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
+                    modifier = contentModifier
                 ) {
                     val sysStatus = systemConnectionState.status
                     val isServerInitializing = sysStatus == com.example.gemini.data.remote.SystemStatus.STARTING || sysStatus == com.example.gemini.data.remote.SystemStatus.ACQUIRING_CSRF || (sysStatus == com.example.gemini.data.remote.SystemStatus.OFFLINE && isInitialGracePeriod)
@@ -2289,7 +2283,14 @@ fun ChatScreen(
                                     state = listState,
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.spacedBy(0.dp),
-                                    contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)
+                                    contentPadding = if (isAuraHome) {
+                                        PaddingValues(
+                                            top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 58.dp,
+                                            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 92.dp + WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+                                        )
+                                    } else {
+                                        PaddingValues(top = 12.dp, bottom = 16.dp)
+                                    }
                                 ) {
                                     items(
                                         items = feedItems,
@@ -2634,9 +2635,14 @@ fun ChatScreen(
                         }
                     }
                 }
+            }
 
-                // Dynamic Bridge / Project / Model Initialization Banner
-                AnimatedVisibility(
+            val chatBottomSection = @Composable {
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    // Dynamic Bridge / Project / Model Initialization Banner
+                    AnimatedVisibility(
                     visible = isAgyChat && !bridgeStatusMessage.isNullOrBlank(),
                     enter = fadeIn() + expandVertically(),
                     exit = fadeOut() + shrinkVertically()
@@ -2978,10 +2984,118 @@ fun ChatScreen(
                     queuedMessages = queuedMessages,
                     onSendQueuedNow = { viewModel.sendQueuedNow(it) },
                     onDeleteQueued = { viewModel.deleteQueued(it) },
-                    onStartVoiceCall = if (isAgyChat) onStartVoiceCall else null,
+                    onStartVoiceCall = null,
                     voiceCallActive = voiceCall.active,
                     auraHomeStyle = isAuraHome
                 )
+                }
+            }
+
+            if (isAuraHome) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    // LAYER 1: Full-Screen Scrollable Chat Feed
+                    chatFeedContent(Modifier.fillMaxSize())
+
+                    // LAYER 2: Floating Top Header Overlay
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.background,
+                                        MaterialTheme.colorScheme.background.copy(alpha = 0.95f),
+                                        MaterialTheme.colorScheme.background.copy(alpha = 0.70f),
+                                        Color.Transparent
+                                    )
+                                )
+                            )
+                            .statusBarsPadding()
+                            .padding(bottom = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { scope.launch { drawerState.open() } },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Menu,
+                                    contentDescription = "Open Drawer",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+                            com.example.gemini.ui.components.AuraModeToggle(
+                                currentMode = if (auraHomeVoice) "voice" else "chat",
+                                onModeSelected = { mode ->
+                                    auraHomeVoice = (mode == "voice")
+                                }
+                            )
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+                            IconButton(
+                                onClick = {
+                                    val currentId = currentConv?.id
+                                    if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
+                                        ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
+                                    }
+                                    conversationBackStack.clear()
+                                    viewModel.startNewChat()
+                                    auraHomeVoice = false
+                                },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                com.example.gemini.ui.components.NewChatIcon(tint = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+
+                    // LAYER 3: Floating Bottom Input Overlay with Progressive Gradient Fade
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .windowInsetsPadding(WindowInsets.imeAnimationTarget)
+                            .navigationBarsPadding()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Transparent,
+                                        MaterialTheme.colorScheme.background.copy(alpha = 0.60f),
+                                        MaterialTheme.colorScheme.background.copy(alpha = 0.95f),
+                                        MaterialTheme.colorScheme.background
+                                    )
+                                )
+                            )
+                            .padding(bottom = 4.dp)
+                    ) {
+                        chatBottomSection()
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                        .navigationBarsPadding()
+                        .windowInsetsPadding(WindowInsets.imeAnimationTarget)
+                ) {
+                    chatFeedContent(Modifier.weight(1f).fillMaxWidth())
+                    chatBottomSection()
                 }
             }
         }
