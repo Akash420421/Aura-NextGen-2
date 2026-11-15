@@ -2990,6 +2990,7 @@ fun ChatScreen(
                 )
                 }
             }
+            }
 
             if (isAuraHome) {
                 Box(
