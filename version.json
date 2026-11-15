@@ -1,12 +1,12 @@
 {
-  "version_code": 218,
-  "version_name": "2.1.8",
+  "version_code": 219,
+  "version_name": "2.1.9",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.1.8 — Fix Voice Call Daemon Session Registration & Prevent EOFException",
-    "Voice Call Lifecycle Fix: Unconditionally ensure cascade conversation is registered on the daemon language server before voice WebSocket connection, preventing EOFException / entity not found drops",
-    "Duplicate Cascade Adoption: Smoothly handles both newly started and already-existing daemon cascades without error",
-    "Enhanced Connection Diagnostics: Clear diagnostics for premature socket closure"
+    "Aura AI v2.1.9 — 60fps Smooth Chat Scrolling, Claude-Style Two-Row Composer & Clean Typography",
+    "Scroll Performance: Virtualized list with native 60fps fling physics, eliminated micro-item layout thrashing, fixed aspect-ratio image pre-reservations with full disk caching, and removed redundant spacers",
+    "Response Formatting: 1.5 line height, true hanging indent bullets & numbers, prominent bold headings, soft compact error cards, and 40dp action touch targets",
+    "Claude-Style Composer: Two-row card with full-width text input, auto-growing upward smoothly from 1 to 6 lines, and floating above the keyboard"
   ],
   "is_critical": false
 }

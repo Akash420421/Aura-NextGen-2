@@ -1122,11 +1122,13 @@ fun ChatScreen(
     }
     val holdingTail = tailFinishing && lastIsAssistantWithText && !footerShown
 
-    // Applied in the same layout pass as the new content (not a frame later), so the end of the chat (the working
-    // row) never drops below the screen while the reply grows: the output grows above it
-    val followTail = feedItems.isNotEmpty() && (isRunningOrStreaming || tailFinishing) && shouldAutoScroll && !isUserDragging
-    if (followTail) {
-        SideEffect { listState.requestScrollToItem(feedItems.size) }
+    // Auto-scroll follows streaming and new output smoothly only when user is near the bottom
+    LaunchedEffect(feedItems.size, isRunningOrStreaming) {
+        if (shouldAutoScroll && isAtBottom && !isUserDragging && feedItems.isNotEmpty()) {
+            try {
+                listState.scrollToItem(maxOf(0, feedItems.size - 1))
+            } catch (_: Exception) {}
+        }
     }
 
     // The Claude Code-style working row: under the reply for as long as the agent works, but not while it waits for
@@ -2283,16 +2285,11 @@ fun ChatScreen(
                             androidx.compose.ui.platform.LocalDensity provides customDensity,
                             com.example.gemini.ui.components.LocalQuestionPanelActive provides true
                         ) {
-                                // iOS-style vertical bounce at the top and bottom (also for a short chat that cannot scroll);
-                                // only this list: code blocks and other sideways scrollers keep Android's own edge effect
-                                val chatBounce = com.example.gemini.ui.components.rememberBouncyLazyScroll(listState)
                                 LazyColumn(
                                     state = listState,
-                                    modifier = Modifier.fillMaxSize().then(chatBounce.modifier),
-                                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
-                                    userScrollEnabled = chatBounce.userScrollEnabled,
-                                    overscrollEffect = chatBounce.overscrollEffect
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                                    contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)
                                 ) {
                                     items(
                                         items = feedItems,
@@ -2367,26 +2364,17 @@ fun ChatScreen(
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .padding(horizontal = 16.dp, vertical = 2.dp)
+                                                    .padding(horizontal = 16.dp)
                                             ) {
                                                 val isTool = feedItem.block is MarkdownBlock.AgentTool
-                                                val blockView: @Composable () -> Unit = {
-                                                    MarkdownBlockView(
-                                                        block = feedItem.block,
-                                                        onApproveTool = if (isTool) { { toolCall -> viewModel.approveAndExecuteTerminalTool(toolCall, feedItem.messageId) } } else null,
-                                                        onRejectTool = if (isTool) { { toolCall -> if (toolCall.toolType == ToolType.ASK_CHOICE) viewModel.cancelUserChoices(toolCall, feedItem.messageId) else viewModel.rejectTerminalTool(toolCall, feedItem.messageId) } } else null,
-                                                        onTerminateTool = if (isTool) { { toolCall -> viewModel.terminateRunningTerminalTool(toolCall, feedItem.messageId) } } else null,
-                                                        onSubmitChoices = if (isTool) { { toolCall, responses, summaryPayload -> viewModel.submitUserChoices(toolCall, feedItem.messageId, responses, summaryPayload) } } else null,
-                                                        onSkipChoices = if (isTool) { { toolCall, responses -> viewModel.skipUserChoices(toolCall, feedItem.messageId, responses) } } else null
-                                                    )
-                                                }
-                                                val selectable = when (feedItem.block) {
-                                                    is MarkdownBlock.Paragraph, is MarkdownBlock.Header, is MarkdownBlock.Bullet,
-                                                    is MarkdownBlock.Numbered, is MarkdownBlock.Task, is MarkdownBlock.Blockquote,
-                                                    is MarkdownBlock.Alert, is MarkdownBlock.Table -> true
-                                                    else -> false
-                                                }
-                                                if (selectable) SelectionContainer { blockView() } else blockView()
+                                                MarkdownBlockView(
+                                                    block = feedItem.block,
+                                                    onApproveTool = if (isTool) { { toolCall -> viewModel.approveAndExecuteTerminalTool(toolCall, feedItem.messageId) } } else null,
+                                                    onRejectTool = if (isTool) { { toolCall -> if (toolCall.toolType == ToolType.ASK_CHOICE) viewModel.cancelUserChoices(toolCall, feedItem.messageId) else viewModel.rejectTerminalTool(toolCall, feedItem.messageId) } } else null,
+                                                    onTerminateTool = if (isTool) { { toolCall -> viewModel.terminateRunningTerminalTool(toolCall, feedItem.messageId) } } else null,
+                                                    onSubmitChoices = if (isTool) { { toolCall, responses, summaryPayload -> viewModel.submitUserChoices(toolCall, feedItem.messageId, responses, summaryPayload) } } else null,
+                                                    onSkipChoices = if (isTool) { { toolCall, responses -> viewModel.skipUserChoices(toolCall, feedItem.messageId, responses) } } else null
+                                                )
                                             }
                                         }
                                         // with the working animation on, the working row below replaces these dots
@@ -2447,11 +2435,6 @@ fun ChatScreen(
                                                 modifier = Modifier.animateItem(fadeInSpec = tween(180), placementSpec = null, fadeOutSpec = null)
                                             )
                                         }
-                                    }
-
-                                    // Bottom spacer to ensure scrolling reaches comfortably above the input box
-                                    item(key = "bottom_anchor") {
-                                        Spacer(modifier = Modifier.height(96.dp))
                                     }
                                 }
                         }

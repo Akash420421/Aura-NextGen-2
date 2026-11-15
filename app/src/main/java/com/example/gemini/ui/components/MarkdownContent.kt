@@ -231,45 +231,59 @@ fun MarkdownBlockView(
         }
         is MarkdownBlock.Header -> {
             val (fontSize, topPad, bottomPad) = when (block.level) {
-                1 -> Triple(20.sp, 10.dp, 5.dp)
-                2 -> Triple(17.5.sp, 9.dp, 4.dp)
-                3 -> Triple(15.5.sp, 8.dp, 4.dp)
-                4 -> Triple(14.sp, 7.dp, 3.dp)
-                5 -> Triple(13.sp, 6.dp, 2.dp)
-                else -> Triple(12.5.sp, 5.dp, 2.dp)
+                1 -> Triple(22.sp, 14.dp, 6.dp)
+                2 -> Triple(19.sp, 12.dp, 5.dp)
+                3 -> Triple(17.sp, 10.dp, 4.dp)
+                4 -> Triple(15.5.sp, 8.dp, 3.dp)
+                5 -> Triple(14.sp, 6.dp, 2.dp)
+                else -> Triple(13.sp, 5.dp, 2.dp)
             }
             FormattedInlineText(
                 text = block.text,
                 style = TextStyle(
                     fontSize = fontSize,
                     fontWeight = FontWeight.Bold,
-                    color = if (block.level <= 3) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                    lineHeight = (fontSize.value * 1.35f).sp,
+                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    lineHeightStyle = LineHeightStyle(
+                        alignment = LineHeightStyle.Alignment.Center,
+                        trim = LineHeightStyle.Trim.None
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
                 ),
                 modifier = modifier.padding(top = topPad, bottom = bottomPad)
             )
         }
         is MarkdownBlock.Bullet -> {
+            val indentStart = (block.indent * 16).dp
             Row(
                 modifier = modifier
                     .fillMaxWidth()
-                    .padding(vertical = 2.dp)
-                    .padding(start = (block.indent * 14).dp),
+                    .padding(vertical = 2.5.dp)
+                    .padding(start = indentStart),
                 verticalAlignment = Alignment.Top
             ) {
-                Text(
-                    text = if (block.indent == 0) "• " else "◦ ",
-                    fontWeight = FontWeight.Bold,
-                    color = ClaudeTerracotta,
-                    fontSize = 16.sp,
-                    lineHeight = 24.sp,
-                    style = TextStyle(
-                        platformStyle = PlatformTextStyle(includeFontPadding = false),
-                        lineHeightStyle = LineHeightStyle(
-                            alignment = LineHeightStyle.Alignment.Center,
-                            trim = LineHeightStyle.Trim.None
+                Box(
+                    modifier = Modifier
+                        .width(18.dp)
+                        .padding(top = 1.dp),
+                    contentAlignment = Alignment.TopStart
+                ) {
+                    Text(
+                        text = if (block.indent % 2 == 0) "•" else "◦",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                        fontSize = 15.sp,
+                        lineHeight = 24.sp,
+                        style = TextStyle(
+                            platformStyle = PlatformTextStyle(includeFontPadding = false),
+                            lineHeightStyle = LineHeightStyle(
+                                alignment = LineHeightStyle.Alignment.Center,
+                                trim = LineHeightStyle.Trim.None
+                            )
                         )
                     )
-                )
+                }
                 FormattedInlineText(
                     text = block.text,
                     modifier = Modifier.weight(1f)
@@ -280,23 +294,30 @@ fun MarkdownBlockView(
             Row(
                 modifier = modifier
                     .fillMaxWidth()
-                    .padding(vertical = 2.dp, horizontal = 2.dp),
+                    .padding(vertical = 2.5.dp),
                 verticalAlignment = Alignment.Top
             ) {
-                Text(
-                    text = "${block.number} ",
-                    fontWeight = FontWeight.Bold,
-                    color = ClaudeTerracotta,
-                    fontSize = 16.sp,
-                    lineHeight = 24.sp,
-                    style = TextStyle(
-                        platformStyle = PlatformTextStyle(includeFontPadding = false),
-                        lineHeightStyle = LineHeightStyle(
-                            alignment = LineHeightStyle.Alignment.Center,
-                            trim = LineHeightStyle.Trim.None
+                Box(
+                    modifier = Modifier
+                        .widthIn(min = 22.dp)
+                        .padding(end = 4.dp),
+                    contentAlignment = Alignment.TopStart
+                ) {
+                    Text(
+                        text = "${block.number}.",
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                        fontSize = 15.sp,
+                        lineHeight = 24.sp,
+                        style = TextStyle(
+                            platformStyle = PlatformTextStyle(includeFontPadding = false),
+                            lineHeightStyle = LineHeightStyle(
+                                alignment = LineHeightStyle.Alignment.Center,
+                                trim = LineHeightStyle.Trim.None
+                            )
                         )
                     )
-                )
+                }
                 FormattedInlineText(
                     text = block.text,
                     modifier = Modifier.weight(1f)
@@ -307,7 +328,7 @@ fun MarkdownBlockView(
             Row(
                 modifier = modifier
                     .fillMaxWidth()
-                    .padding(vertical = 2.dp, horizontal = 2.dp),
+                    .padding(vertical = 2.5.dp),
                 verticalAlignment = Alignment.Top
             ) {
                 Icon(
@@ -315,7 +336,7 @@ fun MarkdownBlockView(
                     contentDescription = if (block.isChecked) "Completed" else "Incomplete",
                     tint = if (block.isChecked) QuotaGreen else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     modifier = Modifier
-                        .padding(top = 1.5.dp, end = 6.dp)
+                        .padding(top = 2.dp, end = 6.dp)
                         .size(17.dp)
                 )
                 FormattedInlineText(
@@ -365,7 +386,7 @@ fun MarkdownBlockView(
         is MarkdownBlock.Paragraph -> {
             FormattedInlineText(
                 text = block.text,
-                modifier = modifier.padding(vertical = 3.dp)
+                modifier = modifier.padding(vertical = 4.dp)
             )
         }
     }
@@ -1346,14 +1367,15 @@ fun AgentErrorCard(
     var isExpanded by remember { mutableStateOf(false) }
     val isDark = isAppInDarkTheme()
 
-    val cardBg = com.example.gemini.theme.AppColors.dangerContainer
-    val cardBorder = com.example.gemini.theme.AppColors.dangerContainer
-    val errorColor = if (isDark) com.example.gemini.theme.AppColors.danger else com.example.gemini.theme.AppColors.danger
+    val cardBg = if (isDark) Color(0xFF2C1517) else Color(0xFFFEF2F2)
+    val cardBorder = if (isDark) Color(0xFF5C2328) else Color(0xFFFCA5A5).copy(alpha = 0.5f)
+    val errorColor = if (isDark) Color(0xFFF87171) else Color(0xFFDC2626)
+    val textColor = if (isDark) Color(0xFFFCA5A5) else Color(0xFF991B1B)
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
+            .padding(vertical = 4.dp),
         shape = RoundedCornerShape(12.dp),
         color = cardBg,
         border = BorderStroke(1.dp, cardBorder)
@@ -1361,7 +1383,7 @@ fun AgentErrorCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             // Header Row: Icon, Title, Error Code pill, Copy Button
             Row(
@@ -1379,24 +1401,25 @@ fun AgentErrorCard(
                     text = error.title.ifBlank { "Agent Execution Error" },
                     fontSize = 13.5.sp,
                     fontWeight = FontWeight.Bold,
-                    color = errorColor
+                    color = errorColor,
+                    modifier = Modifier.weight(1f)
                 )
                 if (error.errorCode != null && error.errorCode != 0) {
                     Spacer(modifier = Modifier.width(6.dp))
                     Surface(
                         shape = RoundedCornerShape(4.dp),
-                        color = errorColor.copy(alpha = 0.15f)
+                        color = errorColor.copy(alpha = 0.12f)
                     ) {
                         Text(
                             text = "Code: ${error.errorCode}",
-                            fontSize = 10.5.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = errorColor,
                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
                         )
                     }
+                    Spacer(modifier = Modifier.width(6.dp))
                 }
-                Spacer(modifier = Modifier.weight(1f))
 
                 IconButton(
                     onClick = {
@@ -1404,7 +1427,7 @@ fun AgentErrorCard(
                         val copyText = buildString {
                             appendLine("Error: ${error.title}")
                             if (error.userMessage.isNotBlank()) appendLine("Message: ${error.userMessage}")
-                            if (error.shortError.isNotBlank()) appendLine("Detail: ${error.shortError}")
+                            if (error.shortError.isNotBlank() && error.shortError != error.userMessage) appendLine("Detail: ${error.shortError}")
                             if (error.errorCode != null) appendLine("Code: ${error.errorCode}")
                             if (error.errorId.isNotBlank()) appendLine("ID: ${error.errorId}")
                             if (error.fullError.isNotBlank()) appendLine("\nFull Trace:\n${error.fullError}")
@@ -1414,7 +1437,7 @@ fun AgentErrorCard(
                         clipboard.setPrimaryClip(clip)
                         Toast.makeText(context, "Error details copied to clipboard", Toast.LENGTH_SHORT).show()
                     },
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(28.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.ContentCopy,
@@ -1425,25 +1448,21 @@ fun AgentErrorCard(
                 }
             }
 
-            // User message / short error
-            if (error.userMessage.isNotBlank() && error.userMessage != error.title) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = error.userMessage,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
-                    lineHeight = 18.sp
-                )
+            // User message / short error in clean normal font (not monospace)
+            val displayMessage = when {
+                error.userMessage.isNotBlank() && error.userMessage != error.title -> error.userMessage
+                error.shortError.isNotBlank() && error.shortError != error.title -> error.shortError
+                else -> null
             }
-
-            if (error.shortError.isNotBlank() && error.shortError != error.userMessage) {
+            if (displayMessage != null) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = error.shortError,
-                    fontSize = 12.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
-                    lineHeight = 17.sp
+                    text = displayMessage,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.SansSerif,
+                    fontWeight = FontWeight.Normal,
+                    color = textColor,
+                    lineHeight = 18.sp
                 )
             }
 
@@ -1461,26 +1480,26 @@ fun AgentErrorCard(
                 Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     onClick = onRetry,
-                    shape = RoundedCornerShape(50),
-                    color = Color.White,
-                    shadowElevation = 2.dp
+                    shape = RoundedCornerShape(8.dp),
+                    color = errorColor.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, errorColor.copy(alpha = 0.25f))
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = "Retry",
-                            tint = Color(0xFF1A1A1A),
-                            modifier = Modifier.size(15.dp)
+                            tint = errorColor,
+                            modifier = Modifier.size(13.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
                             text = "Retry",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF1A1A1A)
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = errorColor
                         )
                     }
                 }
@@ -1489,29 +1508,29 @@ fun AgentErrorCard(
             // Full Error / Stack Trace / JSON Accordion if present
             val hasVerboseDetails = error.fullError.isNotBlank() || error.rawJson.isNotBlank() || error.errorId.isNotBlank()
             if (hasVerboseDetails) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .clickable { isExpanded = !isExpanded }
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .background(errorColor.copy(alpha = 0.08f))
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
                         imageVector = Icons.Default.ExpandMore,
                         contentDescription = if (isExpanded) "Collapse" else "Expand",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        tint = errorColor.copy(alpha = 0.7f),
                         modifier = Modifier
-                            .size(16.dp)
+                            .size(15.dp)
                             .rotate(if (isExpanded) 180f else 0f)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (isExpanded) "Hide Error Details & Stack Trace" else "View Error Details & Stack Trace",
+                        text = if (isExpanded) "Hide Details" else "View Details",
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        color = errorColor.copy(alpha = 0.85f)
                     )
                 }
 
@@ -1525,7 +1544,7 @@ fun AgentErrorCard(
                             .fillMaxWidth()
                             .padding(top = 6.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(com.example.gemini.theme.AppColors.dangerContainer)
+                            .background(cardBorder.copy(alpha = 0.15f))
                             .padding(8.dp)
                     ) {
                         if (error.errorId.isNotBlank()) {
@@ -1593,6 +1612,7 @@ fun MarkdownImageView(
 
         Surface(
             modifier = Modifier
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .border(
                     BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
@@ -1602,18 +1622,20 @@ fun MarkdownImageView(
                     showFullDialog = true
                 },
             shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
         ) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 120.dp, max = 340.dp)
+                    .heightIn(min = 180.dp, max = 340.dp)
             ) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(if (resolvedUrl.isNotBlank()) resolvedUrl else image.url)
-                        .crossfade(!isAlreadyCached)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .crossfade(true)
                         .setHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36 AntiGem/1.0")
                         .decoderFactory(SvgDecoder.Factory())
                         .listener(
@@ -1627,7 +1649,7 @@ fun MarkdownImageView(
                         )
                         .build(),
                     contentDescription = image.alt,
-                    contentScale = ContentScale.Fit,
+                    contentScale = ContentScale.FillWidth,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1636,7 +1658,7 @@ fun MarkdownImageView(
                         label = "Loading image...",
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp)
+                            .height(220.dp)
                     )
                 }
 
@@ -1654,7 +1676,7 @@ fun MarkdownImageView(
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = image.alt.ifBlank { "Image could not be loaded" },
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -1663,12 +1685,11 @@ fun MarkdownImageView(
         }
 
         if (image.alt.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = image.alt,
-                fontSize = 11.5.sp,
-                fontStyle = FontStyle.Italic,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center
             )
         }
@@ -2331,7 +2352,15 @@ object MarkdownTextCache {
 fun FormattedInlineText(
     text: String,
     modifier: Modifier = Modifier,
-    style: TextStyle = TextStyle(
+    style: TextStyle? = null,
+    isStrikethrough: Boolean = false
+) {
+    val isDark = isAppInDarkTheme()
+    val density = LocalDensity.current
+    val fileLinkHandler = LocalFileLinkHandler.current
+
+    val baseColor = if (isDark) MaterialTheme.colorScheme.onSurface else Color(0xFF111111)
+    val effectiveStyle = style ?: TextStyle(
         fontSize = 16.sp,
         lineHeight = 24.sp,
         platformStyle = PlatformTextStyle(includeFontPadding = false),
@@ -2339,13 +2368,8 @@ fun FormattedInlineText(
             alignment = LineHeightStyle.Alignment.Center,
             trim = LineHeightStyle.Trim.None
         ),
-        color = Color(0xFF1A1A1A)
-    ),
-    isStrikethrough: Boolean = false
-) {
-    val isDark = isAppInDarkTheme()
-    val density = LocalDensity.current
-    val fileLinkHandler = LocalFileLinkHandler.current
+        color = baseColor
+    )
 
     val result = remember(text, isStrikethrough, isDark, density, fileLinkHandler) {
         MarkdownTextCache.getOrCompute(text, isStrikethrough, isDark, density, fileLinkHandler)
@@ -2354,7 +2378,7 @@ fun FormattedInlineText(
     Text(
         text = result.annotatedString,
         inlineContent = result.inlineContent,
-        style = style,
+        style = effectiveStyle,
         modifier = modifier
     )
 }

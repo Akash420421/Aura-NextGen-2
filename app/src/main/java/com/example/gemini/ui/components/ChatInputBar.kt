@@ -623,8 +623,8 @@ fun ChatInputBar(
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 52.dp, max = 160.dp),
-                    shape = RoundedCornerShape(28.dp),
+                        .animateContentSize(animationSpec = tween(150)),
+                    shape = RoundedCornerShape(26.dp),
                     color = if (isDark) Color(0xFF2A2A2C) else Color.White,
                     border = BorderStroke(
                         1.dp,
@@ -635,14 +635,15 @@ fun ChatInputBar(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(8.dp)
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
                     ) {
+                        // 1. Attachments Preview (if any)
                         if (attachments.isNotEmpty()) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .horizontalScroll(rememberScrollState())
-                                    .padding(bottom = 6.dp),
+                                    .padding(start = 6.dp, end = 6.dp, top = 2.dp, bottom = 6.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 attachments.forEach { att ->
@@ -661,11 +662,9 @@ fun ChatInputBar(
                                     }
 
                                     if (isImg && imgSource != null) {
-                                        Box(
-                                            modifier = Modifier.size(56.dp)
-                                        ) {
+                                        Box(modifier = Modifier.size(52.dp)) {
                                             Surface(
-                                                shape = RoundedCornerShape(12.dp),
+                                                shape = RoundedCornerShape(10.dp),
                                                 color = if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4),
                                                 border = BorderStroke(1.dp, if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6)),
                                                 modifier = Modifier
@@ -678,7 +677,7 @@ fun ChatInputBar(
                                                     contentScale = ContentScale.Crop,
                                                     modifier = Modifier
                                                         .fillMaxSize()
-                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .clip(RoundedCornerShape(10.dp))
                                                 )
                                             }
                                             Surface(
@@ -702,7 +701,7 @@ fun ChatInputBar(
                                         }
                                     } else {
                                         Surface(
-                                            shape = RoundedCornerShape(12.dp),
+                                            shape = RoundedCornerShape(10.dp),
                                             color = if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4),
                                             border = BorderStroke(1.dp, if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6))
                                         ) {
@@ -741,13 +740,58 @@ fun ChatInputBar(
                             }
                         }
 
+                        // ROW 1: Full-width Text Field ("Ask anything..." placeholder fully visible)
+                        // Auto-grows upward from 1 line at rest up to 6 lines, then scrolls internally
+                        TextField(
+                            state = textFieldState,
+                            placeholder = {
+                                Text(
+                                    text = "Ask anything...",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = if (isDark) Color(0xFF8E8E93) else Color(0xFF8A8A8E),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(focusRequester)
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent,
+                                focusedTextColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
+                                unfocusedTextColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
+                                cursorColor = GeminiBlue
+                            ),
+                            textStyle = TextStyle(
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Normal,
+                                lineHeight = 22.sp
+                            ),
+                            lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 1, maxHeightInLines = 6),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Text,
+                                imeAction = ImeAction.Default
+                            )
+                        )
+
+                        // ROW 2 (Below Text): "+" on left; headphone (voice) and mic on right.
+                        // When text field is not empty, mic is replaced with Send button (dark circle with up arrow).
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 2.dp, vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // [+] Attachment Button
+                            // Left side: [+] Attachment Button
                             Box(
-                                modifier = Modifier.size(48.dp),
+                                modifier = Modifier.size(44.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Surface(
@@ -767,78 +811,40 @@ fun ChatInputBar(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.weight(1f))
 
-                            // Middle Area: Text Field taking all remaining width
-                            Box(
-                                modifier = Modifier.weight(1f),
-                                contentAlignment = Alignment.CenterStart
-                            ) {
-                                TextField(
-                                    state = textFieldState,
-                                    placeholder = {
-                                        Text(
-                                            text = "Ask anything...",
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.Normal,
-                                            color = if (isDark) Color(0xFF8E8E93) else Color(0xFF8A8A8E),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .focusRequester(focusRequester),
-                                    colors = TextFieldDefaults.colors(
-                                        focusedContainerColor = Color.Transparent,
-                                        unfocusedContainerColor = Color.Transparent,
-                                        disabledContainerColor = Color.Transparent,
-                                        focusedIndicatorColor = Color.Transparent,
-                                        unfocusedIndicatorColor = Color.Transparent,
-                                        disabledIndicatorColor = Color.Transparent,
-                                        focusedTextColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
-                                        unfocusedTextColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1A1A1A),
-                                        cursorColor = GeminiBlue
-                                    ),
-                                    textStyle = TextStyle(
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Normal,
-                                        lineHeight = 22.sp
-                                    ),
-                                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
-                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            // Antigravity Voice Call Button
+                            // Right side: Antigravity Voice Call Headphone Button
                             if (onStartVoiceCall != null && !isRecordingAudio && !isLiveDictating) {
-                                Surface(
-                                    onClick = onStartVoiceCall,
-                                    shape = CircleShape,
-                                    color = if (voiceCallActive) GeminiBlue else (if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4)),
-                                    border = BorderStroke(
-                                        1.dp,
-                                        if (voiceCallActive) GeminiBlue else (if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6))
-                                    ),
-                                    modifier = Modifier.size(36.dp)
+                                Box(
+                                    modifier = Modifier.size(44.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.HeadsetMic,
-                                            contentDescription = if (voiceCallActive) "Open voice call" else "Start voice call",
-                                            tint = if (voiceCallActive) Color.White else (if (isDark) Color.White else Color(0xFF1A1A1A)),
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                                    Surface(
+                                        onClick = onStartVoiceCall,
+                                        shape = CircleShape,
+                                        color = if (voiceCallActive) GeminiBlue else (if (isDark) Color(0xFF3A3A3C) else Color(0xFFF1F1F4)),
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (voiceCallActive) GeminiBlue else (if (isDark) Color(0xFF4A4A4C) else Color(0xFFE2E2E6))
+                                        ),
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.HeadsetMic,
+                                                contentDescription = if (voiceCallActive) "Open voice call" else "Start voice call",
+                                                tint = if (voiceCallActive) Color.White else (if (isDark) Color.White else Color(0xFF1A1A1A)),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
                                 }
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                             }
 
-                            // Mic / Send Button with 150ms crossfade
+                            // Right side: Mic / Send / Stop Button with 150ms crossfade
                             Box(
-                                modifier = Modifier.size(48.dp),
+                                modifier = Modifier.size(44.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Crossfade(

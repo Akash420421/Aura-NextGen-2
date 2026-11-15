@@ -606,7 +606,7 @@ fun AssistantMessageFooter(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
         // Technical Token & Cache Telemetry Pill hidden as requested
 
@@ -622,13 +622,13 @@ fun AssistantMessageFooter(
                     clipboard.setPrimaryClip(clip)
                     Toast.makeText(context, "Copied response", Toast.LENGTH_SHORT).show()
                 },
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(40.dp)
             ) {
                 Icon(
                     imageVector = Icons.Outlined.ContentCopy,
                     contentDescription = "Copy message",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                    modifier = Modifier.size(15.dp)
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
@@ -638,13 +638,13 @@ fun AssistantMessageFooter(
             var showSelectText by remember { mutableStateOf(false) }
             IconButton(
                 onClick = { showSelectText = true },
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(40.dp)
             ) {
                 Icon(
                     imageVector = Icons.Outlined.SelectAll,
                     contentDescription = "Select text",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                    modifier = Modifier.size(16.dp)
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    modifier = Modifier.size(19.dp)
                 )
             }
             if (showSelectText) {
@@ -657,13 +657,13 @@ fun AssistantMessageFooter(
             var confirmRetry by remember { mutableStateOf(false) }
             IconButton(
                 onClick = { confirmRetry = true },
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(40.dp)
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Refresh,
                     contentDescription = "Regenerate response",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                    modifier = Modifier.size(16.dp)
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    modifier = Modifier.size(19.dp)
                 )
             }
             if (confirmRetry) {
@@ -691,13 +691,13 @@ fun AssistantMessageFooter(
                 Spacer(modifier = Modifier.width(4.dp))
                 IconButton(
                     onClick = { onViewRawPayload?.invoke(payloadToShow) },
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.DataObject,
                         contentDescription = "View Raw Request Payload",
                         tint = com.example.gemini.theme.AppColors.accentTeal,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
@@ -706,13 +706,13 @@ fun AssistantMessageFooter(
                 Spacer(modifier = Modifier.width(4.dp))
                 IconButton(
                     onClick = onShowArtifacts,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Layers,
                         contentDescription = "View Artifacts ($artifactsCount)",
                         tint = ClaudeTerracotta,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
