@@ -247,13 +247,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 "jarvis_open_screen" -> {
                     val screen = args.optString("screen", "chat")
                     withContext(Dispatchers.Main) {
-                        when (screen.lowercase()) {
-                            "chat" -> JarvisController.openScreen("chat")
-                            "terminal" -> JarvisController.openScreen("terminal")
-                            "browser" -> JarvisController.openScreen("browser")
-                            "settings" -> JarvisController.openScreen("settings")
-                            else -> JarvisController.openScreen(screen)
-                        }
+                        JarvisController.vm.requestViewMode(screen.uppercase())
                     }
                     JSONObject().put("status", "success").put("message", "Switched to screen $screen")
                 }
@@ -266,23 +260,19 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
 
                 "jarvis_ide_list_projects" -> {
-                    val res = JarvisMcp.handle(context, "jarvis_ide_list_projects", args)
-                    res
+                    JarvisMcp.call(context, "jarvis_ide_list_projects", args)
                 }
 
                 "jarvis_ide_open_project" -> {
-                    val res = JarvisMcp.handle(context, "jarvis_ide_open_project", args)
-                    res
+                    JarvisMcp.call(context, "jarvis_ide_open_project", args)
                 }
 
                 "jarvis_ide_open_file" -> {
-                    val res = JarvisMcp.handle(context, "jarvis_ide_open_file", args)
-                    res
+                    JarvisMcp.call(context, "jarvis_ide_open_file", args)
                 }
 
                 "jarvis_set_model" -> {
-                    val res = JarvisMcp.handle(context, "jarvis_set_model", args)
-                    res
+                    JarvisMcp.call(context, "jarvis_set_model", args)
                 }
 
                 // --- 2. Memory Tools ---

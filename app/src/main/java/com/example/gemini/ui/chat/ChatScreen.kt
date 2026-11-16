@@ -496,10 +496,7 @@ fun ChatScreen(
 
         if (!com.example.gemini.data.jarvis.JarvisController.hasMic()) {
             auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
-            return@startAuraJarvis
-        }
-
-        if (liveKey.isNotBlank()) {
+        } else if (liveKey.isNotBlank()) {
             liveManager.toggleSession(context)
         } else {
             if (!com.example.gemini.data.jarvis.JarvisPreferences.enabled.value) {

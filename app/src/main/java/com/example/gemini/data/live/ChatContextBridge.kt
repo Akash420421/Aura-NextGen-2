@@ -60,6 +60,7 @@ object ChatContextBridge {
                     MessageRole.USER -> "User"
                     MessageRole.ASSISTANT -> "Assistant"
                     MessageRole.SYSTEM -> "System"
+                    else -> "Assistant"
                 }
                 // Truncate very long code snippets to keep context focused
                 val text = if (m.content.length > 500) m.content.take(500) + "... [truncated]" else m.content
