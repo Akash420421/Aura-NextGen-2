@@ -10,11 +10,18 @@ import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.gemini.data.automation.AndroidAutomation
 import com.example.gemini.data.automation.AutomationAccessibilityService
+import com.example.gemini.data.daemon.ProjectItem
+import com.example.gemini.data.daemon.TermuxDaemonManager
 import com.example.gemini.data.jarvis.JarvisController
 import com.example.gemini.data.jarvis.JarvisMcp
 import com.example.gemini.data.jarvis.JarvisPreferences
 import com.example.gemini.data.local.LocalEnvironmentManager
 import com.example.gemini.data.local.LocalTerminalBridge
+import com.example.gemini.data.vision.AuraScreenShareBridge
+import com.example.gemini.domain.model.MessageRole
+import com.example.gemini.domain.model.ToolCall
+import com.example.gemini.domain.model.ToolType
+import com.example.gemini.ui.browser.BrowserSessionManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +62,12 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
     private val sessionTurns = java.util.Collections.synchronizedList(mutableListOf<String>())
+    private val assistantTextBuffer = StringBuilder()
+    private val accumulatedToolCalls = java.util.Collections.synchronizedList(mutableListOf<ToolCall>())
+
+    fun sendVideoFrame(jpegBytes: ByteArray) {
+        webSocket?.sendVideoFrame(jpegBytes)
+    }
 
     fun init(context: Context) {
         appContext = context.applicationContext
@@ -75,6 +88,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         if (isLive()) return
         appContext = context.applicationContext
         AuraMemoryManager.init(context)
+        ChatContextBridge.ensureVoiceChat()
 
         val apiKey = JarvisPreferences.liveApiKey.value.trim()
         if (apiKey.isBlank()) {
@@ -136,6 +150,19 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         Log.i(TAG, "Stopping live voice session...")
         appContext?.let { AuraLiveVoiceService.stop(it) }
 
+        // Flush any pending voice turn
+        val pendingText = assistantTextBuffer.toString().trim()
+        assistantTextBuffer.clear()
+        val pendingTools = accumulatedToolCalls.toList()
+        accumulatedToolCalls.clear()
+        if (pendingText.isNotEmpty() || pendingTools.isNotEmpty()) {
+            ChatContextBridge.postVoiceMessage(MessageRole.ASSISTANT, pendingText, pendingTools)
+        }
+
+        try {
+            AuraScreenShareBridge.stopScreenShare()
+        } catch (_: Exception) {}
+
         if (sessionTurns.isNotEmpty()) {
             val summary = sessionTurns.takeLast(12).joinToString("\n")
             AuraMemoryManager.rememberFact("Voice session log:\n$summary", "VOICE_LOG")
@@ -169,15 +196,24 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- NEVER switch to Portuguese, Spanish, or any other foreign language under ANY circumstance!\n")
         sb.append("- If you hear ambient background noise, TV sound, music, or someone speaking another language in the room, COMPLETELY IGNORE IT and continue talking ONLY to the user in Hindi/Hinglish.\n\n")
 
+        sb.append("### IN-APP IDE & BROWSER WORKFLOW:\n")
+        sb.append("- When user asks to make a website, calculator, HTML page, or project:\n")
+        sb.append("  1. ALWAYS call write_project_file to save the HTML/CSS/JS file! This automatically opens the file in the app's IDE code editor tabs and switches the app view to IDE.\n")
+        sb.append("  2. Call execute_terminal_command to run python3 -m http.server 8080 & or test the code in Termux.\n")
+        sb.append("  3. Call open_website(url=\"http://localhost:8080\", in_app=true) to immediately show the website live in the app's built-in browser!\n")
+        sb.append("  4. You can also call jarvis_open_screen(screen=\"ide\") or jarvis_open_screen(screen=\"browser\") to switch tabs.\n\n")
+
+        sb.append("### SCREEN SHARING & SEEING THE SCREEN:\n")
+        sb.append("- If user asks to share screen, asks you to see what's on screen, or needs your visual assistance on the phone: IMMEDIATELY call request_screen_share().\n")
+        sb.append("- Once screen sharing is active, you receive real-time screen frames.\n")
+        sb.append("- When screen viewing is finished, call stop_screen_share().\n\n")
+
         sb.append("### STRICT ACTION & ZERO-HALLUCINATION POLICY:\n")
-        sb.append("- You MUST ALWAYS execute the matching tool immediately when asked to take action. NEVER lie, pretend, or claim 'I am creating files' without actually invoking the tool!\n")
+        sb.append("- You MUST ALWAYS execute the matching tool immediately when asked to take action. NEVER lie, pretend, or claim 'I am creating files' without actually invoking write_project_file or execute_terminal_command!\n")
+        sb.append("- When user asks to send a WhatsApp message: call send_whatsapp_message. NEVER say 'Maine message send kar diya' unless the tool returns success. If it returns needs_tap, tell the user 'Maine WhatsApp open karke message type kar diya hai, kripya Send par tap kar dijiye'.\n")
         sb.append("- When user says to open WhatsApp -> call open_app(app_name=\"WhatsApp\").\n")
         sb.append("- When user says to tap a contact/person (e.g. 'Abhishek') -> call click_ui_element(element_id_or_text=\"Abhishek\").\n")
         sb.append("- When user says to bring Aura AI back to front -> call open_aura_app().\n")
-        sb.append("- When user asks to make a calculator, website, or run a project:\n")
-        sb.append("  1. Call write_project_file to save the HTML/CSS/JS file.\n")
-        sb.append("  2. Call execute_terminal_command to run python3 -m http.server 8080 or test the code.\n")
-        sb.append("  3. Call open_website(url=\"http://localhost:8080\") to show the user the live preview.\n")
         sb.append("- Keep your spoken replies concise, friendly, confident, and direct. Call tools instantly.\n\n")
 
         // Ingest Persistent Memory Core
@@ -222,12 +258,13 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     override fun onAssistantTextReceived(textChunk: String) {
         _lastTranscript.value = textChunk
         sessionTurns.add("Assistant: $textChunk")
+        assistantTextBuffer.append(textChunk)
     }
 
     override fun onUserTextReceived(textChunk: String) {
         sessionTurns.add("User: $textChunk")
-        // Trigger automatic memory learning on what user says
         AuraMemoryManager.learnFromConversation(textChunk)
+        ChatContextBridge.postVoiceMessage(MessageRole.USER, textChunk)
     }
 
     override fun onInterrupted() {
@@ -238,6 +275,16 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     override fun onTurnCompleted() {
+        val replyText = assistantTextBuffer.toString().trim()
+        assistantTextBuffer.clear()
+
+        val toolCallsCopy = accumulatedToolCalls.toList()
+        accumulatedToolCalls.clear()
+
+        if (replyText.isNotEmpty() || toolCallsCopy.isNotEmpty()) {
+            ChatContextBridge.postVoiceMessage(MessageRole.ASSISTANT, replyText, toolCallsCopy)
+        }
+
         if (_phase.value != Phase.SPEAKING) {
             _phase.value = Phase.LISTENING
             _statusText.value = "Listening..."
@@ -256,8 +303,22 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         _phase.value = Phase.THINKING
         _statusText.value = "Executing $name..."
 
+        val toolArgsMap = mutableMapOf<String, Any?>()
+        args.keys().forEach { k -> toolArgsMap[k] = args.opt(k) }
+        val toolCallRecord = ToolCall(
+            id = callId,
+            tool = ToolType.CUSTOM,
+            name = name,
+            arguments = toolArgsMap,
+            status = ToolCall.Status.RUNNING
+        )
+        accumulatedToolCalls.add(toolCallRecord)
+
         scope?.launch(Dispatchers.IO) {
             val result = executeTool(name, args)
+            val isErr = result.optString("status") == "error"
+            toolCallRecord.status = if (isErr) ToolCall.Status.FAILED else ToolCall.Status.SUCCESS
+            toolCallRecord.result = result.toString()
             webSocket?.sendToolResponse(callId, name, result)
         }
     }
@@ -416,12 +477,29 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
 
                 "open_website" -> {
-                    val url = args.optString("url", "https://google.com")
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    val url = args.optString("url", "https://google.com").trim()
+                    val inApp = args.optBoolean("in_app", true)
+                    if (inApp) {
+                        withContext(Dispatchers.Main) {
+                            try {
+                                BrowserSessionManager.instance.openUrl(url, newTab = true)
+                                JarvisController.vm.requestViewMode("BROWSER")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "In-app browser failed: ${e.message}")
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                            }
+                        }
+                        JSONObject().put("status", "success").put("message", "Opened $url in app browser")
+                    } else {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                        JSONObject().put("status", "success").put("message", "Opened $url in external browser")
                     }
-                    context.startActivity(intent)
-                    JSONObject().put("status", "success").put("message", "Opened $url")
                 }
 
                 "search_in_chrome" -> {
@@ -477,11 +555,28 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         val targetFile = if (pathStr.startsWith("/")) File(pathStr) else File(baseDir, pathStr)
                         targetFile.parentFile?.mkdirs()
                         targetFile.writeText(content, Charsets.UTF_8)
+
+                        // Directly open in IDE code editor tabs and switch view mode!
+                        withContext(Dispatchers.Main) {
+                            try {
+                                val projectDir = targetFile.parentFile ?: baseDir
+                                TermuxDaemonManager.setActiveProject(ProjectItem(name = projectDir.name, path = projectDir.absolutePath))
+                                TermuxDaemonManager.openOrSelectTab(
+                                    path = targetFile.absolutePath,
+                                    name = targetFile.name,
+                                    content = content
+                                )
+                                JarvisController.vm.requestViewMode("IDE")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Error integrating file into IDE: ${e.message}")
+                            }
+                        }
+
                         JSONObject().apply {
                             put("status", "success")
                             put("path", targetFile.absolutePath)
                             put("bytes_written", content.length)
-                            put("message", "File saved at ${targetFile.name}")
+                            put("message", "File saved at ${targetFile.name} and opened in IDE editor")
                         }
                     }
                 }
@@ -502,6 +597,17 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                 }
 
+                // --- 5. Screen Share Tools ---
+                "request_screen_share" -> {
+                    val promptResult = AuraScreenShareBridge.requestScreenShare()
+                    JSONObject().put("status", "success").put("message", promptResult)
+                }
+
+                "stop_screen_share" -> {
+                    AuraScreenShareBridge.stopScreenShare()
+                    JSONObject().put("status", "success").put("message", "Screen share stopped.")
+                }
+
                 else -> {
                     JSONObject().put("status", "error").put("message", "Unknown tool: $name")
                 }
@@ -512,7 +618,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         }
     }
 
-    private fun sendWhatsAppMessage(
+    private suspend fun sendWhatsAppMessage(
         context: Context,
         recipient: String,
         message: String,
@@ -541,43 +647,41 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
         try {
             context.startActivity(intent)
-            scheduleWhatsAppAutoSend()
-            return JSONObject().put("status", "success").put("message", "Message sent to $recipient on WhatsApp.")
-        } catch (e: Exception) {
-            return try {
+        } catch (_: Exception) {
+            try {
                 val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(deepLink)).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
                 context.startActivity(fallbackIntent)
-                scheduleWhatsAppAutoSend()
-                JSONObject().put("status", "success").put("message", "Message sent via WhatsApp.")
             } catch (e2: Exception) {
-                JSONObject().put("status", "error").put("message", "Could not open WhatsApp: ${e2.message}")
+                return JSONObject().put("status", "error").put("message", "Could not open WhatsApp: ${e2.message}")
             }
         }
-    }
 
-    private fun scheduleWhatsAppAutoSend() {
-        val handler = Handler(Looper.getMainLooper())
-        handler.postDelayed(object : Runnable {
-            var attempts = 0
-            override fun run() {
-                val svc = AutomationAccessibilityService.instance
-                val root = svc?.rootInActiveWindow
-                if (root != null) {
-                    val sendNode = findWhatsAppSendButton(root)
-                    if (sendNode != null) {
-                        sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        Log.d(TAG, "Tapped WhatsApp send button via Accessibility!")
-                        return
+        // Wait and verify if send button is clicked via Accessibility
+        var clicked = false
+        for (i in 0 until 14) {
+            delay(250)
+            val svc = AutomationAccessibilityService.instance
+            val root = svc?.rootInActiveWindow
+            if (root != null) {
+                val sendNode = findWhatsAppSendButton(root)
+                if (sendNode != null) {
+                    val didClick = sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    if (didClick) {
+                        clicked = true
+                        Log.d(TAG, "Tapped and verified WhatsApp send button via Accessibility!")
+                        break
                     }
                 }
-                attempts++
-                if (attempts < 12) {
-                    handler.postDelayed(this, 300)
-                }
             }
-        }, 500)
+        }
+
+        return if (clicked) {
+            JSONObject().put("status", "success").put("message", "Message verified and sent to $recipient on WhatsApp.")
+        } else {
+            JSONObject().put("status", "needs_tap").put("message", "WhatsApp opened with text filled for $recipient, but could not auto-click Send button. User needs to tap Send.")
+        }
     }
 
     private fun findWhatsAppSendButton(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {

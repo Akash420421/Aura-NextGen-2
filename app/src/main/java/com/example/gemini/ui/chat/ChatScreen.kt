@@ -513,26 +513,21 @@ fun ChatScreen(
     val screenCaptureLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
+        com.example.gemini.data.vision.AuraScreenShareBridge.onScreenCaptureResult(context, result.resultCode, result.data)
+    }
+
+    LaunchedEffect(Unit) {
+        com.example.gemini.data.vision.AuraScreenShareBridge.requestLauncher = {
             val projectionManager = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
-            if (projectionManager != null) {
-                try {
-                    val projection = projectionManager.getMediaProjection(result.resultCode, result.data!!)
-                    if (projection != null) {
-                        val metrics = context.resources.displayMetrics
-                        val started = com.example.gemini.data.vision.ScreenCaptureManager.getInstance().startCapture(projection, metrics)
-                        if (started) {
-                            Toast.makeText(context, "Screen sharing started", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "Could not start screen sharing", Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        Toast.makeText(context, "Could not obtain screen projection", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    Toast.makeText(context, "Screen share error: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
+            projectionManager?.createScreenCaptureIntent()?.let { intent ->
+                screenCaptureLauncher.launch(intent)
             }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            com.example.gemini.data.vision.AuraScreenShareBridge.requestLauncher = null
         }
     }
     val pendingApprovals by viewModel.pendingApprovals.collectAsState()
@@ -2021,6 +2016,15 @@ fun ChatScreen(
                                 )
                             }
                         }
+                        val isScreenSharingTop by com.example.gemini.data.vision.AuraScreenShareBridge.isSharing.collectAsState()
+                        IconButton(onClick = { com.example.gemini.data.vision.AuraScreenShareBridge.toggleScreenShare() }) {
+                            Icon(
+                                imageVector = Icons.Outlined.DesktopWindows,
+                                contentDescription = if (isScreenSharingTop) "Stop Screen Sharing" else "Share Screen",
+                                tint = if (isScreenSharingTop) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                         if (isDevModeEnabled && !isAuraHome) {
                             IconButton(onClick = { showChatTelemetryDialog = true }) {
                                 Icon(
@@ -2895,23 +2899,15 @@ fun ChatScreen(
                     agentWorking = isActivelyRunning && currentConv?.id == voiceCall.conversationId
                 )
 
+                // Persistent Aura Live Voice Jarvis Call Pill
+                com.example.gemini.ui.voice.AuraLiveVoiceCallPill()
+
                 if (isAuraHome && auraHomeVoice) {
                     com.example.gemini.ui.home.AuraVoiceActions(
                         autoSend = auraAutoSend,
                         onStart = startAuraJarvis,
                         onScreen = {
-                            val scm = com.example.gemini.data.vision.ScreenCaptureManager.getInstance()
-                            if (scm.isSharing.value) {
-                                scm.stopCapture()
-                                Toast.makeText(context, "Screen sharing stopped", Toast.LENGTH_SHORT).show()
-                            } else {
-                                val projectionManager = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
-                                if (projectionManager != null) {
-                                    screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
-                                } else {
-                                    Toast.makeText(context, "Screen sharing not supported on this device", Toast.LENGTH_SHORT).show()
-                                }
-                            }
+                            com.example.gemini.data.vision.AuraScreenShareBridge.toggleScreenShare()
                         },
                         onToggleAuto = { com.example.gemini.data.jarvis.JarvisPreferences.autoSend.set(!auraAutoSend) }
                     )
@@ -3005,9 +3001,9 @@ fun ChatScreen(
                     queuedMessages = queuedMessages,
                     onSendQueuedNow = { viewModel.sendQueuedNow(it) },
                     onDeleteQueued = { viewModel.deleteQueued(it) },
-                    onStartVoiceCall = null,
+                    onStartVoiceCall = { startAuraJarvis() },
                     onStartVoiceMode = { auraHomeVoice = true },
-                    voiceCallActive = voiceCall.active,
+                    voiceCallActive = voiceCall.active || com.example.gemini.data.live.AuraLiveVoiceManager.isLive(),
                     auraHomeStyle = isAuraHome
                 )
                 }

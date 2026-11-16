@@ -98,4 +98,54 @@ object ChatContextBridge {
             Log.e(TAG, "Failed to send text to chat: ${e.message}", e)
         }
     }
+
+    /**
+     * Ensures an active conversation exists in ChatViewModel for this voice session.
+     */
+    fun ensureVoiceChat(): Conversation? {
+        val vm = viewModel ?: return null
+        val current = vm.currentConversation.value
+        if (current != null && current.title != "New Chat") {
+            return current
+        }
+        vm.startNewChat()
+        return vm.currentConversation.value
+    }
+
+    /**
+     * Appends a voice turn (User, Assistant, or Tool executions) directly into the
+     * active chat feed so the chat renders in real time like AntiGem's calling feature.
+     */
+    fun postVoiceMessage(role: MessageRole, text: String, toolCalls: List<com.example.gemini.domain.model.ToolCall> = emptyList()) {
+        val vm = viewModel ?: return
+        val conv = vm.currentConversation.value ?: run {
+            vm.startNewChat()
+            vm.currentConversation.value ?: return
+        }
+
+        val msg = ChatMessage(
+            conversationId = conv.id,
+            role = role,
+            content = text,
+            toolCalls = toolCalls,
+            viaVoice = true,
+            createdAt = System.currentTimeMillis()
+        )
+
+        // Add to store so UI re-renders immediately
+        vm.store.messages.value = vm.store.messages.value + msg
+
+        if (vm.store.conversations.value.none { it.id == conv.id }) {
+            vm.store.conversations.value = listOf(conv) + vm.store.conversations.value
+        }
+
+        if (conv.title == "New Chat" && text.isNotBlank()) {
+            val shortTitle = if (text.length > 25) text.take(25).trim() + "..." else text.trim()
+            val updatedConv = conv.copy(title = "Voice: $shortTitle")
+            vm.store.currentConversation.value = updatedConv
+            vm.store.conversations.value = vm.store.conversations.value.map {
+                if (it.id == updatedConv.id) updatedConv else it
+            }
+        }
+    }
 }

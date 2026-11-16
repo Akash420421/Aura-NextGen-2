@@ -232,12 +232,17 @@ class GeminiLiveWebSocket(
             "command" to prop("string", "The shell command to run"),
             "working_directory" to prop("string", "Optional working directory (defaults to projects directory)")))
 
-        put(tool("write_project_file", "Creates or updates a file on disk in the projects folder (e.g. index.html, style.css, app.js, main.py).", listOf("path", "content"),
+        put(tool("write_project_file", "Creates or updates a file on disk in the projects folder (e.g. index.html, style.css, app.js, main.py) and opens it in the in-app IDE tabs.", listOf("path", "content"),
             "path" to prop("string", "Relative or absolute path to the file"),
             "content" to prop("string", "Complete text content of the file")))
 
         put(tool("read_project_file", "Reads a file's content from the local projects directory.", listOf("path"),
             "path" to prop("string", "Path to file")))
+
+        // --- 5. Screen Share & Vision Tools ---
+        put(tool("request_screen_share", "Prompts the user with Android's system permission dialog to start sharing their phone screen so you can see what is on screen.", emptyList()))
+
+        put(tool("stop_screen_share", "Stops sharing the phone screen.", emptyList()))
     }
 
     private fun tool(name: String, description: String, required: List<String> = emptyList(), vararg props: Pair<String, JSONObject>): JSONObject =
@@ -342,6 +347,18 @@ class GeminiLiveWebSocket(
             webSocket?.send(json)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send audio chunk: ${e.message}")
+        }
+    }
+
+    fun sendVideoFrame(jpegBytes: ByteArray) {
+        if (!isConnected.get() || !isSetupComplete.get() || jpegBytes.isEmpty()) return
+
+        try {
+            val base64Image = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+            val json = "{\"realtimeInput\":{\"mediaChunks\":[{\"mimeType\":\"image/jpeg\",\"data\":\"$base64Image\"}]}}"
+            webSocket?.send(json)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send video frame: ${e.message}")
         }
     }
 

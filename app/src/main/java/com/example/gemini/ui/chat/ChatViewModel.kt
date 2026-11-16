@@ -43,7 +43,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val authPreferences = AuthPreferences(application)
     private val authPrefs get() = authPreferences
-    private val store = com.example.gemini.data.agent.ChatSessionStore()
+    val store = com.example.gemini.data.agent.ChatSessionStore()
     val agyBackend: com.example.gemini.data.agent.agy.AgyChatBackend = com.example.gemini.data.agent.agy.AgyChatBackend(
         application = application,
         backendScope = viewModelScope,
