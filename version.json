@@ -6,6 +6,8 @@
     "Aura AI v2.2.8 — Full AntiGem Calling Parity & Deep In-App IDE/Browser Integration",
     "Real-time Chat Feed Integration: Spoken user utterances, AI answers, and tool executions stream directly into the chat session as real messages and tool cards",
     "In-App IDE & Browser Control: AI automatically writes project files, opens them in IDE editor tabs, executes local servers, and previews sites live in the in-app browser",
+    "Voice Mode GitHub Superpowers: Hands-free git clone, fork, push, pull, and repo status directly in voice mode",
+    "Self-Healing Web Apps: In-app browser console and network inspection in voice mode to auto-diagnose and fix code bugs immediately",
     "Screen Share Vision Streaming: Bidirectional video streaming directly into Gemini Live WebSocket with native Android permission prompts and AI request/stop triggers",
     "Permanent Screen Share Button: One-tap screen share toggle with live green status indicators in both Top Bar and Voice Call Pill",
     "AntiGem Style Live Voice Call Pill: Floating/persistent pill showing live speech waveforms, phase indicators, status text, and call controls across all screens",

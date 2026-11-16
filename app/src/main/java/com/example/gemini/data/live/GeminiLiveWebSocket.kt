@@ -243,6 +243,24 @@ class GeminiLiveWebSocket(
         put(tool("request_screen_share", "Prompts the user with Android's system permission dialog to start sharing their phone screen so you can see what is on screen.", emptyList()))
 
         put(tool("stop_screen_share", "Stops sharing the phone screen.", emptyList()))
+
+        // --- 6. GitHub & Git Voice Automation Tools ---
+        put(tool("github_clone", "Clones a public or private GitHub repository URL (or owner/repo) into the local projects directory and opens it in the in-app IDE.", listOf("repo_url"),
+            "repo_url" to prop("string", "GitHub repository URL (e.g. https://github.com/user/project) or owner/name"),
+            "folder_name" to prop("string", "Optional custom local folder name (defaults to repository name)")))
+
+        put(tool("github_pull", "Pulls the latest code updates from the remote GitHub repository for the active project.", emptyList(),
+            "project_name" to prop("string", "Optional project folder name (defaults to active project)")))
+
+        put(tool("github_push", "Commits and pushes all code changes to GitHub remote.", listOf("commit_message"),
+            "commit_message" to prop("string", "Commit message describing the changes made"),
+            "project_name" to prop("string", "Optional project folder name (defaults to active project)")))
+
+        put(tool("github_status", "Checks git repository status (uncommitted changes, branch, origin remote) and GitHub auth status.", emptyList(),
+            "project_name" to prop("string", "Optional project folder name (defaults to active project)")))
+
+        // --- 7. In-App Browser Self-Healing & Auto-Fix Tools ---
+        put(tool("browser_inspect_page", "Inspects the active in-app browser tab: retrieves URL, title, console error messages, and network errors so you can automatically fix bugs in the code.", emptyList()))
     }
 
     private fun tool(name: String, description: String, required: List<String> = emptyList(), vararg props: Pair<String, JSONObject>): JSONObject =

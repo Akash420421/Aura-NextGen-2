@@ -201,7 +201,14 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("  1. ALWAYS call write_project_file to save the HTML/CSS/JS file! This automatically opens the file in the app's IDE code editor tabs and switches the app view to IDE.\n")
         sb.append("  2. Call execute_terminal_command to run python3 -m http.server 8080 & or test the code in Termux.\n")
         sb.append("  3. Call open_website(url=\"http://localhost:8080\", in_app=true) to immediately show the website live in the app's built-in browser!\n")
-        sb.append("  4. You can also call jarvis_open_screen(screen=\"ide\") or jarvis_open_screen(screen=\"browser\") to switch tabs.\n\n")
+        sb.append("  4. Call browser_inspect_page to inspect console errors. If any error appears, IMMEDIATELY call write_project_file to fix the bug (self-healing)!\n")
+        sb.append("  5. You can also call jarvis_open_screen(screen=\"ide\") or jarvis_open_screen(screen=\"browser\") to switch tabs.\n\n")
+
+        sb.append("### GITHUB & REPOSITORY WORKFLOWS IN VOICE MODE:\n")
+        sb.append("- When user asks to clone a project (e.g. 'ye repo clone karo', 'kisi ka project apna banana'):\n")
+        sb.append("  Call github_clone(repo_url=\"...\"). It clones into /projects and opens it in the in-app IDE tabs!\n")
+        sb.append("- When user asks to push changes to GitHub: call github_push(commit_message=\"...\").\n")
+        sb.append("- When user asks to pull updates or check git status: call github_pull() or github_status().\n\n")
 
         sb.append("### SCREEN SHARING & SEEING THE SCREEN:\n")
         sb.append("- If user asks to share screen, asks you to see what's on screen, or needs your visual assistance on the phone: IMMEDIATELY call request_screen_share().\n")
@@ -619,8 +626,132 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     JSONObject().put("status", "success").put("message", "Screen share stopped.")
                 }
 
+                // --- 6. GitHub & Git Voice Tools ---
+                "github_clone" -> {
+                    val repoUrl = args.optString("repo_url", "").trim()
+                    val folderName = args.optString("folder_name").takeIf { !it.isNullOrBlank() }
+                        ?: repoUrl.substringAfterLast("/").removeSuffix(".git").ifBlank { "project" }
+
+                    val projectsDir = File("/data/user/0/com.termux/files/home/projects")
+                    if (!projectsDir.exists()) projectsDir.mkdirs()
+                    val targetDir = File(projectsDir, folderName)
+
+                    val cloneCmd = if (targetDir.exists()) {
+                        "cd '${targetDir.absolutePath}' && git pull"
+                    } else {
+                        "git clone '$repoUrl' '${targetDir.absolutePath}'"
+                    }
+
+                    val res = LocalEnvironmentManager.executeCommand(
+                        command = cloneCmd,
+                        context = context,
+                        workingDir = projectsDir.absolutePath,
+                        timeoutSeconds = 90
+                    )
+
+                    if (targetDir.exists()) {
+                        withContext(Dispatchers.Main) {
+                            try {
+                                TermuxDaemonManager.setActiveProject(ProjectItem(name = folderName, path = targetDir.absolutePath))
+                                JarvisController.vm.requestViewMode("IDE")
+                            } catch (_: Exception) {}
+                        }
+                    }
+
+                    JSONObject().apply {
+                        put("status", if (res.exitCode == 0) "success" else "error")
+                        put("exit_code", res.exitCode)
+                        put("path", targetDir.absolutePath)
+                        put("output", res.output.ifBlank { "Repository cloned and opened in IDE" })
+                    }
+                }
+
+                "github_pull" -> {
+                    val activeProj = TermuxDaemonManager.activeProject.value
+                    val projPath = args.optString("project_name").takeIf { !it.isNullOrBlank() }?.let {
+                        if (it.startsWith("/")) it else "/data/user/0/com.termux/files/home/projects/$it"
+                    } ?: activeProj?.path ?: "/data/user/0/com.termux/files/home/projects"
+
+                    val res = LocalEnvironmentManager.executeCommand(
+                        command = "git pull",
+                        context = context,
+                        workingDir = projPath,
+                        timeoutSeconds = 40
+                    )
+                    JSONObject().apply {
+                        put("status", if (res.exitCode == 0) "success" else "error")
+                        put("exit_code", res.exitCode)
+                        put("output", res.output.ifBlank { "Already up to date." })
+                    }
+                }
+
+                "github_push" -> {
+                    val commitMsg = args.optString("commit_message", "update from Aura AI").trim()
+                    val activeProj = TermuxDaemonManager.activeProject.value
+                    val projPath = args.optString("project_name").takeIf { !it.isNullOrBlank() }?.let {
+                        if (it.startsWith("/")) it else "/data/user/0/com.termux/files/home/projects/$it"
+                    } ?: activeProj?.path ?: "/data/user/0/com.termux/files/home/projects"
+
+                    val sanitizedMsg = commitMsg.replace("\"", "\\\"")
+                    val cmd = "git add -A && git commit -m \"$sanitizedMsg\" && git push"
+                    val res = LocalEnvironmentManager.executeCommand(
+                        command = cmd,
+                        context = context,
+                        workingDir = projPath,
+                        timeoutSeconds = 60
+                    )
+                    JSONObject().apply {
+                        put("status", if (res.exitCode == 0) "success" else "error")
+                        put("exit_code", res.exitCode)
+                        put("output", res.output.ifBlank { "Pushed changes to GitHub." })
+                    }
+                }
+
+                "github_status" -> {
+                    val activeProj = TermuxDaemonManager.activeProject.value
+                    val projPath = args.optString("project_name").takeIf { !it.isNullOrBlank() }?.let {
+                        if (it.startsWith("/")) it else "/data/user/0/com.termux/files/home/projects/$it"
+                    } ?: activeProj?.path ?: "/data/user/0/com.termux/files/home/projects"
+
+                    val res = LocalEnvironmentManager.executeCommand(
+                        command = "git status --short && git branch -v",
+                        context = context,
+                        workingDir = projPath,
+                        timeoutSeconds = 20
+                    )
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("project_path", projPath)
+                        put("output", res.output.ifBlank { "Clean working directory, nothing to commit." })
+                    }
+                }
+
+                // --- 7. In-App Browser Inspection & Self-Healing ---
+                "browser_inspect_page" -> {
+                    val bsm = BrowserSessionManager.instance
+                    val tab = bsm.getActiveTab()
+                    val consoleLogs = bsm.getConsoleLogs(tab?.id, levelFilter = "ERROR", limit = 15)
+                    val netErrors = bsm.getNetworkErrors(tab?.id, limit = 10)
+
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("tab_url", tab?.url ?: "No active tab")
+                        put("tab_title", tab?.title ?: "")
+                        put("console_errors", org.json.JSONArray().apply {
+                            consoleLogs.forEach { put("[${it.level}] ${it.message} (${it.sourceId}:${it.lineNumber})") }
+                        })
+                        put("network_errors", org.json.JSONArray().apply {
+                            netErrors.forEach { put("${it.method} ${it.url} -> HTTP ${it.statusCode} (${it.description})") }
+                        })
+                    }
+                }
+
                 else -> {
-                    JSONObject().put("status", "error").put("message", "Unknown tool: $name")
+                    if (name.startsWith("jarvis_")) {
+                        JarvisMcp.call(context, name, args)
+                    } else {
+                        JSONObject().put("status", "error").put("message", "Unknown tool: $name")
+                    }
                 }
             }
         } catch (e: Exception) {
