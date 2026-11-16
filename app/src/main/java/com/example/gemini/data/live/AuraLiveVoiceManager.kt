@@ -124,11 +124,14 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         ws.promptProvider = { buildComprehensiveSystemPrompt() }
         webSocket = ws
 
+        AuraLiveVoiceService.start(context)
         ws.connect(scope)
     }
 
     fun stopSession() {
         Log.i(TAG, "Stopping live voice session...")
+        appContext?.let { AuraLiveVoiceService.stop(it) }
+
         audioRecorder?.stop()
         audioRecorder = null
 
@@ -465,6 +468,21 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     private fun resolveContactPhoneNumber(context: Context, name: String): String? {
+        val digitsOnly = name.filter { it.isDigit() }
+        if (digitsOnly.length >= 10) {
+            return digitsOnly
+        }
+
+        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.READ_CONTACTS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (!hasPermission) {
+            Log.w(TAG, "READ_CONTACTS permission not granted. Cannot look up contact '$name'.")
+            return null
+        }
+
         val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
         val projection = arrayOf(
             ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,

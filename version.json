@@ -1,14 +1,12 @@
 {
-  "version_code": 225,
-  "version_name": "2.2.5",
+  "version_code": 226,
+  "version_name": "2.2.6",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.2.5 — Next-Gen Live Voice Jarvis Engine (Gemini 3.8 Live Duplex Fusion)",
-    "Integrated Google Gemini Live API (WebSocket) for continuous, real-time bidirectional duplex voice streaming (no turn-by-turn stopping)",
-    "Added ChatGPT & Gemini-style Persistent Memory System with automatic preference learning and Settings management UI",
-    "Seamless Active Chat Continuity: Voice mode ingests open chat messages and context on screen",
-    "Voice-Driven Session Switching: Say 'New chat se continue karte hain' to open fresh chat while speaking",
-    "Full In-App Control (40+ Jarvis native tools) + OS-level zero-error automation (ACTION_SET_TEXT direct text injection & WhatsApp messaging)"
+    "Aura AI v2.2.6 — Background Live Voice Service & Contact Resolution Polish",
+    "Added AuraLiveVoiceService (Foreground Service with microphone type) to keep Gemini Live duplex conversation alive in background while controlling external apps",
+    "Added READ_CONTACTS permission and enhanced smart phone number resolution for hands-free WhatsApp messaging",
+    "Added real-time input and output audio transcription for live captions during Gemini Live sessions"
   ],
   "is_critical": false
 }

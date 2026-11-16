@@ -145,6 +145,8 @@ class GeminiLiveWebSocket(
                     })
                     put("temperature", 0.6)
                 })
+                put("input_audio_transcription", JSONObject())
+                put("output_audio_transcription", JSONObject())
                 put("tools", JSONArray().put(JSONObject().apply {
                     put("functionDeclarations", buildFunctionDeclarations())
                 }))

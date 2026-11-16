@@ -21,6 +21,8 @@
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
 
     <!-- Signature-level private permissions to protect internal Termux and API receivers/services -->
     <permission
@@ -283,6 +285,12 @@
         <!-- Antigravity voice call: keeps the microphone available while a call runs in the background -->
         <service
             android:name="com.example.gemini.data.voice.AgyVoiceCallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Aura Live Voice Service: keeps Gemini Live duplex microphone and WebSocket alive in background -->
+        <service
+            android:name="com.example.gemini.data.live.AuraLiveVoiceService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
