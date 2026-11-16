@@ -73,6 +73,11 @@ object JarvisPreferences {
     /** The note Jarvis keeps across chats (jarvis_memory_write). */
     val memory = pref("memory", "")
 
+    // ---- Gemini Live Voice Engine (Next-Gen duplex real-time mode)
+    val liveApiKey = pref("live_api_key", "")
+    val liveModel = pref("live_model", "models/gemini-3.8-live")
+    val liveVoice = pref("live_voice", "Puck")
+
     // ---- voice output
     /** "android" (device TTS), "google_cloud" or "openai" (any OpenAI-compatible /audio/speech API). */
     val ttsEngine = pref("tts_engine", "android")

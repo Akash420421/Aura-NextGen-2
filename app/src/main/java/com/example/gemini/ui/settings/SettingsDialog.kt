@@ -121,6 +121,8 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     JARVIS_APPROVALS("Jarvis · Approvals", "Approvals by voice and app setting changes"),
     JARVIS_SCREEN("Jarvis · Screen & look", "Screen on, the orb and what Jarvis shows"),
     JARVIS_CHAT("Jarvis · Jarvis chat", "Live context, fresh chats and Jarvis' memory"),
+    JARVIS_LIVE_API("Jarvis · Gemini Live API", "Configure Gemini Live API Key, model and duplex voice"),
+    JARVIS_MEMORY("Jarvis · Persistent Memory", "Manage ChatGPT & Gemini style remembered facts"),
     DIAGNOSTICS("Diagnostics & Performance", "Live network connections, active streams & thread HUD"),
     UTILITIES("Utilities", "Handy device tools"),
     GITHUB("GitHub", "Sign in with the GitHub CLI, your repositories and git credentials"),
@@ -147,6 +149,8 @@ enum class SettingsSection(val title: String, val subtitle: String) {
         JARVIS_APPROVALS -> com.example.gemini.ui.jarvis.JarvisSettingsPage.APPROVALS
         JARVIS_SCREEN -> com.example.gemini.ui.jarvis.JarvisSettingsPage.SCREEN
         JARVIS_CHAT -> com.example.gemini.ui.jarvis.JarvisSettingsPage.CHAT
+        JARVIS_LIVE_API -> com.example.gemini.ui.jarvis.JarvisSettingsPage.LIVE_API
+        JARVIS_MEMORY -> com.example.gemini.ui.jarvis.JarvisSettingsPage.MEMORY
         else -> null
     }
 
@@ -632,7 +636,7 @@ fun SettingsDialog(
                     SettingsSection.JARVIS_AGENT, SettingsSection.JARVIS_PERSONALITY, SettingsSection.JARVIS_SETUP,
                     SettingsSection.JARVIS_WAKE, SettingsSection.JARVIS_LISTEN, SettingsSection.JARVIS_VOICE,
                     SettingsSection.JARVIS_TASKS, SettingsSection.JARVIS_APPROVALS, SettingsSection.JARVIS_SCREEN,
-                    SettingsSection.JARVIS_CHAT -> com.example.gemini.ui.jarvis.JarvisSettingsSectionPage(
+                    SettingsSection.JARVIS_CHAT, SettingsSection.JARVIS_LIVE_API, SettingsSection.JARVIS_MEMORY -> com.example.gemini.ui.jarvis.JarvisSettingsSectionPage(
                         page = section.jarvisPage!!,
                         cardBg = cardBg,
                         cardBorder = cardBorder

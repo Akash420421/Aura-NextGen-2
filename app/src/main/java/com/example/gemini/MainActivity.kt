@@ -86,6 +86,8 @@ class MainActivity : ComponentActivity() {
         resetTerminalLauncherOnce()
         com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.start(this)
         com.example.gemini.data.jarvis.JarvisController.attach(application, chatViewModel)
+        com.example.gemini.data.live.AuraLiveVoiceManager.init(this)
+        com.example.gemini.data.live.ChatContextBridge.attach(chatViewModel)
         com.example.gemini.data.agent.ChatCompletionMonitor.start(application, chatViewModel)
         handleIncomingFileIntent(intent)
         handleJarvisIntent(intent)

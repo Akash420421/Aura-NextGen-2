@@ -1,12 +1,14 @@
 {
-  "version_code": 224,
-  "version_name": "2.2.4",
+  "version_code": 225,
+  "version_name": "2.2.5",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.2.4 — Fix Custom AntiGem Plugins OpenSSL / Extension Host Crash",
-    "Resolved OpenSSL configuration error (code 13 Permission Denied) caused by foreign /data/data/com.termux path traversal",
-    "Properly isolated OPENSSL_CONF, SSL_CERT_FILE, and SSL_CERT_DIR to Aura app's internal sandbox prefix ($PREFIX/etc/tls)",
-    "Ensured browser-runtime extension-host (Node.js) and custom plugins boot cleanly with full MCP tool support"
+    "Aura AI v2.2.5 — Next-Gen Live Voice Jarvis Engine (Gemini 3.8 Live Duplex Fusion)",
+    "Integrated Google Gemini Live API (WebSocket) for continuous, real-time bidirectional duplex voice streaming (no turn-by-turn stopping)",
+    "Added ChatGPT & Gemini-style Persistent Memory System with automatic preference learning and Settings management UI",
+    "Seamless Active Chat Continuity: Voice mode ingests open chat messages and context on screen",
+    "Voice-Driven Session Switching: Say 'New chat se continue karte hain' to open fresh chat while speaking",
+    "Full In-App Control (40+ Jarvis native tools) + OS-level zero-error automation (ACTION_SET_TEXT direct text injection & WhatsApp messaging)"
   ],
   "is_critical": false
 }

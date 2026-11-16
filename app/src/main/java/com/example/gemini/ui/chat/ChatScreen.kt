@@ -477,22 +477,39 @@ fun ChatScreen(
     }
 
     val auraJarvisMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) com.example.gemini.data.jarvis.JarvisController.onMicPressed()
-        else com.example.gemini.ui.components.AppToastHelper.showToast(
-            "Aura voice needs microphone access.", com.example.gemini.ui.components.ChatToastType.ERROR
-        )
+        if (granted) {
+            val liveKey = com.example.gemini.data.jarvis.JarvisPreferences.liveApiKey.value.trim()
+            if (liveKey.isNotBlank()) {
+                com.example.gemini.data.live.AuraLiveVoiceManager.toggleSession(context)
+            } else {
+                com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+            }
+        } else {
+            com.example.gemini.ui.components.AppToastHelper.showToast(
+                "Aura voice needs microphone access.", com.example.gemini.ui.components.ChatToastType.ERROR
+            )
+        }
     }
     val startAuraJarvis: () -> Unit = {
-        if (!com.example.gemini.data.jarvis.JarvisPreferences.enabled.value) {
-            com.example.gemini.data.jarvis.JarvisPreferences.enabled.set(true)
+        val liveManager = com.example.gemini.data.live.AuraLiveVoiceManager
+        val liveKey = com.example.gemini.data.jarvis.JarvisPreferences.liveApiKey.value.trim()
+
+        if (!com.example.gemini.data.jarvis.JarvisController.hasMic()) {
+            auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            return@startAuraJarvis
         }
-        if (!com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.value) {
-            com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.set(true)
-        }
-        when {
-            !com.example.gemini.data.jarvis.JarvisController.hasMic() ->
-                auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
-            else -> com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+
+        if (liveKey.isNotBlank()) {
+            liveManager.toggleSession(context)
+        } else {
+            if (!com.example.gemini.data.jarvis.JarvisPreferences.enabled.value) {
+                com.example.gemini.data.jarvis.JarvisPreferences.enabled.set(true)
+            }
+            if (!com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.value) {
+                com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.set(true)
+            }
+            com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+            Toast.makeText(context, "Tip: Add your Gemini API key in Settings → Jarvis for continuous duplex voice!", Toast.LENGTH_LONG).show()
         }
     }
 

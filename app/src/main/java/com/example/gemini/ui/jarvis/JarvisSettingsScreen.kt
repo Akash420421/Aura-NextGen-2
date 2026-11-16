@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +15,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,7 +39,7 @@ import kotlinx.coroutines.launch
 private val JarvisCyan = Color(0xFF22D3EE)
 
 /** The sections of Settings → Jarvis: each opens on its own page (Settings → Jarvis → section). */
-enum class JarvisSettingsPage { AGENT, PERSONALITY, SETUP, WAKE, LISTEN, VOICE, TASKS, APPROVALS, SCREEN, CHAT }
+enum class JarvisSettingsPage { AGENT, PERSONALITY, SETUP, WAKE, LISTEN, VOICE, TASKS, APPROVALS, SCREEN, CHAT, LIVE_API, MEMORY }
 
 /**
  * Settings → Jarvis: the on/off switch, then one row per section ([JarvisSettingsPage]); a section opens on its own
@@ -95,12 +97,16 @@ fun JarvisSettingsScreen(cardBg: Color, cardBorder: BorderStroke, onOpen: (Jarvi
             Text("Jarvis is starting…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             return@Column
         }
+        val liveApiKey by P.liveApiKey.state.collectAsState()
+        val allMemories by com.example.gemini.data.live.AuraMemoryManager.memories.collectAsState()
         val c = com.example.gemini.theme.AppColors
         val I = androidx.compose.material.icons.Icons.Outlined
         fun row(page: JarvisSettingsPage, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, title: String, value: String? = null) =
             com.example.gemini.ui.settings.SettingsRowItem(icon, tint, title, value) { onOpen(page) }
         listOf(
             listOfNotNull(
+                row(JarvisSettingsPage.LIVE_API, I.Key, c.accentTeal, "Gemini Live API", if (liveApiKey.isNotBlank()) "Configured • Ready" else "Enter API Key"),
+                row(JarvisSettingsPage.MEMORY, I.Psychology, c.accentIndigo, "Persistent Memory", "${allMemories.size} facts"),
                 row(JarvisSettingsPage.AGENT, I.SmartToy, c.info, "Voice agent & model", when (agentName) {
                     AgentKind.AGY.name -> "Antigravity"
                     AgentKind.CLAUDE.name -> "Claude Code"
@@ -656,6 +662,153 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                         label = { Text("Jarvis memory (Jarvis can edit this too)") },
                         modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 8
                     )
+                }
+            }
+            JarvisSettingsPage.LIVE_API -> {
+                JCard(cardBg, cardBorder, "Google Gemini Live API") {
+                    val apiKey by P.liveApiKey.state.collectAsState()
+                    val model by P.liveModel.state.collectAsState()
+                    val voice by P.liveVoice.state.collectAsState()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(RoundedCornerShape(5.dp))
+                                .background(if (apiKey.isNotBlank()) Color(0xFF22C55E) else Color(0xFFEF4444))
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (apiKey.isNotBlank()) "API KEY CONFIGURED • READY" else "NO API KEY • ENTER BELOW",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (apiKey.isNotBlank()) Color(0xFF22C55E) else Color(0xFFEF4444)
+                        )
+                    }
+
+                    JField("Gemini API Key", apiKey, secret = true) { P.liveApiKey.set(it.trim()) }
+                    JHint("Enter your Gemini API key from Google AI Studio (aistudio.google.com). Free keys work seamlessly with Gemini 3.8 Live.")
+
+                    Spacer(Modifier.height(8.dp))
+                    Text("Live Model", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    JChips(
+                        listOf(
+                            "models/gemini-3.8-live" to "Gemini 3.8 Live",
+                            "models/gemini-3.1-flash-live-preview" to "Gemini 3.1 Flash"
+                        ),
+                        model
+                    ) { P.liveModel.set(it) }
+
+                    Spacer(Modifier.height(8.dp))
+                    Text("Voice", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    JChips(
+                        listOf(
+                            "Puck" to "Puck",
+                            "Aoede" to "Aoede",
+                            "Charon" to "Charon",
+                            "Fenrir" to "Fenrir",
+                            "Kore" to "Kore",
+                            "Leda" to "Leda"
+                        ),
+                        voice
+                    ) { P.liveVoice.set(it) }
+                }
+            }
+            JarvisSettingsPage.MEMORY -> {
+                JCard(cardBg, cardBorder, "Persistent Memory (ChatGPT / Gemini style)") {
+                    val memoryList by com.example.gemini.data.live.AuraMemoryManager.memories.collectAsState()
+                    var newFact by remember { mutableStateOf("") }
+
+                    Text(
+                        "Jarvis remembers your preferences, project stack, and personal facts across all chats and app restarts.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = newFact,
+                            onValueChange = { newFact = it },
+                            label = { Text("Add custom fact or preference", fontSize = 12.sp) },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                if (newFact.isNotBlank()) {
+                                    com.example.gemini.data.live.AuraMemoryManager.rememberFact(newFact)
+                                    newFact = ""
+                                }
+                            },
+                            enabled = newFact.isNotBlank()
+                        ) {
+                            Text("Add")
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Remembered Facts (${memoryList.size})", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        if (memoryList.isNotEmpty()) {
+                            TextButton(onClick = { com.example.gemini.data.live.AuraMemoryManager.clearAll() }) {
+                                Text("Clear All", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+
+                    if (memoryList.isEmpty()) {
+                        Text(
+                            "No memories stored yet. Tell Jarvis 'Remember that I like...' or add one above.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                    } else {
+                        memoryList.forEach { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        item.category,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(item.text, fontSize = 13.sp)
+                                }
+                                IconButton(
+                                    onClick = { com.example.gemini.data.live.AuraMemoryManager.deleteMemory(item.id) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Delete,
+                                        contentDescription = "Delete",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
