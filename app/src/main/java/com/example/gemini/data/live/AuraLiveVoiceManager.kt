@@ -303,22 +303,33 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         _phase.value = Phase.THINKING
         _statusText.value = "Executing $name..."
 
-        val toolArgsMap = mutableMapOf<String, Any?>()
-        args.keys().forEach { k -> toolArgsMap[k] = args.opt(k) }
+        val resolvedToolType = when (name) {
+            "execute_terminal_command" -> ToolType.BASH
+            "write_project_file" -> ToolType.EDIT_FILE
+            "read_project_file" -> ToolType.VIEW_FILE
+            else -> ToolType.UNKNOWN
+        }
+
         val toolCallRecord = ToolCall(
             id = callId,
-            tool = ToolType.CUSTOM,
             name = name,
-            arguments = toolArgsMap,
-            status = ToolCall.Status.RUNNING
+            toolType = resolvedToolType,
+            command = args.toString(),
+            status = "RUNNING"
         )
         accumulatedToolCalls.add(toolCallRecord)
 
         scope?.launch(Dispatchers.IO) {
             val result = executeTool(name, args)
             val isErr = result.optString("status") == "error"
-            toolCallRecord.status = if (isErr) ToolCall.Status.FAILED else ToolCall.Status.SUCCESS
-            toolCallRecord.result = result.toString()
+            val finishedCall = toolCallRecord.copy(
+                status = if (isErr) "FAILED" else "SUCCESS",
+                output = result.toString()
+            )
+            val idx = accumulatedToolCalls.indexOfFirst { it.id == callId }
+            if (idx >= 0) {
+                accumulatedToolCalls[idx] = finishedCall
+            }
             webSocket?.sendToolResponse(callId, name, result)
         }
     }
