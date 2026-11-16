@@ -741,7 +741,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                             consoleLogs.forEach { put("[${it.level}] ${it.message} (${it.sourceId}:${it.lineNumber})") }
                         })
                         put("network_errors", org.json.JSONArray().apply {
-                            netErrors.forEach { put("${it.method} ${it.url} -> HTTP ${it.statusCode} (${it.description})") }
+                            netErrors.forEach { put("${it.url} -> Error ${it.errorCode} (${it.description})") }
                         })
                     }
                 }
