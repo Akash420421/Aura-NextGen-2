@@ -1117,9 +1117,11 @@ fun ChatInputBar(
                                                         modifier = Modifier.size(34.dp)
                                                     ) {
                                                         Box(contentAlignment = Alignment.Center) {
-                                                            ChatGPTVoiceWaveformIcon(
-                                                                color = Color.White,
-                                                                modifier = Modifier.size(17.dp)
+                                                            Icon(
+                                                                imageVector = Icons.Rounded.Mic,
+                                                                contentDescription = "Record voice note",
+                                                                tint = Color.White,
+                                                                modifier = Modifier.size(19.dp)
                                                             )
                                                         }
                                                     }

@@ -303,10 +303,6 @@ fun ChatScreen(
     val agyLoginIssue by viewModel.agyLoginIssue.collectAsState()
     val hubStatus by viewModel.hubStatus.collectAsState()
     val systemConnectionState by viewModel.systemConnectionState.collectAsState()
-    var auraHomeVoice by rememberSaveable { mutableStateOf(false) }
-    // The clean Aura UI is permanent across all conversations.
-    val isAuraHome = !isInFloatingWindow
-    val auraAutoSend by com.example.gemini.data.jarvis.JarvisPreferences.autoSend.state.collectAsState()
     val isNetworkConnected by viewModel.isNetworkConnectedState.collectAsState()
     val isAnyGenerationOrTaskActive by viewModel.isAnyGenerationOrTaskActive.collectAsState()
     val screenAwakeReasons by viewModel.screenAwakeReasons.collectAsState()
@@ -318,7 +314,7 @@ fun ChatScreen(
     var showImagesGalleryScreen by rememberSaveable { mutableStateOf(false) }
     val isDrawerOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
 
-    DisposableEffect(isAuraHome, isAppDark, isDrawerOpen, showCustomizeScreen, showImagesGalleryScreen) {
+    DisposableEffect(isAppDark, isDrawerOpen, showCustomizeScreen, showImagesGalleryScreen) {
         val window = (context as? Activity)?.window
         if (window != null && !view.isInEditMode) {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -327,7 +323,7 @@ fun ChatScreen(
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
             androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, view)
-            val forceDarkIcons = isAuraHome || isDrawerOpen || showCustomizeScreen || showImagesGalleryScreen
+            val forceDarkIcons = isDrawerOpen || showCustomizeScreen || showImagesGalleryScreen
             insetsController.isAppearanceLightStatusBars = if (forceDarkIcons) true else !isAppDark
             insetsController.isAppearanceLightNavigationBars = if (forceDarkIcons) true else !isAppDark
         }
@@ -443,9 +439,12 @@ fun ChatScreen(
         com.example.gemini.data.voice.AgyVoicePreferences.init(context)
         when {
             voiceCall.active -> com.example.gemini.data.voice.AgyVoiceCall.setMinimized(false)
-            !systemConnectionState.canSend -> com.example.gemini.ui.components.AppToastHelper.showToast(
-                "Start the server to call Antigravity.", com.example.gemini.ui.components.ChatToastType.ERROR
-            )
+            !systemConnectionState.canSend -> {
+                com.example.gemini.ui.components.AppToastHelper.showToast(
+                    "Starting local server for voice call...", com.example.gemini.ui.components.ChatToastType.INFO
+                )
+                com.example.gemini.data.local.LocalServerManager.startServer(context, forceRestart = false)
+            }
             // agy refuses voice calls for cloud chats (its /voice/ws answers 404 for them)
             currentConv?.cloudProjectId != null -> com.example.gemini.ui.components.AppToastHelper.showToast(
                 com.example.gemini.data.voice.AgyVoiceCall.CLOUD_CHAT_NO_VOICE, com.example.gemini.ui.components.ChatToastType.INFO
@@ -1658,33 +1657,23 @@ fun ChatScreen(
             )
         }
         MaterialTheme(
-            colorScheme = if (isAuraHome) androidx.compose.material3.lightColorScheme(
-                primary = Color(0xFF151B2A),
-                onPrimary = Color.White,
-                secondary = Color(0xFF3478D4),
-                background = Color(0xFFF8F8FA),
-                onBackground = Color(0xFF171717),
-                surface = Color.White,
-                onSurface = Color(0xFF171B28),
-                outline = Color(0xFFE1E1E5)
-            ) else MaterialTheme.colorScheme,
+            colorScheme = MaterialTheme.colorScheme,
             typography = MaterialTheme.typography,
             shapes = MaterialTheme.shapes
         ) {
         Scaffold(
             snackbarHost = {},
             topBar = {
-                if (!isAuraHome) {
-                    // The chat's title on the left, the agents' status dot with the project on the right. A thin line shows
-                    // under the bar only once messages scroll beneath it.
-                    val scrolledUnder by remember(listState) { derivedStateOf { listState.canScrollBackward } }
-                    val topBarLineAlpha by androidx.compose.animation.core.animateFloatAsState(
-                        targetValue = if (scrolledUnder && messages.isNotEmpty()) 1f else 0f,
-                        animationSpec = tween(180),
-                        label = "top_bar_line"
-                    )
-                    val topBarLineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-                    TopAppBar(
+                // The chat's title on the left, the agents' status dot with the project on the right. A thin line shows
+                // under the bar only once messages scroll beneath it.
+                val scrolledUnder by remember(listState) { derivedStateOf { listState.canScrollBackward } }
+                val topBarLineAlpha by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (scrolledUnder && messages.isNotEmpty()) 1f else 0f,
+                    animationSpec = tween(180),
+                    label = "top_bar_line"
+                )
+                val topBarLineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                TopAppBar(
                     // shorter than Material's 64dp: one line of title and the small project pill need less
                     expandedHeight = 52.dp,
                     modifier = Modifier.drawWithContent {
@@ -1699,16 +1688,6 @@ fun ChatScreen(
                         }
                     },
                     title = {
-                        if (isAuraHome) {
-                            Box(Modifier.fillMaxWidth().height(52.dp), contentAlignment = Alignment.Center) {
-                                com.example.gemini.ui.components.AuraModeToggle(
-                                    currentMode = if (auraHomeVoice) "voice" else "chat",
-                                    onModeSelected = { mode ->
-                                        auraHomeVoice = (mode == "voice")
-                                    }
-                                )
-                            }
-                        } else {
                         val displayedChatTitle = remember(currentConv?.title, conversations, currentConv?.id) {
                             val fromList = conversations.firstOrNull { it.id == currentConv?.id }
                             val listTitle = fromList?.title?.takeIf {
@@ -1954,17 +1933,9 @@ fun ChatScreen(
                                 }
                             }
                         }
-                        }
                     },
                     navigationIcon = {
-                        if (isAuraHome) {
-                            IconButton(
-                                onClick = { scope.launch { drawerState.open() } },
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                com.example.gemini.ui.components.StaggeredMenuIcon(tint = MaterialTheme.colorScheme.onSurface)
-                            }
-                        } else if (conversationBackStack.isNotEmpty()) {
+                        if (conversationBackStack.isNotEmpty()) {
                             IconButton(onClick = navigateBackConversation) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -1983,21 +1954,18 @@ fun ChatScreen(
                         }
                     },
                     actions = {
-                        if (isAuraHome) {
-                            IconButton(
-                                onClick = {
-                                    val currentId = currentConv?.id
-                                    if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
-                                        ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
-                                    }
-                                    conversationBackStack.clear()
-                                    viewModel.startNewChat()
-                                    auraHomeVoice = false
-                                },
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                com.example.gemini.ui.components.NewChatIcon(tint = MaterialTheme.colorScheme.onSurface)
-                            }
+                        IconButton(
+                            onClick = {
+                                val currentId = currentConv?.id
+                                if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
+                                    ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
+                                }
+                                conversationBackStack.clear()
+                                viewModel.startNewChat()
+                            },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            com.example.gemini.ui.components.NewChatIcon(tint = MaterialTheme.colorScheme.onSurface)
                         }
                         // Browser, Terminal and the IDE are in the floating switcher (always on)
                         if (isInFloatingWindow) {
@@ -2025,7 +1993,7 @@ fun ChatScreen(
                                 modifier = Modifier.size(20.dp)
                             )
                         }
-                        if (isDevModeEnabled && !isAuraHome) {
+                        if (isDevModeEnabled) {
                             IconButton(onClick = { showChatTelemetryDialog = true }) {
                                 Icon(
                                     imageVector = Icons.Outlined.Analytics,
@@ -2039,10 +2007,9 @@ fun ChatScreen(
                         containerColor = MaterialTheme.colorScheme.background
                     )
                 )
-                }
             },
             containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = if (isAuraHome) WindowInsets(0, 0, 0, 0) else WindowInsets.statusBars
+            contentWindowInsets = WindowInsets.statusBars
         ) { paddingValues ->
             val chatFeedContent = @Composable { contentModifier: Modifier ->
                 Box(
@@ -2058,18 +2025,7 @@ fun ChatScreen(
                     val isExistingChat = messages.isEmpty() && isExistingConversation && isLoadingConversation
                     Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, error=$conversationError, isServerStopped=$isServerStopped")
 
-                    if (auraHomeVoice) {
-                        com.example.gemini.ui.home.AuraVoiceWelcome(
-                            userName = agyAuthInfo.displayName,
-                            onStart = startAuraJarvis
-                        )
-                    } else if (messages.isEmpty()) {
-                        com.example.gemini.ui.home.AuraChatWelcome(
-                            onPromptSelected = { prompt ->
-                                inputState.setTextAndPlaceCursorAtEnd(prompt)
-                            }
-                        )
-                    } else if (isAgyChat && isServerStopped && messages.isEmpty()) {
+                    if (isAgyChat && isServerStopped && messages.isEmpty()) {
                         BoxWithConstraints(
                             modifier = Modifier.fillMaxSize()
                         ) {
@@ -2271,19 +2227,10 @@ fun ChatScreen(
                                             inputState.setTextAndPlaceCursorAtEnd(example)
                                         }
                                     } else {
-                                        Text(
-                                            text = "How can I help you today?",
-                                            fontSize = 22.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            textAlign = TextAlign.Center
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "Ask a question, brainstorm ideas, or start coding",
-                                            fontSize = 14.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                                            textAlign = TextAlign.Center
+                                        com.example.gemini.ui.home.AuraChatWelcome(
+                                            onPromptSelected = { prompt ->
+                                                inputState.setTextAndPlaceCursorAtEnd(prompt)
+                                            }
                                         )
                                     }
                                 }
@@ -2306,14 +2253,7 @@ fun ChatScreen(
                                     state = listState,
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.spacedBy(0.dp),
-                                    contentPadding = if (isAuraHome) {
-                                        PaddingValues(
-                                            top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 58.dp,
-                                            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 130.dp + WindowInsets.ime.asPaddingValues().calculateBottomPadding()
-                                        )
-                                    } else {
-                                        PaddingValues(top = 12.dp, bottom = 16.dp)
-                                    }
+                                    contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)
                                 ) {
                                     items(
                                         items = feedItems,
@@ -2624,8 +2564,7 @@ fun ChatScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     // Floating "Scroll to latest message" button (centered horizontally directly above composer with safe clearance, strictly hidden in Voice Mode)
-                    val isChatMode = !auraHomeVoice
-                    val showScrollToBottom = isChatMode && feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
+                    val showScrollToBottom = feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
 
                     AnimatedVisibility(
                         visible = showScrollToBottom,
@@ -2902,16 +2841,6 @@ fun ChatScreen(
                 // Persistent Aura Live Voice Jarvis Call Pill
                 com.example.gemini.ui.voice.AuraLiveVoiceCallPill()
 
-                if (isAuraHome && auraHomeVoice) {
-                    com.example.gemini.ui.home.AuraVoiceActions(
-                        autoSend = auraAutoSend,
-                        onStart = startAuraJarvis,
-                        onScreen = {
-                            com.example.gemini.data.vision.AuraScreenShareBridge.toggleScreenShare()
-                        },
-                        onToggleAuto = { com.example.gemini.data.jarvis.JarvisPreferences.autoSend.set(!auraAutoSend) }
-                    )
-                } else {
                 // Chat Input Bar with Bottom Model & Thinking Selector Pills (Claude Android Style)
                 ChatInputBar(
                     isOnline = if (isCodexChat) codexState != com.example.gemini.data.agent.codex.CodexState.OFFLINE && codexState != com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED && codexState != com.example.gemini.data.agent.codex.CodexState.DISABLED && codexState != com.example.gemini.data.agent.codex.CodexState.OUTDATED
@@ -2976,11 +2905,7 @@ fun ChatScreen(
                         inputState.clearText()
                     },
                     onStopStreaming = {
-                        if (isAuraHome) {
-                            viewModel.stopStreaming()
-                        } else {
-                            showStopConfirmDialog = true
-                        }
+                        viewModel.stopStreaming()
                     },
                     attachments = attachments,
                     isUploadingAttachment = isUploadingAttachment,
@@ -3001,133 +2926,22 @@ fun ChatScreen(
                     queuedMessages = queuedMessages,
                     onSendQueuedNow = { viewModel.sendQueuedNow(it) },
                     onDeleteQueued = { viewModel.deleteQueued(it) },
-                    onStartVoiceCall = { startAuraJarvis() },
-                    onStartVoiceMode = { auraHomeVoice = true },
-                    voiceCallActive = voiceCall.active || com.example.gemini.data.live.AuraLiveVoiceManager.isLive(),
-                    auraHomeStyle = isAuraHome
+                    onStartVoiceCall = if (isAgyChat) onStartVoiceCall else null,
+                    onStartVoiceMode = null,
+                    voiceCallActive = voiceCall.active,
+                    auraHomeStyle = false
                 )
-                }
-            }
             }
 
-            if (isAuraHome) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background)
-                ) {
-                    // LAYER 1: Full-Screen Scrollable Chat Feed
-                    chatFeedContent(Modifier.fillMaxSize())
-
-                    // LAYER 2: Floating Top Header Overlay
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.TopCenter)
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.background,
-                                        MaterialTheme.colorScheme.background.copy(alpha = 0.95f),
-                                        MaterialTheme.colorScheme.background.copy(alpha = 0.70f),
-                                        Color.Transparent
-                                    )
-                                )
-                            )
-                            .statusBarsPadding()
-                            .padding(bottom = 12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                                .padding(horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = { scope.launch { drawerState.open() } },
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Menu,
-                                    contentDescription = "Open Drawer",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.weight(1f))
-
-                            com.example.gemini.ui.components.AuraModeToggle(
-                                currentMode = if (auraHomeVoice) "voice" else "chat",
-                                onModeSelected = { mode ->
-                                    auraHomeVoice = (mode == "voice")
-                                }
-                            )
-
-                            Spacer(modifier = Modifier.weight(1f))
-
-                            IconButton(
-                                onClick = {
-                                    val currentId = currentConv?.id
-                                    if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
-                                        ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
-                                    }
-                                    conversationBackStack.clear()
-                                    viewModel.startNewChat()
-                                    auraHomeVoice = false
-                                },
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                com.example.gemini.ui.components.NewChatIcon(tint = MaterialTheme.colorScheme.onSurface)
-                            }
-                        }
-                    }
-
-                    // LAYER 3: Floating Bottom Input Overlay with Full-Width Translucent Gradient & Edge-to-Edge Scroll Pass-Through
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.BottomCenter)
-                            .windowInsetsPadding(WindowInsets.imeAnimationTarget)
-                    ) {
-                        // Soft, semi-transparent gradient extending all the way to the bottom edge behind navigation bar
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .matchParentSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.Transparent,
-                                            MaterialTheme.colorScheme.background.copy(alpha = if (isAppDark) 0.35f else 0.40f),
-                                            MaterialTheme.colorScheme.background.copy(alpha = if (isAppDark) 0.70f else 0.75f)
-                                        )
-                                    )
-                                )
-                        )
-
-                        // Floating bottom composer and buttons padded to float cleanly above system navigation bar
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .navigationBarsPadding()
-                                .padding(bottom = 6.dp)
-                        ) {
-                            chatBottomSection()
-                        }
-                    }
-                }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-                        .navigationBarsPadding()
-                        .windowInsetsPadding(WindowInsets.imeAnimationTarget)
-                ) {
-                    chatFeedContent(Modifier.weight(1f).fillMaxWidth())
-                    chatBottomSection()
-                }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .navigationBarsPadding()
+                    .windowInsetsPadding(WindowInsets.imeAnimationTarget)
+            ) {
+                chatFeedContent(Modifier.weight(1f).fillMaxWidth())
+                chatBottomSection()
             }
         }
     }

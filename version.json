@@ -1,18 +1,13 @@
 {
-  "version_code": 228,
-  "version_name": "2.2.8",
+  "version_code": 229,
+  "version_name": "2.2.9",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.2.8 — Full AntiGem Calling Parity & Deep In-App IDE/Browser Integration",
-    "Real-time Chat Feed Integration: Spoken user utterances, AI answers, and tool executions stream directly into the chat session as real messages and tool cards",
-    "In-App IDE & Browser Control: AI automatically writes project files, opens them in IDE editor tabs, executes local servers, and previews sites live in the in-app browser",
-    "Voice Mode GitHub Superpowers: Hands-free git clone, fork, push, pull, and repo status directly in voice mode",
-    "Self-Healing Web Apps: In-app browser console and network inspection in voice mode to auto-diagnose and fix code bugs immediately",
-    "Screen Share Vision Streaming: Bidirectional video streaming directly into Gemini Live WebSocket with native Android permission prompts and AI request/stop triggers",
-    "Permanent Screen Share Button: One-tap screen share toggle with live green status indicators in both Top Bar and Voice Call Pill",
-    "AntiGem Style Live Voice Call Pill: Floating/persistent pill showing live speech waveforms, phase indicators, status text, and call controls across all screens",
-    "Verified WhatsApp Delivery: Real accessibility confirmation before reporting message sent, eliminating false delivery claims",
-    "Instant Start: Voice call button in ChatInputBar directly triggers Gemini Live duplex session in any chat"
+    "Aura AI v2.2.9 — Restored Native AntiGem Voice Call & Pure Chat Experience",
+    "Removed separate voice mode page; app is permanently in full-featured normal chat mode with standard title, project selector, and shortcuts",
+    "Restored native AntiGem Voice Call button in chat input bar with auto-server start and full-screen live call UI",
+    "Direct AntiGem Voice Call: Full two-way voice call with real-time captions, speech visualizer, and minimizing to voice call pill",
+    "Clean input composer with dedicated mic button for voice notes and headset button for voice calls"
   ],
   "is_critical": false
 }
