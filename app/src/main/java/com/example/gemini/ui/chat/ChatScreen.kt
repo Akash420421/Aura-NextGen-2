@@ -2932,6 +2932,7 @@ fun ChatScreen(
                     auraHomeStyle = false
                 )
             }
+            }
 
             Column(
                 modifier = Modifier
