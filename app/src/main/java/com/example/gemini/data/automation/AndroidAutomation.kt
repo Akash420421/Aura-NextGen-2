@@ -540,6 +540,62 @@ object AndroidAutomation {
     private suspend fun tapAt(svc: AutomationAccessibilityService, x: Float, y: Float, long: Boolean): Boolean =
         svc.gesture(Path().apply { moveTo(x, y) }, if (long) 700 else 60)
 
+    private fun findNodeByText(svc: AutomationAccessibilityService, target: String): AccessibilityNodeInfo? {
+        val roots = svc.windows.mapNotNull { it.root }.ifEmpty { listOfNotNull(svc.rootInActiveWindow) }
+        val lowerTarget = target.lowercase().trim()
+
+        for (root in roots) {
+            val systemMatches = root.findAccessibilityNodeInfosByText(target)
+            val visibleDirect = systemMatches.firstOrNull { it.isVisibleToUser }
+            if (visibleDirect != null) return visibleDirect
+
+            val found = searchNodeRecursively(root, lowerTarget)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun searchNodeRecursively(node: AccessibilityNodeInfo, target: String): AccessibilityNodeInfo? {
+        val nodeText = node.text?.toString()?.lowercase() ?: ""
+        val nodeDesc = node.contentDescription?.toString()?.lowercase() ?: ""
+        if ((nodeText.contains(target) || nodeDesc.contains(target)) && node.isVisibleToUser) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = searchNodeRecursively(child, target)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findAnyEditableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        if (node.isEditable && node.isVisibleToUser) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findAnyEditableNode(child)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findSendButton(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+        val text = node.text?.toString()?.lowercase() ?: ""
+        val id = node.viewIdResourceName?.lowercase() ?: ""
+        if ((desc == "send" || desc == "send message" || text == "send" || id.endsWith(":id/send")) && node.isVisibleToUser) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findSendButton(child)
+            if (found != null) return found
+        }
+        return null
+    }
+
     private suspend fun tap(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
         val long = args.optBoolean("long_press")
         val (id, node) = element(args)
@@ -554,8 +610,20 @@ object AndroidAutomation {
                 if (!tapAt(svc, r.exactCenterX(), r.exactCenterY(), long)) return error("Couldn't tap $id (the screen may be off or locked).")
             }
             what = id
+        } else if (args.has("text") || args.has("element_id_or_text") || args.has("label")) {
+            val query = (args.optString("text").ifBlank { args.optString("element_id_or_text").ifBlank { args.optString("label") } }).trim()
+            if (query.isBlank()) return error("Give element_id, text, or x and y.")
+            val matchedNode = findNodeByText(svc, query)
+                ?: return error("Could not find any element matching '$query' on the screen.")
+            val action = if (long) AccessibilityNodeInfo.ACTION_LONG_CLICK else AccessibilityNodeInfo.ACTION_CLICK
+            val clickable = generateSequence(matchedNode) { it.parent }.firstOrNull { if (long) it.isLongClickable else it.isClickable }
+            if (clickable?.performAction(action) != true) {
+                val r = Rect().also { matchedNode.getBoundsInScreen(it) }
+                if (!tapAt(svc, r.exactCenterX(), r.exactCenterY(), long)) return error("Couldn't tap '$query' (the screen may be off or locked).")
+            }
+            what = "'$query'"
         } else {
-            if (!args.has("x") || !args.has("y")) return error("Give element_id, or x and y.")
+            if (!args.has("x") || !args.has("y")) return error("Give element_id, text, or x and y.")
             val x = args.getDouble("x").toFloat()
             val y = args.getDouble("y").toFloat()
             if (!tapAt(svc, x, y, long)) return error("The tap was cancelled (the screen may be off or locked).")
@@ -568,9 +636,12 @@ object AndroidAutomation {
     private suspend fun typeText(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
         val (id, node) = element(args)
         if (id != null && node == null) return staleElement(id)
-        val target = node ?: svc.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: return error("No text field is focused. Tap one first, or pass its element_id.")
-        if (!target.isEditable) return error("${id ?: "The focused element"} is not a text field.")
+        val roots = svc.windows.mapNotNull { it.root }.ifEmpty { listOfNotNull(svc.rootInActiveWindow) }
+        val target = node
+            ?: svc.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: roots.firstNotNullOfOrNull { findAnyEditableNode(it) }
+            ?: return error("No text field is focused or found on screen. Tap one first, or pass its element_id.")
+        if (!target.isEditable) return error("${id ?: "The element"} is not a text field.")
         val showingHint = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && target.isShowingHintText
         val existing = if (args.optBoolean("append") && !showingHint) target.text?.toString().orEmpty() else ""
         target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -582,10 +653,18 @@ object AndroidAutomation {
         if (args.optBoolean("submit")) {
             val submitted = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 target.performAction(AccessibilityAction.ACTION_IME_ENTER.id)
-            note = when {
-                submitted -> " Submitted."
-                AdbConnectManager.ensureConnected()?.let { AdbConnectManager.deviceShell(it, "input keyevent 66").exitCode == 0 } == true -> " Pressed enter."
-                else -> " Couldn't press enter (needs Android 11+ or ADB); tap the send/search button instead."
+            if (!submitted) {
+                val sendNode = roots.firstNotNullOfOrNull { findSendButton(it) }
+                if (sendNode != null) {
+                    sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    note = " Clicked Send."
+                } else if (AdbConnectManager.ensureConnected()?.let { AdbConnectManager.deviceShell(it, "input keyevent 66").exitCode == 0 } == true) {
+                    note = " Pressed enter."
+                } else {
+                    note = " Text entered."
+                }
+            } else {
+                note = " Submitted."
             }
         }
         svc.awaitIdle()
@@ -661,12 +740,42 @@ object AndroidAutomation {
     }
 
     private suspend fun launchApp(context: Context, svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
-        val name = args.optString("name").trim()
-        val pkg = args.optString("package").trim().ifBlank {
-            if (name.isBlank()) return error("Give package or name.")
-            val apps = launchableApps(context)
-            (apps.firstOrNull { it.first.equals(name, true) } ?: apps.firstOrNull { it.first.contains(name, true) })?.second
-                ?: return error("No app called \"$name\". Use android_list_apps to see what's installed.")
+        val name = args.optString("name").trim().ifBlank { args.optString("app").trim() }
+        val rawPkg = args.optString("package").trim()
+
+        if (name.equals("aura", true) || name.equals("aura ai", true) || name.equals("antigem", true)) {
+            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            if (intent != null) {
+                svc.startActivity(intent)
+                svc.awaitIdle(500, 2_000)
+                return text("Opened Aura AI. ${foreground(svc)}")
+            }
+        }
+
+        val directPackages = mapOf(
+            "whatsapp" to "com.whatsapp",
+            "whatsapp business" to "com.whatsapp.w4b",
+            "youtube" to "com.google.android.youtube",
+            "chrome" to "com.android.chrome",
+            "settings" to "com.android.settings",
+            "camera" to "com.google.android.GoogleCamera",
+            "photos" to "com.google.android.apps.photos",
+            "gallery" to "com.google.android.apps.photos",
+            "maps" to "com.google.android.apps.maps",
+            "gmail" to "com.google.android.gm",
+            "telegram" to "org.telegram.messenger",
+            "instagram" to "com.instagram.android"
+        )
+
+        val pkg = rawPkg.ifBlank {
+            directPackages[name.lowercase()] ?: run {
+                if (name.isBlank()) return error("Give package or name.")
+                val apps = launchableApps(context)
+                (apps.firstOrNull { it.first.equals(name, true) } ?: apps.firstOrNull { it.first.contains(name, true) })?.second
+                    ?: return error("No app called \"$name\". Use android_list_apps to see what's installed.")
+            }
         }
         val intent = context.packageManager.getLaunchIntentForPackage(pkg)
             ?: return error("$pkg isn't installed or can't be opened.")

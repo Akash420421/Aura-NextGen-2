@@ -1,12 +1,16 @@
 {
-  "version_code": 226,
-  "version_name": "2.2.6",
+  "version_code": 227,
+  "version_name": "2.2.7",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.2.6 — Background Live Voice Service & Contact Resolution Polish",
-    "Added AuraLiveVoiceService (Foreground Service with microphone type) to keep Gemini Live duplex conversation alive in background while controlling external apps",
-    "Added READ_CONTACTS permission and enhanced smart phone number resolution for hands-free WhatsApp messaging",
-    "Added real-time input and output audio transcription for live captions during Gemini Live sessions"
+    "Aura AI v2.2.7 — Live Voice Action Engine Fixes & Real Terminal Execution",
+    "Fixed open_app to support name/package arguments and direct package resolution for WhatsApp, YouTube, Chrome, Settings, Camera",
+    "Smart Accessibility Tap: locate UI elements by visible text or content description (e.g. contact names like 'Abhishek') and click them directly",
+    "Smart Text Injection: automatic focus detection, editable node discovery, and automatic Send button tapping",
+    "Added open_aura_app to seamlessly bring Aura AI back to the foreground from other apps",
+    "Added execute_terminal_command, write_project_file, and read_project_file to Gemini Live for real coding and localhost execution without hallucination",
+    "Hardened Language Guardrails: strictly locks voice conversation to Hindi/Hinglish and ignores ambient background chatter",
+    "Voice Session Continuity: automatically records voice session actions into persistent memory"
   ],
   "is_critical": false
 }

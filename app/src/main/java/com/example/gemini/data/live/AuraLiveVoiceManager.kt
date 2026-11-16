@@ -13,11 +13,14 @@ import com.example.gemini.data.automation.AutomationAccessibilityService
 import com.example.gemini.data.jarvis.JarvisController
 import com.example.gemini.data.jarvis.JarvisMcp
 import com.example.gemini.data.jarvis.JarvisPreferences
+import com.example.gemini.data.local.LocalEnvironmentManager
+import com.example.gemini.data.local.LocalTerminalBridge
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
+import java.io.File
 
 /**
  * AuraLiveVoiceManager: Central coordinator for the Next-Gen Live Voice Jarvis Engine.
@@ -51,6 +54,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private var webSocket: GeminiLiveWebSocket? = null
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
+    private val sessionTurns = java.util.Collections.synchronizedList(mutableListOf<String>())
 
     fun init(context: Context) {
         appContext = context.applicationContext
@@ -132,6 +136,12 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         Log.i(TAG, "Stopping live voice session...")
         appContext?.let { AuraLiveVoiceService.stop(it) }
 
+        if (sessionTurns.isNotEmpty()) {
+            val summary = sessionTurns.takeLast(12).joinToString("\n")
+            AuraMemoryManager.rememberFact("Voice session log:\n$summary", "VOICE_LOG")
+            sessionTurns.clear()
+        }
+
         audioRecorder?.stop()
         audioRecorder = null
 
@@ -152,11 +162,23 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private fun buildComprehensiveSystemPrompt(): String {
         val sb = StringBuilder()
         sb.append("You are Jarvis / Aura, an ultra-advanced real-time AI companion living inside the Aura AI Android app.\n")
-        sb.append("You have two major domains of authority:\n")
-        sb.append("1. FULL INTERNAL APP CONTROL: You can switch screens, open files/projects in the code editor, create chats, and change models.\n")
-        sb.append("2. ZERO-ERROR PHONE AUTOMATION: You can control the user's phone, send WhatsApp messages, tap UI elements, type text with direct injection, and launch apps.\n")
-        sb.append("Speak in a natural, witty, concise, human-like voice (English, Hindi, or Hinglish depending on what the user speaks).\n")
-        sb.append("Keep spoken answers brief and punchy. Never recite long code verbally; instead use jarvis_open_screen or send code to the chat screen.\n\n")
+        sb.append("You have complete authority over phone automation, internal app navigation, code writing, and terminal execution.\n\n")
+
+        sb.append("### CRITICAL LANGUAGE DIRECTIVE:\n")
+        sb.append("- You MUST ALWAYS speak in conversational Hindi or Hinglish (Hindi mixed with English words as spoken naturally in India).\n")
+        sb.append("- NEVER switch to Portuguese, Spanish, or any other foreign language under ANY circumstance!\n")
+        sb.append("- If you hear ambient background noise, TV sound, music, or someone speaking another language in the room, COMPLETELY IGNORE IT and continue talking ONLY to the user in Hindi/Hinglish.\n\n")
+
+        sb.append("### STRICT ACTION & ZERO-HALLUCINATION POLICY:\n")
+        sb.append("- You MUST ALWAYS execute the matching tool immediately when asked to take action. NEVER lie, pretend, or claim 'I am creating files' without actually invoking the tool!\n")
+        sb.append("- When user says to open WhatsApp -> call open_app(app_name=\"WhatsApp\").\n")
+        sb.append("- When user says to tap a contact/person (e.g. 'Abhishek') -> call click_ui_element(element_id_or_text=\"Abhishek\").\n")
+        sb.append("- When user says to bring Aura AI back to front -> call open_aura_app().\n")
+        sb.append("- When user asks to make a calculator, website, or run a project:\n")
+        sb.append("  1. Call write_project_file to save the HTML/CSS/JS file.\n")
+        sb.append("  2. Call execute_terminal_command to run python3 -m http.server 8080 or test the code.\n")
+        sb.append("  3. Call open_website(url=\"http://localhost:8080\") to show the user the live preview.\n")
+        sb.append("- Keep your spoken replies concise, friendly, confident, and direct. Call tools instantly.\n\n")
 
         // Ingest Persistent Memory Core
         sb.append(AuraMemoryManager.getSystemPromptContext())
@@ -199,9 +221,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     override fun onAssistantTextReceived(textChunk: String) {
         _lastTranscript.value = textChunk
+        sessionTurns.add("Assistant: $textChunk")
     }
 
     override fun onUserTextReceived(textChunk: String) {
+        sessionTurns.add("User: $textChunk")
         // Trigger automatic memory learning on what user says
         AuraMemoryManager.learnFromConversation(textChunk)
     }
@@ -305,11 +329,50 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
                 // --- 3. OS Automation Tools ---
                 "open_app" -> {
-                    val appName = args.optString("app_name", "")
-                    val res = AndroidAutomation.call(context, "android_launch_app", JSONObject().apply {
-                        put("app", appName)
-                    })
-                    res
+                    val appName = args.optString("app_name", "").ifBlank { args.optString("name", "") }.trim()
+                    if (appName.equals("aura", true) || appName.equals("aura ai", true) || appName.equals("antigem", true)) {
+                        bringAuraToForeground(context)
+                        JSONObject().put("status", "success").put("message", "Opened Aura AI and brought to foreground")
+                    } else {
+                        val directPackages = mapOf(
+                            "whatsapp" to "com.whatsapp",
+                            "whatsapp business" to "com.whatsapp.w4b",
+                            "youtube" to "com.google.android.youtube",
+                            "chrome" to "com.android.chrome",
+                            "settings" to "com.android.settings",
+                            "camera" to "com.google.android.GoogleCamera",
+                            "photos" to "com.google.android.apps.photos",
+                            "gallery" to "com.google.android.apps.photos",
+                            "maps" to "com.google.android.apps.maps",
+                            "gmail" to "com.google.android.gm",
+                            "telegram" to "org.telegram.messenger",
+                            "instagram" to "com.instagram.android"
+                        )
+                        val pkg = directPackages[appName.lowercase()]
+                        if (pkg != null) {
+                            val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
+                            if (launchIntent != null) {
+                                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                context.startActivity(launchIntent)
+                                JSONObject().put("status", "success").put("message", "Opened $appName")
+                            } else {
+                                AndroidAutomation.call(context, "android_launch_app", JSONObject().apply {
+                                    put("name", appName)
+                                    put("package", pkg)
+                                })
+                            }
+                        } else {
+                            AndroidAutomation.call(context, "android_launch_app", JSONObject().apply {
+                                put("name", appName)
+                                put("package", appName)
+                            })
+                        }
+                    }
+                }
+
+                "open_aura_app" -> {
+                    bringAuraToForeground(context)
+                    JSONObject().put("status", "success").put("message", "Brought Aura AI to foreground")
                 }
 
                 "send_whatsapp_message" -> {
@@ -322,16 +385,19 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
 
                 "click_ui_element" -> {
-                    val target = args.optString("element_id_or_text", "")
+                    val target = args.optString("element_id_or_text", "").ifBlank { args.optString("text", "") }
                     AndroidAutomation.call(context, "android_tap", JSONObject().apply {
                         put("text", target)
+                        put("element_id", target)
                     })
                 }
 
                 "type_text" -> {
                     val text = args.optString("text", "")
+                    val submit = args.optBoolean("submit", false)
                     AndroidAutomation.call(context, "android_type_text", JSONObject().apply {
                         put("text", text)
+                        put("submit", submit)
                     })
                 }
 
@@ -370,6 +436,70 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
                 "inspect_screen" -> {
                     AndroidAutomation.call(context, "android_get_ui_tree", JSONObject())
+                }
+
+                // --- 4. Terminal & Coding Tools ---
+                "execute_terminal_command" -> {
+                    val command = args.optString("command", "").trim()
+                    val workDir = args.optString("working_directory").takeIf { !it.isNullOrBlank() }
+                        ?: "/data/user/0/com.termux/files/home/projects"
+
+                    if (command.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "command cannot be empty")
+                    } else {
+                        try {
+                            LocalTerminalBridge.instance.sendCommand(command = command)
+                        } catch (_: Exception) {}
+
+                        val res = LocalEnvironmentManager.executeCommand(
+                            command = command,
+                            context = context,
+                            workingDir = workDir,
+                            timeoutSeconds = 40
+                        )
+                        JSONObject().apply {
+                            put("status", if (res.exitCode == 0) "success" else "error")
+                            put("exit_code", res.exitCode)
+                            put("output", res.output.ifBlank { "(executed successfully with no output)" })
+                            put("duration_ms", res.durationMs)
+                        }
+                    }
+                }
+
+                "write_project_file" -> {
+                    val pathStr = args.optString("path", "").trim()
+                    val content = args.optString("content", "")
+                    if (pathStr.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "path cannot be empty")
+                    } else {
+                        val baseDir = File("/data/user/0/com.termux/files/home/projects")
+                        if (!baseDir.exists()) baseDir.mkdirs()
+                        val targetFile = if (pathStr.startsWith("/")) File(pathStr) else File(baseDir, pathStr)
+                        targetFile.parentFile?.mkdirs()
+                        targetFile.writeText(content, Charsets.UTF_8)
+                        JSONObject().apply {
+                            put("status", "success")
+                            put("path", targetFile.absolutePath)
+                            put("bytes_written", content.length)
+                            put("message", "File saved at ${targetFile.name}")
+                        }
+                    }
+                }
+
+                "read_project_file" -> {
+                    val pathStr = args.optString("path", "").trim()
+                    val baseDir = File("/data/user/0/com.termux/files/home/projects")
+                    val targetFile = if (pathStr.startsWith("/")) File(pathStr) else File(baseDir, pathStr)
+                    if (!targetFile.exists()) {
+                        JSONObject().put("status", "error").put("message", "File not found: ${targetFile.absolutePath}")
+                    } else {
+                        val text = targetFile.readText(Charsets.UTF_8)
+                        JSONObject().apply {
+                            put("status", "success")
+                            put("path", targetFile.absolutePath)
+                            put("content", if (text.length > 25000) text.take(25000) + "\n...(truncated)" else text)
+                        }
+                    }
                 }
 
                 else -> {
@@ -500,5 +630,18 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             }
         }
         return null
+    }
+
+    private fun bringAuraToForeground(context: Context) {
+        try {
+            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            if (intent != null) {
+                context.startActivity(intent)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to bring Aura AI to foreground: ${e.message}", e)
+        }
     }
 }

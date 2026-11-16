@@ -193,9 +193,11 @@ class GeminiLiveWebSocket(
             "id_or_keyword" to prop("string", "ID or keyword of the memory to forget")))
 
         // --- 3. Phone OS Automation Tools (from Part 7 & AndroidAutomation) ---
-        put(tool("open_app", "Opens an app installed on the user's phone (e.g. WhatsApp, YouTube, Settings, Camera).", listOf("app_name"),
-            "app_name" to prop("string", "Name of the app to launch"),
+        put(tool("open_app", "Opens an app installed on the user's phone (e.g. WhatsApp, YouTube, Settings, Camera) or Aura AI.", listOf("app_name"),
+            "app_name" to prop("string", "Name of the app to launch (e.g. WhatsApp, YouTube, Aura AI)"),
             "app_number" to prop("integer", "Optional 1 or 2 for cloned/dual apps")))
+
+        put(tool("open_aura_app", "Brings the Aura AI app back to the front/foreground on the user's screen.", emptyList()))
 
         put(tool("send_whatsapp_message", "Automates sending a WhatsApp message to a contact hands-free.", listOf("recipient_name", "message_text"),
             "recipient_name" to prop("string", "Contact name as stored in user's phone contacts"),
@@ -203,11 +205,12 @@ class GeminiLiveWebSocket(
             "app_number" to prop("integer", "1 for WhatsApp, 2 for WhatsApp Business / Cloned"),
             "confirmed" to prop("boolean", "Set true to send immediately, false if asking confirmation first")))
 
-        put(tool("click_ui_element", "Taps or clicks an element on the screen using Accessibility.", listOf("element_id_or_text"),
-            "element_id_or_text" to prop("string", "Text or resource ID of the button/item to tap")))
+        put(tool("click_ui_element", "Taps or clicks an element on the screen using its visible text, label, or accessibility ID.", listOf("element_id_or_text"),
+            "element_id_or_text" to prop("string", "Visible text (e.g. 'Abhishek', 'Send', 'Search') or element ID of the button/item to tap")))
 
         put(tool("type_text", "Directly injects text into the focused input field using ACTION_SET_TEXT without opening the keyboard.", listOf("text"),
-            "text" to prop("string", "Text to inject")))
+            "text" to prop("string", "Text to inject"),
+            "submit" to prop("boolean", "Whether to submit or tap Send after typing")))
 
         put(tool("scroll_screen", "Scrolls the screen in a specified direction.", listOf("direction"),
             "direction" to prop("string", "down, up, left, or right")))
@@ -216,13 +219,25 @@ class GeminiLiveWebSocket(
             "key_name" to prop("string", "home, back, recents, or enter")))
 
         put(tool("open_website", "Opens a website URL in the in-app browser or Chrome.", listOf("url"),
-            "url" to prop("string", "URL to open (e.g. https://google.com)")))
+            "url" to prop("string", "URL to open (e.g. https://google.com or http://localhost:8080)")))
 
         put(tool("search_in_chrome", "Searches the web via Google Chrome or the in-app browser.", listOf("query"),
             "query" to prop("string", "Search query")))
 
         put(tool("inspect_screen", "Reads the current UI node tree of the screen to observe elements.", emptyList(),
             "purpose" to prop("string", "What you are looking for on the screen")))
+
+        // --- 4. Terminal & Code Execution Tools ---
+        put(tool("execute_terminal_command", "Executes a shell command in the local environment/terminal (e.g. bash, node, python, git, npm, pnpm, cat, mkdir, curl, python3 -m http.server 8080) and returns real stdout/stderr output.", listOf("command"),
+            "command" to prop("string", "The shell command to run"),
+            "working_directory" to prop("string", "Optional working directory (defaults to projects directory)")))
+
+        put(tool("write_project_file", "Creates or updates a file on disk in the projects folder (e.g. index.html, style.css, app.js, main.py).", listOf("path", "content"),
+            "path" to prop("string", "Relative or absolute path to the file"),
+            "content" to prop("string", "Complete text content of the file")))
+
+        put(tool("read_project_file", "Reads a file's content from the local projects directory.", listOf("path"),
+            "path" to prop("string", "Path to file")))
     }
 
     private fun tool(name: String, description: String, required: List<String> = emptyList(), vararg props: Pair<String, JSONObject>): JSONObject =
