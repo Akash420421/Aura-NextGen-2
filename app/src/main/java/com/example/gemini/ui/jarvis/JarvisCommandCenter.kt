@@ -1,10 +1,12 @@
 package com.example.gemini.ui.jarvis
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,8 +35,11 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -67,6 +72,238 @@ private fun agentLabel(name: String) = when (name.uppercase()) {
 private fun age(ms: Long): String {
     val m = (System.currentTimeMillis() - ms) / 60_000
     return if (m < 1) "now" else if (m < 60) "${m}m" else "${m / 60}h ${m % 60}m"
+}
+
+/**
+ * A cute, compact floating robot badge that sits gracefully above the input bar.
+ * Tapping it opens [JarvisMissionDialog], keeping the chat screen spacious and uncluttered.
+ */
+@Composable
+fun JarvisMissionFloatingBadge(
+    chatId: String,
+    onOpenChat: (String) -> Unit,
+    toolsMissing: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val managers by JarvisManagers.managers.collectAsState()
+    val statuses by JarvisManagers.status.collectAsState()
+    val tasks by JarvisTasks.tasks.collectAsState()
+    val key = remember(chatId, managers) { JarvisManagers.keyForChat(chatId) } ?: return
+    val m = managers[key] ?: JarvisManagers.Manager(key)
+    val mine = tasks.filter { JarvisManagers.ownerOrVoice(it.owner) == key }
+    val active = mine.filter { it.active }
+    val status = statuses[key]
+
+    var showDialog by remember { mutableStateOf(false) }
+    val isDark = isSystemInDarkTheme()
+
+    Box(modifier = modifier) {
+        Surface(
+            onClick = { showDialog = true },
+            shape = CircleShape,
+            color = if (isDark) Color(0xFF1E293B) else Color.White,
+            shadowElevation = 4.dp,
+            border = BorderStroke(1.dp, Cyan.copy(alpha = 0.5f)),
+            modifier = Modifier.size(42.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                JarvisBotIcon(
+                    size = 24.dp,
+                    color = Cyan,
+                    animated = active.isNotEmpty() || status != null
+                )
+                if (active.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 4.dp, end = 4.dp)
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(Green)
+                    )
+                }
+            }
+        }
+    }
+
+    if (showDialog) {
+        JarvisMissionDialog(
+            chatId = chatId,
+            onOpenChat = onOpenChat,
+            toolsMissing = toolsMissing,
+            onDismiss = { showDialog = false }
+        )
+    }
+}
+
+/**
+ * A clean popup dialog displaying Mission, Tasks, and Autopilot status.
+ */
+@Composable
+fun JarvisMissionDialog(
+    chatId: String,
+    onOpenChat: (String) -> Unit,
+    toolsMissing: Boolean = false,
+    onDismiss: () -> Unit
+) {
+    val managers by JarvisManagers.managers.collectAsState()
+    val statuses by JarvisManagers.status.collectAsState()
+    val tasks by JarvisTasks.tasks.collectAsState()
+    val voiceSide by com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.state.collectAsState()
+    val key = remember(chatId, managers) { JarvisManagers.keyForChat(chatId) } ?: return
+    val m = managers[key] ?: JarvisManagers.Manager(key)
+    val voice = key == JarvisManagers.VOICE
+    val mine = tasks.filter { JarvisManagers.ownerOrVoice(it.owner) == key }
+    val active = mine.filter { it.active }
+    val mission = m.mission
+    val status = statuses[key]
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val accent = Cyan
+
+    val title = when {
+        !mission.isEmpty -> mission.goal
+        voice -> "Jarvis · voice chat"
+        else -> "Jarvis command center"
+    }
+    val subtitle = when {
+        status != null -> status
+        active.any { it.state.needsUser } -> "A task needs a decision"
+        active.isNotEmpty() -> "${active.size} task${if (active.size == 1) "" else "s"} working · news comes in by itself"
+        mission.status == "done" -> "Mission complete"
+        mission.status == "paused" -> "Mission paused"
+        mission.isEmpty -> "Give me a big job: I plan it, run it with teams and keep going."
+        mission.autopilot -> "Autopilot on · keeps going until done"
+        else -> "Waiting for you"
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            shadowElevation = 8.dp,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                // Header with robot, title, and close button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    JarvisBotIcon(32.dp, accent, animated = active.isNotEmpty() || status != null)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = subtitle,
+                            fontSize = 12.sp,
+                            color = onSurface.copy(alpha = 0.65f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = onSurface.copy(alpha = 0.6f))
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                // Progress bar if mission steps exist
+                if (mission.steps.isNotEmpty()) {
+                    val p = mission.doneCount.toFloat() / mission.steps.size
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(onSurface.copy(alpha = 0.08f))
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(p)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(50))
+                                .background(if (mission.status == "done") Green else accent)
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+
+                // Controls: Voice toggle, Autopilot, Task Pills
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (!voice && voiceSide) {
+                        ToggleChip(
+                            if (m.speak) "Voice on" else "Voice off",
+                            if (m.speak) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                            m.speak
+                        ) {
+                            JarvisManagers.setSpeak(key, !m.speak)
+                        }
+                    }
+                    if (!mission.isEmpty) {
+                        ToggleChip(
+                            if (mission.autopilot) "Autopilot on" else "Autopilot",
+                            Icons.Filled.Autorenew,
+                            mission.autopilot
+                        ) {
+                            JarvisManagers.setAutopilot(key, !mission.autopilot)
+                        }
+                    }
+                    active.forEach { t ->
+                        TaskPill(t) {
+                            onOpenChat(t.id)
+                            onDismiss()
+                        }
+                    }
+                }
+
+                if (toolsMissing) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp)).background(Amber.copy(alpha = 0.12f))
+                            .clickable {
+                                com.example.gemini.data.jarvis.JarvisController.requestSettings("JARVIS_SETUP")
+                                onDismiss()
+                            }
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "This chat's agent has no Jarvis tools yet. Tap to add the Jarvis MCP server (Settings → Jarvis → Setup).",
+                            fontSize = 11.5.sp, color = onSurface.copy(alpha = 0.85f), modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                // Board with Mission and Tasks list
+                Board(key, m, mine) { targetId ->
+                    onOpenChat(targetId)
+                    onDismiss()
+                }
+            }
+        }
+    }
 }
 
 /**

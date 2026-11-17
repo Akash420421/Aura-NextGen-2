@@ -2872,13 +2872,18 @@ fun ChatScreen(
                     com.example.gemini.ui.codex.CodexControlsStrip(codexBackend)
                 }
 
-                // Jarvis chat: its command strip (mission, teams' tasks, voice replies, autopilot)
+                // Jarvis chat: cute floating robot badge for mission & tasks dialog
                 if (jarvisEnabled && currentConv != null && (isJarvisTextChat || jarvisConversations.any { it.id == currentConv?.id })) {
                     val jarvisToolsMissing = remember(messages) {
                         messages.lastOrNull { it.role == com.example.gemini.domain.model.MessageRole.ASSISTANT }?.content
                             ?.contains(com.example.gemini.data.jarvis.JarvisSkill.MCP_MISSING) == true
                     }
-                    com.example.gemini.ui.jarvis.JarvisCommandStrip(chatId = currentConv!!.id, onOpenChat = openJarvisLinkedChat, toolsMissing = jarvisToolsMissing)
+                    com.example.gemini.ui.jarvis.JarvisMissionFloatingBadge(
+                        chatId = currentConv!!.id,
+                        onOpenChat = openJarvisLinkedChat,
+                        toolsMissing = jarvisToolsMissing,
+                        modifier = Modifier.padding(start = 16.dp, bottom = 4.dp)
+                    )
                 }
 
 

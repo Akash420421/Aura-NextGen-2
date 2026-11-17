@@ -486,7 +486,6 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                     JChips(
                         listOf(
                             "gemini" to "Google Gemini",
-                            "edge" to "Free Natural Voice",
                             "android" to "This device",
                             "google_cloud" to "Google Cloud",
                             "openai" to "OpenAI-compatible"
@@ -509,13 +508,10 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                             }
                         }
                         JField("Language (optional, e.g. en-US)", language) { P.ttsLanguage.set(it) }
-                    } else if (engine == "edge") {
-                        JHint("100% Free natural studio voice (Hindi Swara & English Jenny). No API key needed!")
-                        JField("Language code (default hi-IN or en-US)", language) { P.ttsLanguage.set(it) }
                     } else if (engine == "gemini") {
                         val key by P.ttsApiKey.state.collectAsState()
                         JField("Gemini API key (AI Studio)", key, secret = true) { P.ttsApiKey.set(it) }
-                        JHint("Works directly with your free Google AI Studio key (AIzaSy...). No OAuth2 needed!")
+                        JHint("Uses Google AI Studio Gemini API (gemini-3.8-flash) directly with your free key (AIzaSy...).")
                         Text("Voice", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         JChips(
                             listOf("Puck" to "Puck", "Aoede" to "Aoede", "Charon" to "Charon", "Fenrir" to "Fenrir", "Kore" to "Kore", "Leda" to "Leda"),

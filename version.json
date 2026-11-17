@@ -1,15 +1,13 @@
 {
-  "version_code": 231,
-  "version_name": "2.3.1",
+  "version_code": 232,
+  "version_name": "2.3.2",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.1 — Unified Inbuilt Voice Engine & Gemini Audio Fix",
-    "Connected Inbuilt Voice directly with Visible Real-Time Chat & Agent Actions",
-    "Fixed HTTP 401 OAuth2 error by routing Google AI Studio keys directly to Gemini Audio API",
-    "Added 100% Free High-Quality Microsoft Edge Natural Neural Voices (No API key needed)",
-    "Disabled floating draggable bubble by default to prevent screen obstruction",
-    "Hands-Free Continuous Voice Call Loop with Auto-Send & Auto-Listen",
-    "Integrated Central Orb and Dynamic Bottom Pill button for seamless voice control"
+    "Aura AI v2.3.2 — Gemini 3.8 Audio Model Upgrade & Mission Bot Floating Dialog",
+    "Upgraded Gemini Speech API to official active gemini-3.8-flash model (resolving HTTP 404)",
+    "Replaced large intrusive Mission/Task banner in chat with a cute floating robot icon",
+    "Tapping cute robot badge opens full Mission & Tasks popup dialog with status and autopilot controls",
+    "Removed Free Natural Voice (Edge TTS) option as requested"
   ],
   "is_critical": false
 }

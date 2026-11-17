@@ -79,7 +79,7 @@ object JarvisPreferences {
     val liveVoice = pref("live_voice", "Puck")
 
     // ---- voice output
-    /** "gemini" (Google Gemini Audio API), "edge" (free natural neural voices), "android" (device TTS), "google_cloud" or "openai". */
+    /** "gemini" (Google Gemini Audio API), "android" (device TTS), "google_cloud" or "openai". */
     val ttsEngine = pref("tts_engine", "gemini")
     val ttsVoice = pref("tts_voice", "Puck")
     val ttsLanguage = pref("tts_language", "")
