@@ -8,13 +8,16 @@ import com.example.gemini.ui.chat.ChatViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
 
 /**
  * ChatContextBridge: Connects active text chat session to Gemini Live Voice session.
- * Allows Gemini Live to:
- * 1. Understand recent conversation messages and code discussed on screen.
- * 2. Start a new clean chat on voice command ("New chat se continue karte hain").
- * 3. Send text or results directly to the active chat screen so the user can read code/output.
+ * 1. Feeds active conversation history to Gemini Live's system prompt.
+ * 2. Persists real-time speech turns (User & Assistant) into the active chat so transcripts are saved!
+ * 3. Records executed tools in chat history.
  */
 object ChatContextBridge {
     private const val TAG = "ChatContextBridge"
@@ -34,9 +37,6 @@ object ChatContextBridge {
 
     fun getCurrentMessages(): List<ChatMessage> = viewModel?.messages?.value ?: emptyList()
 
-    /**
-     * Extracts active conversation context for Gemini Live's system prompt.
-     */
     fun getActiveChatPromptContext(): String {
         val vm = viewModel ?: return ""
         val conv = vm.currentConversation.value
@@ -62,40 +62,132 @@ object ChatContextBridge {
                     MessageRole.SYSTEM -> "System"
                     else -> "Assistant"
                 }
-                // Truncate very long code snippets to keep context focused
                 val text = if (m.content.length > 500) m.content.take(500) + "... [truncated]" else m.content
                 sb.append("$roleName: $text\n")
             }
         }
-        sb.append("Instructions: If the user asks about 'this', 'the code', 'the error', or previous discussion, use this context immediately!\n\n")
+        sb.append("Instructions: If the user asks about previous discussion, use this context immediately!\n\n")
         return sb.toString()
     }
 
-    /**
-     * Creates a new chat on voice command.
-     */
     fun startNewChat(): String {
         val vm = viewModel ?: return "Could not access chat system."
-        try {
+        return try {
             vm.startNewChat()
             _lastActiveChatTitle.value = "New Chat"
-            Log.i(TAG, "Started new chat from voice command")
-            return "New chat session created on screen."
+            "New chat session created on screen."
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start new chat: ${e.message}", e)
-            return "Failed to start new chat: ${e.message}"
+            "Failed to start new chat: ${e.message}"
         }
     }
 
-    /**
-     * Sends a message into the active chat so it shows on screen.
-     */
-    fun sendTextToChat(text: String) {
+    fun recordUserTurn(text: String) {
+        val vm = viewModel ?: return
+        if (text.isBlank()) return
+
+        try {
+            ensureConversationExists(vm)
+            val convId = vm.currentConversation.value?.id ?: UUID.randomUUID().toString()
+            val msg = ChatMessage(
+                conversationId = convId,
+                role = MessageRole.USER,
+                content = text,
+                viaVoice = true
+            )
+            appendMessageToStore(vm, msg)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error recording user turn in chat: ${e.message}")
+        }
+    }
+
+    fun recordAssistantTurn(textChunk: String) {
+        val vm = viewModel ?: return
+        if (textChunk.isBlank()) return
+
+        try {
+            ensureConversationExists(vm)
+            val convId = vm.currentConversation.value?.id ?: UUID.randomUUID().toString()
+            val currentList = vm.messages.value.toMutableList()
+
+            val lastMsg = currentList.lastOrNull()
+            if (lastMsg != null && lastMsg.role == MessageRole.ASSISTANT && lastMsg.viaVoice) {
+                // Append chunk to ongoing assistant message
+                val updated = lastMsg.copy(content = lastMsg.content + textChunk)
+                currentList[currentList.size - 1] = updated
+                updateStoreMessages(vm, currentList)
+            } else {
+                val newMsg = ChatMessage(
+                    conversationId = convId,
+                    role = MessageRole.ASSISTANT,
+                    content = textChunk,
+                    viaVoice = true
+                )
+                appendMessageToStore(vm, newMsg)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error recording assistant turn in chat: ${e.message}")
+        }
+    }
+
+    fun recordToolExecution(toolName: String, summary: String) {
         val vm = viewModel ?: return
         try {
-            vm.sendMessage(text)
+            ensureConversationExists(vm)
+            val convId = vm.currentConversation.value?.id ?: UUID.randomUUID().toString()
+            val msg = ChatMessage(
+                conversationId = convId,
+                role = MessageRole.TOOL,
+                content = "⚡ [$toolName]: $summary",
+                viaVoice = true
+            )
+            appendMessageToStore(vm, msg)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send text to chat: ${e.message}", e)
+            Log.e(TAG, "Error recording tool execution in chat: ${e.message}")
+        }
+    }
+
+    private fun ensureConversationExists(vm: ChatViewModel) {
+        if (vm.currentConversation.value == null) {
+            val timeStr = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
+            val conv = Conversation(
+                id = UUID.randomUUID().toString(),
+                title = "Voice Session • $timeStr"
+            )
+            try {
+                val prop = vm.javaClass.getDeclaredField("store")
+                prop.isAccessible = true
+                val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore
+                store?.let {
+                    it.currentConversation.value = conv
+                    it.conversations.value = listOf(conv) + it.conversations.value
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun appendMessageToStore(vm: ChatViewModel, msg: ChatMessage) {
+        try {
+            val prop = vm.javaClass.getDeclaredField("store")
+            prop.isAccessible = true
+            val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore
+            store?.let {
+                it.messages.value = it.messages.value + msg
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "appendMessageToStore failed: ${e.message}")
+        }
+    }
+
+    private fun updateStoreMessages(vm: ChatViewModel, list: List<ChatMessage>) {
+        try {
+            val prop = vm.javaClass.getDeclaredField("store")
+            prop.isAccessible = true
+            val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore
+            store?.let {
+                it.messages.value = list
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "updateStoreMessages failed: ${e.message}")
         }
     }
 }

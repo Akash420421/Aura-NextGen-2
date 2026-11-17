@@ -9,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class GeminiLiveWebSocket(
     private val apiKey: String,
@@ -30,19 +31,21 @@ class GeminiLiveWebSocket(
 
     companion object {
         private const val TAG = "GeminiLiveWebSocket"
-        const val WS_BASE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-        const val SESSION_RENEWAL_MS = 9 * 60 * 1000L // 9 minutes
-
         private val sharedClient = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
-            .connectTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(8, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .pingInterval(45, TimeUnit.SECONDS)
             .build()
     }
 
     private val client = sharedClient
-    private var activeModel: String = if (model.isNotBlank()) model else "models/gemini-3.8-live"
+
+    private var activeModel: String = when (model) {
+        GeminiConstants.MODEL_3_8_LIVE -> GeminiConstants.MODEL_3_8_LIVE
+        GeminiConstants.MODEL_3_1_FLASH -> GeminiConstants.MODEL_3_1_FLASH
+        else -> if (model.isNotBlank()) model else GeminiConstants.DEFAULT_MODEL
+    }
 
     private var webSocket: WebSocket? = null
     private val isConnected = AtomicBoolean(false)
@@ -73,7 +76,7 @@ class GeminiLiveWebSocket(
         listener.onConnectionStateChanged("CONNECTING...")
 
         try {
-            val url = "$WS_BASE_URL?key=$apiKey"
+            val url = "${GeminiConstants.WS_BASE_URL}?key=$apiKey"
             val request = Request.Builder()
                 .url(url)
                 .build()
@@ -97,32 +100,104 @@ class GeminiLiveWebSocket(
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     Log.d(TAG, "WebSocket closing: $code / $reason")
-                    isConnected.set(false)
-                    isSetupComplete.set(false)
-                    listener.onConnectionStateChanged("CLOSING")
+                    webSocket.close(1000, null)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     Log.d(TAG, "WebSocket closed: $code / $reason")
                     isConnected.set(false)
                     isSetupComplete.set(false)
-                    listener.onConnectionStateChanged("CLOSED")
-                    scheduleReconnectIfNeeded()
+                    stopTimers()
+
+                    val isApiKeyError = reason.contains("API_KEY_INVALID", ignoreCase = true) ||
+                                       reason.contains("API key not valid", ignoreCase = true) ||
+                                       reason.contains("API key", ignoreCase = true) ||
+                                       reason.contains("key invalid", ignoreCase = true)
+                    if (isApiKeyError) {
+                        Log.e(TAG, "Gemini rejected session due to invalid API key (code=$code, reason=$reason)")
+                        listener.onError("Invalid API Key: Google rejected the key. Please verify your Gemini API key in Settings.", isFatal = true, errorCode = "API_KEY_INVALID")
+                        listener.onConnectionStateChanged("ERROR • INVALID KEY")
+                        return
+                    }
+
+                    val isQuotaError = reason.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
+                                       reason.contains("quota", ignoreCase = true)
+                    if (isQuotaError) {
+                        Log.w(TAG, "Gemini rate-limited (code=$code, reason=$reason). Retrying in cooldown...")
+                        listener.onConnectionStateChanged("COOLDOWN • RETRYING")
+                        scheduleReconnect()
+                        return
+                    }
+
+                    if (code == 1008) {
+                        val isModelError = reason.contains("BidiGenerateContent", ignoreCase = true) ||
+                                           reason.contains("not found", ignoreCase = true) ||
+                                           reason.contains("not supported", ignoreCase = true)
+                        if (isModelError) {
+                            if (activeModel != GeminiConstants.MODEL_3_8_LIVE) {
+                                Log.w(TAG, "Model $activeModel rejected ($reason). Falling back to ${GeminiConstants.MODEL_3_8_LIVE}")
+                                activeModel = GeminiConstants.MODEL_3_8_LIVE
+                                listener.onConnectionStateChanged("RECONNECTING...")
+                                scheduleReconnect()
+                                return
+                            }
+                        }
+                        listener.onError("Gemini setup rejected: $reason", isFatal = true, errorCode = "SETUP_REJECTED")
+                        listener.onConnectionStateChanged("OFFLINE")
+                    } else if (!isManuallyStopped.get()) {
+                        listener.onConnectionStateChanged("RECONNECTING...")
+                        scheduleReconnect()
+                    } else {
+                        listener.onConnectionStateChanged("OFFLINE")
+                    }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "WebSocket failure: ${t.message}", t)
+                    val code = response?.code ?: 0
+                    val responseBody = try { response?.body?.string() } catch (_: Exception) { null }
+                    val errorMsg = t.message ?: "WebSocket connection failure"
+                    Log.e(TAG, "WebSocket failure: code=$code, errorMsg=$errorMsg, body=$responseBody", t)
                     isConnected.set(false)
                     isSetupComplete.set(false)
-                    listener.onError("Connection error: ${t.message ?: "Network failure"}", isFatal = false)
-                    listener.onConnectionStateChanged("FAILED")
-                    scheduleReconnectIfNeeded()
+                    stopTimers()
+
+                    val isApiKeyError = code == 400 || code == 401 || code == 403 ||
+                            errorMsg.contains("400") || errorMsg.contains("403") || errorMsg.contains("401") ||
+                            errorMsg.contains("API_KEY_INVALID", ignoreCase = true) ||
+                            errorMsg.contains("API key not valid", ignoreCase = true) ||
+                            (responseBody?.contains("API_KEY_INVALID", ignoreCase = true) == true) ||
+                            (responseBody?.contains("API key not valid", ignoreCase = true) == true)
+
+                    val isQuotaError = code == 429 ||
+                            errorMsg.contains("429") ||
+                            errorMsg.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
+                            errorMsg.contains("quota", ignoreCase = true) ||
+                            (responseBody?.contains("RESOURCE_EXHAUSTED", ignoreCase = true) == true)
+
+                    if (isApiKeyError) {
+                        listener.onError("Invalid API Key: Google rejected the key. Please verify your Gemini API key in Settings.", isFatal = true, errorCode = "API_KEY_INVALID")
+                        listener.onConnectionStateChanged("ERROR • INVALID KEY")
+                        return
+                    }
+
+                    if (isQuotaError) {
+                        listener.onConnectionStateChanged("COOLDOWN • RETRYING")
+                        scheduleReconnect()
+                        return
+                    }
+
+                    if (!isManuallyStopped.get()) {
+                        listener.onError("Connection lost: $errorMsg. Retrying...", isFatal = false, errorCode = "CONNECTION_ERROR")
+                        scheduleReconnect()
+                    } else {
+                        listener.onConnectionStateChanged("OFFLINE")
+                    }
                 }
             })
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initiate WebSocket connection: ${e.message}", e)
-            listener.onError("Failed to initiate connection: ${e.message}", isFatal = true)
-            listener.onConnectionStateChanged("ERROR")
+            Log.e(TAG, "Error initiating WebSocket: ${e.message}", e)
+            listener.onError("Connection failed: ${e.message}", isFatal = true, errorCode = "CONNECTION_FAILED")
+            listener.onConnectionStateChanged("OFFLINE")
         }
     }
 
@@ -144,204 +219,617 @@ class GeminiLiveWebSocket(
                         })
                     })
                     put("temperature", 0.6)
+                    // Disabling thinking budget eliminates internal chain-of-thought delay (<1s response)
+                    put("thinking_config", JSONObject().apply {
+                        put("thinking_budget", 0)
+                    })
                 })
-                put("input_audio_transcription", JSONObject())
-                put("output_audio_transcription", JSONObject())
                 put("tools", JSONArray().put(JSONObject().apply {
-                    put("functionDeclarations", buildFunctionDeclarations())
+                    put("functionDeclarations", buildToolDeclarations())
                 }))
             })
         }
-
-        try {
-            ws.send(setup.toString())
-            Log.d(TAG, "Setup message sent to Gemini Live")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to send setup message: ${e.message}", e)
-            listener.onError("Failed to send setup message: ${e.message}", isFatal = true)
-        }
+        val json = setup.toString()
+        Log.d(TAG, "Sending BidiSetup payload to Gemini Live")
+        ws.send(json)
     }
 
-    private fun buildFunctionDeclarations(): JSONArray = JSONArray().apply {
-        // --- 1. In-App Control Tools ---
-        put(tool("jarvis_open_screen", "Switch to an in-app screen.", listOf("screen"),
-            "screen" to prop("string", "Target screen: chat, terminal, browser, settings, ide")))
+    private fun buildToolDeclarations(): JSONArray {
+        return JSONArray().apply {
+            // 1. open_app
+            put(JSONObject().apply {
+                put("name", "open_app")
+                put("description", "Opens an app installed on the user's phone, e.g. YouTube, WhatsApp, Camera, Settings, Chrome, Instagram, Calculator. If multiple instances exist, app_number specifies 1 or 2.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("app_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The name of the app to open (e.g. \"YouTube\", \"WhatsApp\", \"Instagram\", \"Camera\").")
+                        })
+                        put("app_number", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional 1-based index (1 or 2) when opening a dual/cloned app instance.")
+                        })
+                    })
+                    put("required", JSONArray().put("app_name"))
+                })
+            })
 
-        put(tool("voice_new_chat", "Starts a brand new clean chat session on screen while keeping voice conversation going.", emptyList(),
-            "topic" to prop("string", "Optional topic or title for the new chat")))
+            // 2. open_website
+            put(JSONObject().apply {
+                put("name", "open_website")
+                put("description", "Opens one or more websites/URLs in Google Chrome in separate tabs. Use whenever the user asks to open a website, visit a URL, or preview localhost (e.g. \"open github.com\", \"open vercel.com\", \"open localhost:8080\").")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("urls", JSONObject().apply {
+                            put("type", "ARRAY")
+                            put("description", "Array of website URLs or domain names to open, each in its own tab.")
+                            put("items", JSONObject().apply { put("type", "STRING") })
+                        })
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional string containing the website URL or domain name.")
+                        })
+                    })
+                })
+            })
 
-        put(tool("jarvis_ide_list_projects", "List existing coding projects in Termux / local storage.", emptyList()))
+            // 3. search_in_chrome
+            put(JSONObject().apply {
+                put("name", "search_in_chrome")
+                put("description", "Opens Google Chrome and searches for a topic/question, or opens a website URL in a tab (e.g. \"search xyz in Chrome\", \"google xyz\").")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Query or topic to search in Google Chrome.")
+                        })
+                    })
+                    put("required", JSONArray().put("query"))
+                })
+            })
 
-        put(tool("jarvis_ide_open_project", "Open a project directory in the in-app IDE.", listOf("path"),
-            "path" to prop("string", "Absolute or relative project path")))
+            // 4. search_and_play_youtube
+            put(JSONObject().apply {
+                put("name", "search_and_play_youtube")
+                put("description", "Searches YouTube and IMMEDIATELY OPENS AND PLAYS the requested video or song. Use whenever the user commands you to play a video or song (e.g. \"play Tum Hi Ho\", \"play Believer on YouTube\", \"YouTube pe Arijit Singh chalao\").")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "What video/song to search for and immediately play, e.g. \"Tum Hi Ho Arijit Singh\".")
+                        })
+                    })
+                    put("required", JSONArray().put("query"))
+                })
+            })
 
-        put(tool("jarvis_ide_open_file", "Open a specific file in the in-app Code Editor.", listOf("path"),
-            "path" to prop("string", "File path to open")))
+            // 5. search_youtube
+            put(JSONObject().apply {
+                put("name", "search_youtube")
+                put("description", "Opens YouTube and searches for a topic/query, displaying search results without auto-playing.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The query/topic to search on YouTube.")
+                        })
+                    })
+                    put("required", JSONArray().put("query"))
+                })
+            })
 
-        put(tool("jarvis_set_model", "Change the active AI model for text chat (e.g. Gemini, Claude, GPT).", listOf("model"),
-            "model" to prop("string", "Model name or ID")))
+            // 6. media_playback_control
+            put(JSONObject().apply {
+                put("name", "media_playback_control")
+                put("description", "Controls whatever video/audio is currently playing: play, pause, next, previous, stop.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply {
+                                put("play"); put("pause"); put("next"); put("previous"); put("stop")
+                            })
+                        })
+                    })
+                    put("required", JSONArray().put("action"))
+                })
+            })
 
-        // --- 2. Persistent Memory Tools (ChatGPT / Gemini style) ---
-        put(tool("memory_save", "Permanently save a user fact, preference, stack detail or note into long-term memory.", listOf("fact"),
-            "fact" to prop("string", "The exact fact or preference to remember"),
-            "category" to prop("string", "Optional category: PREFERENCE, PROJECT, PERSONAL, CONTACT, NOTE")))
+            // 7. send_whatsapp_message
+            put(JSONObject().apply {
+                put("name", "send_whatsapp_message")
+                put("description", "Opens WhatsApp to a contact and sends/queues a message. If multiple instances exist, app_number specifies 1 or 2.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("recipient_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Name of the contact as spoken by the user (e.g. \"Rahul\", \"Priya\", \"Dad\").")
+                        })
+                        put("message", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The text message content to send.")
+                        })
+                        put("app_number", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional 1-based index (1 or 2) if dual WhatsApp is installed.")
+                        })
+                        put("confirmed", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "True if user confirmed sending.")
+                        })
+                    })
+                    put("required", JSONArray().apply { put("recipient_name"); put("message") })
+                })
+            })
 
-        put(tool("memory_recall", "Search through saved permanent memories.", listOf("query"),
-            "query" to prop("string", "Search keyword or topic")))
+            // 8. whatsapp_call
+            put(JSONObject().apply {
+                put("name", "whatsapp_call")
+                put("description", "Initiates a WhatsApp voice call or video call to a contact (e.g. \"WhatsApp call Mom\", \"WhatsApp video call Rahul\").")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("recipient_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Name of the contact to call.")
+                        })
+                        put("call_type", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "\"voice\" for voice call or \"video\" for video call.")
+                        })
+                        put("app_number", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional 1-based index (1 or 2) if dual WhatsApp is installed.")
+                        })
+                    })
+                    put("required", JSONArray().apply { put("recipient_name"); put("call_type") })
+                })
+            })
 
-        put(tool("memory_delete", "Delete a specific remembered item by its ID or keyword.", listOf("id_or_keyword"),
-            "id_or_keyword" to prop("string", "ID or keyword of the memory to forget")))
+            // 9. call_contact
+            put(JSONObject().apply {
+                put("name", "call_contact")
+                put("description", "Places a standard cellular phone call to a saved contact by spoken name, e.g. \"call mom\", \"call Rahul\", \"phone Dad\".")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("contact_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The contact's name as spoken by user, e.g. \"mom\", \"Rahul\".")
+                        })
+                    })
+                    put("required", JSONArray().put("contact_name"))
+                })
+            })
 
-        // --- 3. Phone OS Automation Tools (from Part 7 & AndroidAutomation) ---
-        put(tool("open_app", "Opens an app installed on the user's phone (e.g. WhatsApp, YouTube, Settings, Camera) or Aura AI.", listOf("app_name"),
-            "app_name" to prop("string", "Name of the app to launch (e.g. WhatsApp, YouTube, Aura AI)"),
-            "app_number" to prop("integer", "Optional 1 or 2 for cloned/dual apps")))
+            // 10. set_volume
+            put(JSONObject().apply {
+                put("name", "set_volume")
+                put("description", "Adjusts media volume on device: 'increase', 'decrease', or 'set'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Action to perform: 'increase', 'decrease', or 'set'.")
+                        })
+                        put("percentage", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Target percentage level from 0 to 100 if specified.")
+                        })
+                    })
+                    put("required", JSONArray().put("action"))
+                })
+            })
 
-        put(tool("open_aura_app", "Brings the Aura AI app back to the front/foreground on the user's screen.", emptyList()))
+            // 11. set_brightness
+            put(JSONObject().apply {
+                put("name", "set_brightness")
+                put("description", "Adjusts screen brightness on device: 'increase', 'decrease', or 'set'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Action to perform: 'increase', 'decrease', or 'set'.")
+                        })
+                        put("percentage", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Target percentage level from 0 to 100 if specified.")
+                        })
+                    })
+                    put("required", JSONArray().put("action"))
+                })
+            })
 
-        put(tool("send_whatsapp_message", "Automates sending a WhatsApp message to a contact hands-free.", listOf("recipient_name", "message_text"),
-            "recipient_name" to prop("string", "Contact name as stored in user's phone contacts"),
-            "message_text" to prop("string", "Exact text message to send"),
-            "app_number" to prop("integer", "1 for WhatsApp, 2 for WhatsApp Business / Cloned"),
-            "confirmed" to prop("boolean", "Set true to send immediately, false if asking confirmation first")))
+            // 12. builtin_chrome_search
+            put(JSONObject().apply {
+                put("name", "builtin_chrome_search")
+                put("description", "Performs invisible, background web research using the built-in search engine for real-time factual questions, news, or weather.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Search query or topic to look up on the web.")
+                        })
+                    })
+                    put("required", JSONArray().put("query"))
+                })
+            })
 
-        put(tool("click_ui_element", "Taps or clicks an element on the screen using its visible text, label, or accessibility ID.", listOf("element_id_or_text"),
-            "element_id_or_text" to prop("string", "Visible text (e.g. 'Abhishek', 'Send', 'Search') or element ID of the button/item to tap")))
+            // 13. set_flashlight
+            put(JSONObject().apply {
+                put("name", "set_flashlight")
+                put("description", "Turns the phone's torch or flashlight on or off.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("enabled", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "True to turn on the flashlight, false to turn it off.")
+                        })
+                    })
+                    put("required", JSONArray().put("enabled"))
+                })
+            })
 
-        put(tool("type_text", "Directly injects text into the focused input field using ACTION_SET_TEXT without opening the keyboard.", listOf("text"),
-            "text" to prop("string", "Text to inject"),
-            "submit" to prop("boolean", "Whether to submit or tap Send after typing")))
+            // 14. click_ui_element
+            put(JSONObject().apply {
+                put("name", "click_ui_element")
+                put("description", "Clicks or taps a specific UI button, link, icon, or text on the current screen by label or coordinates.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("target_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Text, label, or description of the UI element to click.")
+                        })
+                        put("x", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional normalized X coordinate (0-1000).")
+                        })
+                        put("y", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional normalized Y coordinate (0-1000).")
+                        })
+                    })
+                    put("required", JSONArray().put("target_name"))
+                })
+            })
 
-        put(tool("scroll_screen", "Scrolls the screen in a specified direction.", listOf("direction"),
-            "direction" to prop("string", "down, up, left, or right")))
+            // 15. type_text
+            put(JSONObject().apply {
+                put("name", "type_text")
+                put("description", "Types text into the focused or named input field on screen.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("text", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The text to type.")
+                        })
+                        put("submit", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Whether to submit or press enter.")
+                        })
+                    })
+                    put("required", JSONArray().put("text"))
+                })
+            })
 
-        put(tool("press_key", "Simulates pressing a system navigation key.", listOf("key_name"),
-            "key_name" to prop("string", "home, back, recents, or enter")))
+            // 16. scroll_screen
+            put(JSONObject().apply {
+                put("name", "scroll_screen")
+                put("description", "Scrolls the active screen: 'down', 'up', 'left', or 'right'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("direction", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Direction to scroll: 'down', 'up', 'left', or 'right'.")
+                        })
+                    })
+                    put("required", JSONArray().put("direction"))
+                })
+            })
 
-        put(tool("open_website", "Opens a website URL in the in-app browser or Chrome.", listOf("url"),
-            "url" to prop("string", "URL to open (e.g. https://google.com or http://localhost:8080)")))
+            // 17. press_key
+            put(JSONObject().apply {
+                put("name", "press_key")
+                put("description", "Executes system-level navigation gestures: 'back', 'home', or 'recents'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("key", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The system action: 'back', 'home', or 'recents'.")
+                        })
+                    })
+                    put("required", JSONArray().put("key"))
+                })
+            })
 
-        put(tool("search_in_chrome", "Searches the web via Google Chrome or the in-app browser.", listOf("query"),
-            "query" to prop("string", "Search query")))
+            // 18. inspect_screen
+            put(JSONObject().apply {
+                put("name", "inspect_screen")
+                put("description", "Reads the foreground app, screen title, and accessible UI elements on the user's active screen.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
 
-        put(tool("inspect_screen", "Reads the current UI node tree of the screen to observe elements.", emptyList(),
-            "purpose" to prop("string", "What you are looking for on the screen")))
+            // 19. request_screen_share
+            put(JSONObject().apply {
+                put("name", "request_screen_share")
+                put("description", "Prompts the user with the screen share dialog so Jarvis can see their screen live in real-time.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
 
-        // --- 4. Terminal & Code Execution Tools ---
-        put(tool("execute_terminal_command", "Executes a shell command in the local environment/terminal (e.g. bash, node, python, git, npm, pnpm, cat, mkdir, curl, python3 -m http.server 8080) and returns real stdout/stderr output.", listOf("command"),
-            "command" to prop("string", "The shell command to run"),
-            "working_directory" to prop("string", "Optional working directory (defaults to projects directory)")))
+            // 20. open_aura_app
+            put(JSONObject().apply {
+                put("name", "open_aura_app")
+                put("description", "Brings Aura AI back to the foreground from other apps.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
 
-        put(tool("write_project_file", "Creates or updates a file on disk in the projects folder (e.g. index.html, style.css, app.js, main.py).", listOf("path", "content"),
-            "path" to prop("string", "Relative or absolute path to the file"),
-            "content" to prop("string", "Complete text content of the file")))
+            // 21. write_project_file
+            put(JSONObject().apply {
+                put("name", "write_project_file")
+                put("description", "Writes or creates a source code or web file (HTML, CSS, JS, Python, etc.) in the project workspace.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("path", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Relative or absolute file path (e.g., 'calculator/index.html').")
+                        })
+                        put("content", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The full contents of the file.")
+                        })
+                    })
+                    put("required", JSONArray().apply { put("path"); put("content") })
+                })
+            })
 
-        put(tool("read_project_file", "Reads a file's content from the local projects directory.", listOf("path"),
-            "path" to prop("string", "Path to file")))
-    }
+            // 22. read_project_file
+            put(JSONObject().apply {
+                put("name", "read_project_file")
+                put("description", "Reads a source code or project file from the project directory.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("path", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The path of the file to read.")
+                        })
+                    })
+                    put("required", JSONArray().put("path"))
+                })
+            })
 
-    private fun tool(name: String, description: String, required: List<String> = emptyList(), vararg props: Pair<String, JSONObject>): JSONObject =
-        JSONObject().apply {
-            put("name", name)
-            put("description", description)
-            put("parameters", JSONObject().apply {
-                put("type", "OBJECT")
-                val p = JSONObject()
-                props.forEach { p.put(it.first, it.second) }
-                put("properties", p)
-                if (required.isNotEmpty()) {
-                    val req = JSONArray()
-                    required.forEach { req.put(it) }
-                    put("required", req)
-                }
+            // 23. execute_terminal_command
+            put(JSONObject().apply {
+                put("name", "execute_terminal_command")
+                put("description", "Executes a shell command in the local environment/workspace (e.g. 'python3 -m http.server 8080', 'git status', 'ls -la', 'npm start').")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("command", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The exact command to run.")
+                        })
+                        put("working_directory", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional working directory.")
+                        })
+                    })
+                    put("required", JSONArray().put("command"))
+                })
+            })
+
+            // 24. task_completed
+            put(JSONObject().apply {
+                put("name", "task_completed")
+                put("description", "Call this tool after the user's requested task is confirmed complete.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("summary", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Brief summary of what was completed.")
+                        })
+                    })
+                    put("required", JSONArray().put("summary"))
+                })
             })
         }
-
-    private fun prop(type: String, description: String): JSONObject = JSONObject().apply {
-        put("type", type.uppercase())
-        put("description", description)
     }
 
-    private fun handleIncomingMessage(text: String) {
+    private fun handleIncomingMessage(jsonText: String) {
         try {
-            val json = JSONObject(text)
+            val json = JSONObject(jsonText)
 
-            // Setup complete ack
-            if (json.has("setupComplete")) {
-                Log.d(TAG, "Gemini Live setupComplete received!")
-                isSetupComplete.set(true)
-                listener.onConnectionStateChanged("LIVE")
-                startSessionRenewalTimer()
+            if (json.has("error")) {
+                val errObj = json.optJSONObject("error")
+                val errMsg = errObj?.optString("message", "") ?: json.optString("error", "Unknown error")
+                val errCode = errObj?.optInt("code", 0) ?: 0
+                Log.e(TAG, "Server error: code=$errCode, message=$errMsg")
+
+                val isApiKey = errMsg.contains("API_KEY_INVALID", ignoreCase = true) ||
+                               errMsg.contains("API key not valid", ignoreCase = true) ||
+                               errCode == 400 || errCode == 403
+                val isQuota = errMsg.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
+                              errMsg.contains("quota", ignoreCase = true) ||
+                              errCode == 429
+                if (isApiKey) {
+                    listener.onError("Invalid API Key: $errMsg", isFatal = true, errorCode = "API_KEY_INVALID")
+                    listener.onConnectionStateChanged("ERROR • INVALID KEY")
+                } else if (isQuota) {
+                    listener.onError("API Quota Exceeded: $errMsg", isFatal = true, errorCode = "QUOTA_EXCEEDED")
+                    listener.onConnectionStateChanged("ERROR • QUOTA EXCEEDED")
+                } else {
+                    listener.onError("Gemini Error ($errCode): $errMsg", isFatal = false)
+                }
                 return
             }
 
-            // Server content (Audio, Text, Interruption, TurnComplete)
-            if (json.has("serverContent")) {
-                val sc = json.getJSONObject("serverContent")
-
-                if (sc.optBoolean("interrupted", false)) {
-                    Log.d(TAG, "Server signaled interruption (barge-in)")
-                    listener.onInterrupted()
+            if (json.has("setupComplete")) {
+                Log.i(TAG, "Setup completed handshake received. Session LIVE!")
+                if (!isSetupComplete.getAndSet(true)) {
+                    listener.onConnectionStateChanged("LIVE")
+                    startSessionRenewal()
                 }
+                return
+            }
 
-                if (sc.has("modelTurn")) {
-                    val mt = sc.getJSONObject("modelTurn")
-                    val parts = mt.optJSONArray("parts") ?: JSONArray()
-                    for (i in 0 until parts.length()) {
-                        val part = parts.getJSONObject(i)
+            if (!isSetupComplete.get() && (json.has("serverContent") || json.has("toolCall"))) {
+                isSetupComplete.set(true)
+                listener.onConnectionStateChanged("LIVE")
+                startSessionRenewal()
+            }
 
-                        // Audio chunk (24kHz PCM)
-                        if (part.has("inlineData")) {
-                            val id = part.getJSONObject("inlineData")
-                            val dataBase64 = id.optString("data")
-                            if (dataBase64.isNotBlank()) {
-                                val pcmBytes = Base64.decode(dataBase64, Base64.NO_WRAP)
-                                listener.onAudioDataReceived(pcmBytes)
-                            }
+            val topToolCall = json.optJSONObject("toolCall")
+            if (topToolCall != null) {
+                val functionCalls = topToolCall.optJSONArray("functionCalls")
+                if (functionCalls != null) {
+                    for (i in 0 until functionCalls.length()) {
+                        val call = functionCalls.getJSONObject(i)
+                        val name = call.optString("name", "")
+                        val id = call.optString("id", "")
+                        val args = call.optJSONObject("args") ?: JSONObject()
+                        if (name.isNotEmpty()) {
+                            Log.i(TAG, "Tool call: $name (id=$id)")
+                            listener.onToolCall(id, name, args)
                         }
+                    }
+                }
+                return
+            }
 
-                        // Text transcript
-                        if (part.has("text")) {
-                            val textChunk = part.optString("text")
-                            if (textChunk.isNotBlank()) {
-                                listener.onAssistantTextReceived(textChunk)
+            val serverContent = json.optJSONObject("serverContent")
+            if (serverContent != null) {
+                val scToolCall = serverContent.optJSONObject("toolCall")
+                if (scToolCall != null) {
+                    val functionCalls = scToolCall.optJSONArray("functionCalls")
+                    if (functionCalls != null) {
+                        for (i in 0 until functionCalls.length()) {
+                            val call = functionCalls.getJSONObject(i)
+                            val name = call.optString("name", "")
+                            val id = call.optString("id", "")
+                            val args = call.optJSONObject("args") ?: JSONObject()
+                            if (name.isNotEmpty()) {
+                                Log.i(TAG, "Tool call (serverContent): $name (id=$id)")
+                                listener.onToolCall(id, name, args)
                             }
                         }
                     }
                 }
 
-                if (sc.optBoolean("turnComplete", false)) {
+                val inputTrans = serverContent.optJSONObject("inputTranscription")
+                if (inputTrans != null) {
+                    var userText = inputTrans.optString("text", "").trim()
+                    if (userText.isEmpty()) {
+                        val parts = inputTrans.optJSONArray("parts")
+                        if (parts != null) {
+                            val sb = StringBuilder()
+                            for (p in 0 until parts.length()) {
+                                sb.append(parts.optJSONObject(p)?.optString("text", "") ?: "")
+                            }
+                            userText = sb.toString().trim()
+                        }
+                    }
+                    if (userText.isNotBlank()) {
+                        listener.onUserTextReceived(userText)
+                    }
+                }
+
+                var hasOutputTranscriptionText = false
+                val outputTrans = serverContent.optJSONObject("outputTranscription")
+                if (outputTrans != null) {
+                    var outText = outputTrans.optString("text", "")
+                    if (outText.isEmpty()) {
+                        val parts = outputTrans.optJSONArray("parts")
+                        if (parts != null) {
+                            val sb = StringBuilder()
+                            for (p in 0 until parts.length()) {
+                                sb.append(parts.optJSONObject(p)?.optString("text", "") ?: "")
+                            }
+                            outText = sb.toString()
+                        }
+                    }
+                    if (outText.isNotEmpty()) {
+                        hasOutputTranscriptionText = true
+                        listener.onAssistantTextReceived(outText)
+                    }
+                }
+
+                if (serverContent.optBoolean("interrupted", false)) {
+                    Log.d(TAG, "Server signaled turn interrupted")
+                    listener.onInterrupted()
+                }
+
+                val modelTurn = serverContent.optJSONObject("modelTurn")
+                if (modelTurn != null) {
+                    val parts = modelTurn.optJSONArray("parts")
+                    if (parts != null) {
+                        for (i in 0 until parts.length()) {
+                            val part = parts.getJSONObject(i)
+                            val isThought = part.optBoolean("thought", false)
+                            if (isThought) continue
+
+                            val text = part.optString("text", "")
+                            val isThinkingLeak = text.startsWith("**") && (
+                                text.contains("thinking", ignoreCase = true) ||
+                                text.contains("crafting", ignoreCase = true) ||
+                                text.contains("formulating", ignoreCase = true)
+                            )
+                            if (text.isNotEmpty() && !isThinkingLeak && !hasOutputTranscriptionText) {
+                                listener.onAssistantTextReceived(text)
+                            }
+
+                            val inlineData = part.optJSONObject("inlineData")
+                            if (inlineData != null) {
+                                val base64Data = inlineData.optString("data", "")
+                                if (base64Data.length > 8) {
+                                    val pcmBytes = Base64.decode(base64Data, Base64.DEFAULT)
+                                    if (pcmBytes.size >= 16) {
+                                        val validLen = pcmBytes.size and 1.inv()
+                                        val aligned = if (validLen == pcmBytes.size) pcmBytes else pcmBytes.copyOf(validLen)
+                                        listener.onAudioDataReceived(aligned)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val isTurnDone = serverContent.optBoolean("turnComplete", false) ||
+                                 serverContent.optBoolean("generationComplete", false) ||
+                                 serverContent.optBoolean("endOfTurn", false)
+                if (isTurnDone) {
+                    Log.d(TAG, "Server signaled turnComplete")
                     listener.onTurnCompleted()
                 }
             }
-
-            // Tool Call (Function Calling)
-            if (json.has("toolCall")) {
-                val tc = json.getJSONObject("toolCall")
-                val fcs = tc.optJSONArray("functionCalls") ?: JSONArray()
-                for (i in 0 until fcs.length()) {
-                    val fc = fcs.getJSONObject(i)
-                    val callId = fc.optString("id", "")
-                    val name = fc.optString("name", "")
-                    val args = fc.optJSONObject("args") ?: JSONObject()
-                    Log.d(TAG, "Tool call received: $name ($callId) with args: $args")
-                    listener.onToolCall(callId, name, args)
-                }
-            }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing incoming Gemini Live message: ${e.message}", e)
-        }
-    }
-
-    fun sendAudioChunk(pcm16k: ByteArray) {
-        if (!isConnected.get() || !isSetupComplete.get() || pcm16k.isEmpty()) return
-
-        try {
-            val base64Audio = Base64.encodeToString(pcm16k, Base64.NO_WRAP)
-            val json = "{\"realtimeInput\":{\"audio\":{\"mimeType\":\"audio/pcm;rate=16000\",\"data\":\"$base64Audio\"}}}"
-            webSocket?.send(json)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to send audio chunk: ${e.message}")
+            Log.e(TAG, "Error parsing server message: ${e.message}", e)
         }
     }
 
@@ -363,49 +851,84 @@ class GeminiLiveWebSocket(
         }
     }
 
-    private fun startSessionRenewalTimer() {
+    fun sendAudioChunk(pcm16k: ByteArray) {
+        if (!isConnected.get() || !isSetupComplete.get() || pcm16k.isEmpty()) return
+
+        try {
+            val base64Audio = Base64.encodeToString(pcm16k, Base64.NO_WRAP)
+            val json = "{\"realtimeInput\":{\"audio\":{\"mimeType\":\"audio/pcm;rate=16000\",\"data\":\"$base64Audio\"}}}"
+            webSocket?.send(json)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending audio chunk: ${e.message}")
+        }
+    }
+
+    private var mediaChunksSent = 0
+    private val lastVideoFrameSentAt = AtomicLong(0L)
+
+    fun sendMediaChunk(jpegBytes: ByteArray) {
+        if (!isConnected.get() || !isSetupComplete.get() || jpegBytes.isEmpty()) return
+
+        val now = android.os.SystemClock.elapsedRealtime()
+        while (true) {
+            val previous = lastVideoFrameSentAt.get()
+            if (now - previous < 1000L) return
+            if (lastVideoFrameSentAt.compareAndSet(previous, now)) break
+        }
+        try {
+            val base64Image = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+            val json = "{\"realtimeInput\":{\"video\":{\"mimeType\":\"image/jpeg\",\"data\":\"$base64Image\"}}}"
+            webSocket?.send(json)
+            mediaChunksSent++
+            if (mediaChunksSent % 10 == 1) {
+                Log.i(TAG, "Sent video frame #$mediaChunksSent to Gemini Live (${jpegBytes.size / 1024} KB)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending media chunk: ${e.message}")
+        }
+    }
+
+    private fun startSessionRenewal() {
         sessionRenewalJob?.cancel()
         sessionRenewalJob = coroutineScope?.launch(Dispatchers.IO) {
-            delay(SESSION_RENEWAL_MS)
-            if (isConnected.get() && !isManuallyStopped.get()) {
-                Log.i(TAG, "9-minute session renewal: seamlessly refreshing WebSocket...")
-                reconnect()
+            delay(GeminiConstants.SESSION_RENEWAL_MS)
+            if (isActive && !isManuallyStopped.get()) {
+                Log.d(TAG, "9-minute session threshold reached. Seamlessly renewing session...")
+                webSocket?.close(1000, "Session renewal")
             }
         }
     }
 
-    private fun scheduleReconnectIfNeeded() {
-        if (isManuallyStopped.get()) return
+    private fun scheduleReconnect() {
         reconnectJob?.cancel()
         reconnectJob = coroutineScope?.launch(Dispatchers.IO) {
-            delay(2000)
-            if (!isConnected.get() && !isManuallyStopped.get()) {
-                Log.i(TAG, "Attempting WebSocket auto-reconnect...")
+            delay(500)
+            if (!isManuallyStopped.get()) {
+                Log.d(TAG, "Attempting auto-reconnect...")
                 initiateConnection()
             }
         }
     }
 
-    fun reconnect() {
-        disconnect()
-        initiateConnection()
+    private fun stopTimers() {
+        sessionRenewalJob?.cancel()
+        sessionRenewalJob = null
     }
 
     fun disconnect() {
         isManuallyStopped.set(true)
-        sessionRenewalJob?.cancel()
-        sessionRenewalJob = null
+        stopTimers()
         reconnectJob?.cancel()
         reconnectJob = null
+        isConnected.set(false)
 
         try {
-            webSocket?.close(1000, "User disconnected")
+            webSocket?.close(1000, "Client stopped session")
         } catch (e: Exception) {
-            Log.w(TAG, "Error closing WebSocket: ${e.message}")
+            Log.e(TAG, "Error closing webSocket: ${e.message}")
+        } finally {
+            webSocket = null
         }
-        webSocket = null
-        isConnected.set(false)
-        isSetupComplete.set(false)
-        listener.onConnectionStateChanged("IDLE")
+        listener.onConnectionStateChanged("OFFLINE")
     }
 }

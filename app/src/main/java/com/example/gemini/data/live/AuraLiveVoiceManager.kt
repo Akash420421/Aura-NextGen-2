@@ -1,36 +1,44 @@
 package com.example.gemini.data.live
 
+import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
-import android.provider.ContactsContract
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
-import com.example.gemini.data.automation.AndroidAutomation
+import com.example.gemini.data.automation.ActivityLauncherHelper
+import com.example.gemini.data.automation.AppLauncher
 import com.example.gemini.data.automation.AutomationAccessibilityService
-import com.example.gemini.data.jarvis.JarvisController
-import com.example.gemini.data.jarvis.JarvisMcp
+import com.example.gemini.data.automation.BuiltInChromeEngine
+import com.example.gemini.data.automation.ContactCaller
+import com.example.gemini.data.automation.PhoneControlManager
+import com.example.gemini.data.automation.WhatsAppMessenger
+import com.example.gemini.data.automation.YouTubeController
 import com.example.gemini.data.jarvis.JarvisPreferences
 import com.example.gemini.data.local.LocalEnvironmentManager
 import com.example.gemini.data.local.LocalTerminalBridge
+import com.example.gemini.data.vision.ScreenCaptureManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 /**
- * AuraLiveVoiceManager: Central coordinator for the Next-Gen Live Voice Jarvis Engine.
+ * AuraLiveVoiceManager: Central coordinator for the Part-7-powered Live Voice Engine.
  * Combines:
- * 1. Gemini Live WebSocket (bidirectional duplex streaming)
- * 2. 16kHz AudioRecorder (AEC + AGC + Noise Suppression)
- * 3. 24kHz AudioPlayer (Loudspeaker USAGE_MEDIA + Jitter buffer + Instant barge-in)
- * 4. ChatGPT / Gemini style Persistent Memory (AuraMemoryManager)
- * 5. Active Chat Continuity (ChatContextBridge)
- * 6. In-App Control (JarvisMcp) + OS Automation (AndroidAutomation / WhatsApp)
+ * 1. Gemini Live duplex WebSocket with 24 native tools (<1s instant voice response)
+ * 2. 16kHz AudioRecorder with dynamic hardware AEC, AGC, and Noise Suppressor
+ * 3. 24kHz AudioPlayer with USAGE_MEDIA loudspeaker routing and instant barge-in flush
+ * 4. Acoustic Echo Decay Protection (AEDP) to prevent echo-triggered self-interruption loops
+ * 5. Screen Share video streaming (1 FPS 768px JPEG) + on-demand screen share prompt
+ * 6. Contact Calling & WhatsApp Auto-Send automation
+ * 7. Real terminal execution & project code file creation
+ * 8. Real-time chat transcript recording (ChatContextBridge) & persistent memory (AuraMemoryManager)
  */
 object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private const val TAG = "AuraLiveVoiceManager"
@@ -54,11 +62,20 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private var webSocket: GeminiLiveWebSocket? = null
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
-    private val sessionTurns = java.util.Collections.synchronizedList(mutableListOf<String>())
+    private var headsetRouter: HeadsetAudioRouter? = null
+    private var phoneControlManager: PhoneControlManager? = null
+
+    // Callback invoked when AI requests screen share permission from user
+    var requestScreenShareCallback: (() -> Unit)? = null
+
+    // Acoustic Echo Decay Protection (AEDP): suppresses mic chunks for 150ms post-speaker silence
+    private val lastSpeakerActiveTimestamp = AtomicLong(0L)
+    private const val AEDP_POST_SPEAKER_WINDOW_MS = 150L
 
     fun init(context: Context) {
         appContext = context.applicationContext
         AuraMemoryManager.init(context)
+        phoneControlManager = PhoneControlManager(context.applicationContext)
     }
 
     fun isLive(): Boolean = _phase.value != Phase.IDLE
@@ -75,11 +92,14 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         if (isLive()) return
         appContext = context.applicationContext
         AuraMemoryManager.init(context)
+        phoneControlManager = PhoneControlManager(context.applicationContext)
 
-        val apiKey = JarvisPreferences.liveApiKey.value.trim()
+        val apiKey = JarvisPreferences.liveApiKey.value.trim().ifBlank {
+            JarvisPreferences.ttsApiKey.value.trim()
+        }
         if (apiKey.isBlank()) {
-            _statusText.value = "Please enter Gemini Live API Key in Settings"
-            Log.e(TAG, "No API key configured")
+            _statusText.value = "Please enter Gemini API Key in Settings"
+            Log.e(TAG, "No API key configured in JarvisPreferences")
             return
         }
 
@@ -89,13 +109,21 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         _phase.value = Phase.CONNECTING
         _statusText.value = "Connecting to Gemini Live..."
 
+        // Play high-tech sci-fi wake chime
+        JarvisSoundEffects.playWakeSound()
+
+        // Initialize Headset / Audio Router
+        headsetRouter = HeadsetAudioRouter(context.applicationContext).apply { start() }
+
         // Initialize AudioPlayer
         audioPlayer = AudioPlayer(
             onPlaybackStateChanged = { isPlaying ->
                 if (isPlaying) {
                     _phase.value = Phase.SPEAKING
                     _statusText.value = "Jarvis speaking..."
+                    lastSpeakerActiveTimestamp.set(System.currentTimeMillis())
                 } else if (_phase.value == Phase.SPEAKING) {
+                    lastSpeakerActiveTimestamp.set(System.currentTimeMillis())
                     _phase.value = Phase.LISTENING
                     _statusText.value = "Listening..."
                 }
@@ -103,29 +131,41 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             onPlaybackAmplitude = { amp ->
                 if (_phase.value == Phase.SPEAKING) {
                     _amplitude.value = amp
+                    lastSpeakerActiveTimestamp.set(System.currentTimeMillis())
                 }
             }
         ).apply { start() }
 
-        // Initialize AudioRecorder
-        audioRecorder = AudioRecorder { chunk, amp ->
+        // Initialize AudioRecorder with AEDP protection
+        audioRecorder = AudioRecorder { chunk, amp, _ ->
+            val now = System.currentTimeMillis()
+            val isAedpActive = (now - lastSpeakerActiveTimestamp.get()) < AEDP_POST_SPEAKER_WINDOW_MS
+            val isAssistantSpeaking = _phase.value == Phase.SPEAKING
+
             if (_phase.value == Phase.LISTENING) {
                 _amplitude.value = amp
             }
-            webSocket?.sendAudioChunk(chunk)
+
+            // Suppress audio while assistant speaks unless headset is plugged in, to prevent acoustic echo loop
+            val hasHeadset = headsetRouter?.isHeadsetConnected() == true
+            if (!isAssistantSpeaking || hasHeadset) {
+                if (!isAedpActive || hasHeadset) {
+                    webSocket?.sendAudioChunk(chunk)
+                }
+            }
         }
 
-        val model = JarvisPreferences.liveModel.value.ifBlank { "models/gemini-3.8-live" }
-        val voice = JarvisPreferences.liveVoice.value.ifBlank { "Puck" }
+        val model = JarvisPreferences.liveModel.value.ifBlank { GeminiConstants.DEFAULT_MODEL }
+        val voice = JarvisPreferences.liveVoice.value.ifBlank { GeminiConstants.DEFAULT_VOICE }
 
         val ws = GeminiLiveWebSocket(
             apiKey = apiKey,
             model = model,
             voiceName = voice,
-            systemPrompt = buildComprehensiveSystemPrompt(),
+            systemPrompt = buildSystemPrompt(),
             listener = this
         )
-        ws.promptProvider = { buildComprehensiveSystemPrompt() }
+        ws.promptProvider = { buildSystemPrompt() }
         webSocket = ws
 
         AuraLiveVoiceService.start(context)
@@ -134,19 +174,18 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     fun stopSession() {
         Log.i(TAG, "Stopping live voice session...")
-        appContext?.let { AuraLiveVoiceService.stop(it) }
+        JarvisSoundEffects.playStandbySound()
 
-        if (sessionTurns.isNotEmpty()) {
-            val summary = sessionTurns.takeLast(12).joinToString("\n")
-            AuraMemoryManager.rememberFact("Voice session log:\n$summary", "VOICE_LOG")
-            sessionTurns.clear()
-        }
+        appContext?.let { AuraLiveVoiceService.stop(it) }
 
         audioRecorder?.stop()
         audioRecorder = null
 
         audioPlayer?.release()
         audioPlayer = null
+
+        headsetRouter?.release()
+        headsetRouter = null
 
         webSocket?.disconnect()
         webSocket = null
@@ -159,31 +198,35 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         _statusText.value = "Tap to Start"
     }
 
-    private fun buildComprehensiveSystemPrompt(): String {
+    fun sendScreenFrame(jpegBytes: ByteArray) {
+        webSocket?.sendMediaChunk(jpegBytes)
+    }
+
+    private fun buildSystemPrompt(): String {
         val sb = StringBuilder()
         sb.append("You are Jarvis / Aura, an ultra-advanced real-time AI companion living inside the Aura AI Android app.\n")
-        sb.append("You have complete authority over phone automation, internal app navigation, code writing, and terminal execution.\n\n")
+        sb.append("You have full control over phone automation, apps, media playback, WhatsApp, Chrome web navigation, screen inspection, code writing, and terminal execution.\n\n")
 
-        sb.append("### CRITICAL LANGUAGE DIRECTIVE:\n")
-        sb.append("- You MUST ALWAYS speak in conversational Hindi or Hinglish (Hindi mixed with English words as spoken naturally in India).\n")
-        sb.append("- NEVER switch to Portuguese, Spanish, or any other foreign language under ANY circumstance!\n")
-        sb.append("- If you hear ambient background noise, TV sound, music, or someone speaking another language in the room, COMPLETELY IGNORE IT and continue talking ONLY to the user in Hindi/Hinglish.\n\n")
+        sb.append("### CRITICAL SPOKEN LANGUAGE DIRECTIVE:\n")
+        sb.append("- You MUST ALWAYS speak in conversational Hindi or Hinglish (Hindi mixed with natural English words as spoken in India).\n")
+        sb.append("- Speak warmly, confidently, and keep your replies brief and direct (1-2 crisp sentences).\n")
+        sb.append("- Ignore ambient background noise or unrelated room chatter completely.\n\n")
 
-        sb.append("### STRICT ACTION & ZERO-HALLUCINATION POLICY:\n")
-        sb.append("- You MUST ALWAYS execute the matching tool immediately when asked to take action. NEVER lie, pretend, or claim 'I am creating files' without actually invoking the tool!\n")
-        sb.append("- When user says to open WhatsApp -> call open_app(app_name=\"WhatsApp\").\n")
-        sb.append("- When user says to tap a contact/person (e.g. 'Abhishek') -> call click_ui_element(element_id_or_text=\"Abhishek\").\n")
-        sb.append("- When user says to bring Aura AI back to front -> call open_aura_app().\n")
-        sb.append("- When user asks to make a calculator, website, or run a project:\n")
+        sb.append("### ZERO-HALLUCINATION ACTION EXECUTION:\n")
+        sb.append("- When asked to open an app -> ALWAYS call open_app(app_name).\n")
+        sb.append("- When asked to open a website -> ALWAYS call open_website(urls=[\"...\"]).\n")
+        sb.append("- When asked to play a song/video on YouTube -> ALWAYS call search_and_play_youtube(query=\"...\"). Never just open search without playing.\n")
+        sb.append("- When asked to send a WhatsApp message -> ALWAYS call send_whatsapp_message(recipient_name=\"...\", message=\"...\").\n")
+        sb.append("- When asked to call someone on phone -> ALWAYS call call_contact(contact_name=\"...\").\n")
+        sb.append("- When asked to call someone on WhatsApp -> ALWAYS call whatsapp_call(recipient_name=\"...\", call_type=\"voice\" or \"video\").\n")
+        sb.append("- When asked to adjust volume, brightness, or flashlight -> ALWAYS call set_volume, set_brightness, or set_flashlight.\n")
+        sb.append("- When asked to create a website, calculator, or code project:\n")
         sb.append("  1. Call write_project_file to save the HTML/CSS/JS file.\n")
-        sb.append("  2. Call execute_terminal_command to run python3 -m http.server 8080 or test the code.\n")
-        sb.append("  3. Call open_website(url=\"http://localhost:8080\") to show the user the live preview.\n")
-        sb.append("- Keep your spoken replies concise, friendly, confident, and direct. Call tools instantly.\n\n")
+        sb.append("  2. Call execute_terminal_command to test or launch python3 -m http.server 8080.\n")
+        sb.append("  3. Call open_website to preview it for the user.\n")
+        sb.append("- When asked to look at screen or share screen -> call inspect_screen or request_screen_share.\n\n")
 
-        // Ingest Persistent Memory Core
         sb.append(AuraMemoryManager.getSystemPromptContext())
-
-        // Ingest Active Chat Continuity Context
         sb.append(ChatContextBridge.getActiveChatPromptContext())
 
         return sb.toString()
@@ -203,7 +246,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 _phase.value = Phase.CONNECTING
                 _statusText.value = status
             }
-            "CLOSED", "IDLE" -> {
+            "CLOSED", "IDLE", "OFFLINE" -> {
                 if (_phase.value != Phase.IDLE) {
                     _phase.value = Phase.IDLE
                     _statusText.value = "Tap to Start"
@@ -221,23 +264,22 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     override fun onAssistantTextReceived(textChunk: String) {
         _lastTranscript.value = textChunk
-        sessionTurns.add("Assistant: $textChunk")
+        ChatContextBridge.recordAssistantTurn(textChunk)
     }
 
     override fun onUserTextReceived(textChunk: String) {
-        sessionTurns.add("User: $textChunk")
-        // Trigger automatic memory learning on what user says
+        ChatContextBridge.recordUserTurn(textChunk)
         AuraMemoryManager.learnFromConversation(textChunk)
     }
 
     override fun onInterrupted() {
-        // User barged in: instantly kill audio playback and listen
-        audioPlayer?.stopPlayback()
+        audioPlayer?.flush()
         _phase.value = Phase.LISTENING
         _statusText.value = "Listening..."
     }
 
     override fun onTurnCompleted() {
+        audioPlayer?.notifyTurnComplete()
         if (_phase.value != Phase.SPEAKING) {
             _phase.value = Phase.LISTENING
             _statusText.value = "Listening..."
@@ -258,212 +300,322 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
         scope?.launch(Dispatchers.IO) {
             val result = executeTool(name, args)
+            val summary = result.optString("message", result.optString("status", "executed"))
+            ChatContextBridge.recordToolExecution(name, summary)
             webSocket?.sendToolResponse(callId, name, result)
         }
     }
 
-    // --- Tool Execution Router ---
+    // --- Native Tool Execution ---
 
     private suspend fun executeTool(name: String, args: JSONObject): JSONObject {
         val context = appContext ?: return JSONObject().put("status", "error").put("message", "Context unavailable")
+        val phoneControl = phoneControlManager ?: PhoneControlManager(context)
         Log.i(TAG, "Executing tool '$name' with args: $args")
 
         return try {
             when (name) {
-                // --- 1. In-App Tools ---
-                "jarvis_open_screen" -> {
-                    val screen = args.optString("screen", "chat")
-                    withContext(Dispatchers.Main) {
-                        JarvisController.vm.requestViewMode(screen.uppercase())
-                    }
-                    JSONObject().put("status", "success").put("message", "Switched to screen $screen")
-                }
-
-                "voice_new_chat" -> {
-                    val result = withContext(Dispatchers.Main) {
-                        ChatContextBridge.startNewChat()
-                    }
-                    JSONObject().put("status", "success").put("message", result)
-                }
-
-                "jarvis_ide_list_projects" -> {
-                    JarvisMcp.call(context, "jarvis_ide_list_projects", args)
-                }
-
-                "jarvis_ide_open_project" -> {
-                    JarvisMcp.call(context, "jarvis_ide_open_project", args)
-                }
-
-                "jarvis_ide_open_file" -> {
-                    JarvisMcp.call(context, "jarvis_ide_open_file", args)
-                }
-
-                "jarvis_set_model" -> {
-                    JarvisMcp.call(context, "jarvis_set_model", args)
-                }
-
-                // --- 2. Memory Tools ---
-                "memory_save" -> {
-                    val fact = args.optString("fact", "")
-                    val category = args.optString("category").takeIf { !it.isNullOrBlank() }
-                    val msg = AuraMemoryManager.rememberFact(fact, category)
-                    JSONObject().put("status", "success").put("message", msg)
-                }
-
-                "memory_delete" -> {
-                    val idOrKey = args.optString("id_or_keyword", "")
-                    val deleted = AuraMemoryManager.deleteMemory(idOrKey)
-                    JSONObject().put("status", if (deleted) "success" else "not_found")
-                }
-
-                "memory_recall" -> {
-                    val query = args.optString("query", "").lowercase()
-                    val matches = AuraMemoryManager.memories.value.filter {
-                        it.text.lowercase().contains(query) || it.category.lowercase().contains(query)
-                    }
-                    JSONObject().put("status", "success").put("count", matches.size)
-                        .put("results", org.json.JSONArray().apply {
-                            matches.forEach { put(it.text) }
-                        })
-                }
-
-                // --- 3. OS Automation Tools ---
                 "open_app" -> {
                     val appName = args.optString("app_name", "").ifBlank { args.optString("name", "") }.trim()
+                    val appNumber = if (args.has("app_number")) args.optInt("app_number") else null
+
                     if (appName.equals("aura", true) || appName.equals("aura ai", true) || appName.equals("antigem", true)) {
                         bringAuraToForeground(context)
                         JSONObject().put("status", "success").put("message", "Opened Aura AI and brought to foreground")
                     } else {
-                        val directPackages = mapOf(
-                            "whatsapp" to "com.whatsapp",
-                            "whatsapp business" to "com.whatsapp.w4b",
-                            "youtube" to "com.google.android.youtube",
-                            "chrome" to "com.android.chrome",
-                            "settings" to "com.android.settings",
-                            "camera" to "com.google.android.GoogleCamera",
-                            "photos" to "com.google.android.apps.photos",
-                            "gallery" to "com.google.android.apps.photos",
-                            "maps" to "com.google.android.apps.maps",
-                            "gmail" to "com.google.android.gm",
-                            "telegram" to "org.telegram.messenger",
-                            "instagram" to "com.instagram.android"
-                        )
-                        val pkg = directPackages[appName.lowercase()]
-                        if (pkg != null) {
-                            val launchIntent = context.packageManager.getLaunchIntentForPackage(pkg)
-                            if (launchIntent != null) {
-                                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                context.startActivity(launchIntent)
-                                JSONObject().put("status", "success").put("message", "Opened $appName")
-                            } else {
-                                AndroidAutomation.call(context, "android_launch_app", JSONObject().apply {
-                                    put("name", appName)
-                                    put("package", pkg)
-                                })
-                            }
+                        val directWebUrl = phoneControl.parseTargetUrl(appName)
+                        if (directWebUrl != null) {
+                            phoneControl.openUrlsInChromeTabs(listOf(directWebUrl))
+                            JSONObject().put("status", "success").put("message", "Opened $directWebUrl in Chrome")
                         } else {
-                            AndroidAutomation.call(context, "android_launch_app", JSONObject().apply {
-                                put("name", appName)
-                                put("package", appName)
-                            })
+                            val launched = AppLauncher.launchApp(context, appName, appNumber)
+                            JSONObject().put("status", if (launched) "success" else "error")
+                                .put("message", if (launched) "Opened $appName app." else "Could not find $appName.")
                         }
+                    }
+                }
+
+                "open_website" -> {
+                    val targetUrls = mutableListOf<String>()
+                    val jsonUrls = args.optJSONArray("urls")
+                    if (jsonUrls != null) {
+                        for (i in 0 until jsonUrls.length()) {
+                            val u = jsonUrls.getString(i).trim()
+                            if (u.isNotEmpty()) targetUrls.add(u)
+                        }
+                    }
+                    val query = args.optString("query", "").trim()
+                    if (query.isNotEmpty()) {
+                        val extracted = phoneControl.extractUrlsFromText(query)
+                        for (u in extracted) {
+                            if (!targetUrls.contains(u)) targetUrls.add(u)
+                        }
+                        if (targetUrls.isEmpty()) {
+                            val single = phoneControl.parseTargetUrl(query)
+                            if (single != null) targetUrls.add(single)
+                        }
+                    }
+                    if (targetUrls.isEmpty() && query.isNotBlank()) {
+                        targetUrls.add("https://www.google.com/search?q=${Uri.encode(query)}")
+                    }
+                    val ok = phoneControl.openUrlsInChromeTabs(targetUrls)
+                    JSONObject().put("status", if (ok) "success" else "error")
+                        .put("message", if (ok) "Opened ${targetUrls.joinToString(", ")} in Chrome." else "Failed to open websites.")
+                }
+
+                "search_in_chrome" -> {
+                    val query = args.optString("query", "").trim()
+                    val targetUrl = phoneControl.parseTargetUrl(query)
+                    val searchUrl = targetUrl ?: "https://www.google.com/search?q=${Uri.encode(query)}"
+                    val ok = phoneControl.openUrlsInChromeTabs(listOf(searchUrl))
+                    JSONObject().put("status", if (ok) "success" else "error")
+                        .put("message", if (ok) "Searched \"$query\" in Chrome." else "Could not open Chrome.")
+                }
+
+                "search_and_play_youtube" -> {
+                    val query = args.optString("query", "").trim()
+                    audioPlayer?.flush()
+                    val playResult = YouTubeController.searchAndPlay(context, query)
+                    JSONObject().put("status", if (playResult.success) "success" else "error")
+                        .put("message", playResult.message ?: "Opened YouTube.")
+                }
+
+                "search_youtube" -> {
+                    val query = args.optString("query", "").trim()
+                    val result = YouTubeController.searchYouTube(context, query)
+                    JSONObject().put("status", if (result.success) "success" else "error")
+                        .put("message", result.message ?: "Showing search results.")
+                }
+
+                "media_playback_control" -> {
+                    val action = args.optString("action", "play")
+                    val ok = YouTubeController.sendMediaKey(context, action)
+                    JSONObject().put("status", if (ok) "success" else "error")
+                        .put("message", "Media action '$action' performed.")
+                }
+
+                "send_whatsapp_message" -> {
+                    val recipient = args.optString("recipient_name", "").trim()
+                    val message = args.optString("message", "").trim()
+                    val appNumber = if (args.has("app_number")) args.optInt("app_number") else null
+                    val confirmed = args.optBoolean("confirmed", true)
+                    audioPlayer?.flush()
+
+                    val waResult = WhatsAppMessenger.sendMessage(context, recipient, message, appNumber, confirmed)
+                    when (waResult) {
+                        is WhatsAppMessenger.SendResult.Success -> {
+                            JSONObject().put("status", "success")
+                                .put("sent", true)
+                                .put("message", "Message sent to ${waResult.contactName} on WhatsApp.")
+                        }
+                        is WhatsAppMessenger.SendResult.RequiresConfirmation -> {
+                            JSONObject().put("status", "pending_confirmation")
+                                .put("message", "Please confirm sending the message to ${waResult.contactName}.")
+                        }
+                        is WhatsAppMessenger.SendResult.MultipleAppsFound -> {
+                            JSONObject().put("status", "multiple_apps")
+                                .put("message", "Multiple WhatsApp apps found. Please specify WhatsApp 1 or 2.")
+                        }
+                        is WhatsAppMessenger.SendResult.ContactNotFound -> {
+                            JSONObject().put("status", "not_found")
+                                .put("message", "Could not find contact ${waResult.name} in phone contacts.")
+                        }
+                        is WhatsAppMessenger.SendResult.MultipleContactsFound -> {
+                            JSONObject().put("status", "multiple_contacts")
+                                .put("message", "Multiple contacts found: ${waResult.matches.joinToString(", ")}.")
+                        }
+                        is WhatsAppMessenger.SendResult.MissingPermission -> {
+                            JSONObject().put("status", "missing_permission")
+                                .put("message", "Contacts permission not granted.")
+                        }
+                        is WhatsAppMessenger.SendResult.Error -> {
+                            JSONObject().put("status", "error").put("message", waResult.reason)
+                        }
+                    }
+                }
+
+                "whatsapp_call" -> {
+                    val recipient = args.optString("recipient_name", "").trim()
+                    val callType = args.optString("call_type", "voice").trim()
+                    val appNumber = if (args.has("app_number")) args.optInt("app_number") else null
+                    audioPlayer?.flush()
+
+                    val callResult = WhatsAppMessenger.placeCall(context, recipient, callType, appNumber, true)
+                    when (callResult) {
+                        is WhatsAppMessenger.CallResult.Success -> {
+                            JSONObject().put("status", "success")
+                                .put("message", "Placing WhatsApp $callType call to ${callResult.contactName}.")
+                        }
+                        is WhatsAppMessenger.CallResult.ContactNotFound -> {
+                            JSONObject().put("status", "not_found")
+                                .put("message", "Could not find contact ${callResult.name}.")
+                        }
+                        else -> {
+                            JSONObject().put("status", "error")
+                                .put("message", "Could not place WhatsApp call.")
+                        }
+                    }
+                }
+
+                "call_contact" -> {
+                    val contact = args.optString("contact_name", "").trim()
+                    audioPlayer?.flush()
+                    val callResult = ContactCaller.callContact(context, contact)
+                    when (callResult) {
+                        is ContactCaller.CallResult.Success -> {
+                            JSONObject().put("status", "success")
+                                .put("message", "Calling ${callResult.contact.name}.")
+                        }
+                        is ContactCaller.CallResult.NoMatch -> {
+                            JSONObject().put("status", "not_found")
+                                .put("message", "Could not find contact '$contact' in contacts.")
+                        }
+                        is ContactCaller.CallResult.MultipleMatches -> {
+                            JSONObject().put("status", "multiple_matches")
+                                .put("message", "Found multiple contacts matching '$contact'.")
+                        }
+                        is ContactCaller.CallResult.MissingContactsPermission -> {
+                            JSONObject().put("status", "missing_permission")
+                                .put("message", "Contacts permission is not granted.")
+                        }
+                        is ContactCaller.CallResult.MissingCallPermission -> {
+                            JSONObject().put("status", "missing_permission")
+                                .put("message", "Phone call permission is not granted.")
+                        }
+                        is ContactCaller.CallResult.CallFailed -> {
+                            JSONObject().put("status", "error").put("message", "Could not place phone call.")
+                        }
+                    }
+                }
+
+                "set_volume" -> {
+                    val action = args.optString("action", "").trim()
+                    val pct = if (args.has("percentage")) args.optInt("percentage", 50) else null
+                    val msg = when {
+                        action == "set" && pct != null -> phoneControl.setVolumePercent(pct)
+                        action == "increase" -> phoneControl.adjustVolume(true)
+                        action == "decrease" -> phoneControl.adjustVolume(false)
+                        else -> "Volume unchanged."
+                    }
+                    JSONObject().put("status", "success").put("message", msg)
+                }
+
+                "set_brightness" -> {
+                    val action = args.optString("action", "").trim()
+                    val pct = if (args.has("percentage")) args.optInt("percentage", 50) else null
+                    val msg = when {
+                        action == "set" && pct != null -> phoneControl.setBrightnessPercent(pct)
+                        action == "increase" -> phoneControl.adjustBrightness(true)
+                        action == "decrease" -> phoneControl.adjustBrightness(false)
+                        else -> "Brightness unchanged."
+                    }
+                    JSONObject().put("status", "success").put("message", msg)
+                }
+
+                "set_flashlight" -> {
+                    val enabled = args.optBoolean("enabled", true)
+                    val msg = phoneControl.setFlashlight(enabled)
+                    JSONObject().put("status", "success").put("message", msg)
+                }
+
+                "builtin_chrome_search" -> {
+                    val query = args.optString("query", "").trim()
+                    val extracted = BuiltInChromeEngine.searchAndExtract(query)
+                    JSONObject().put("status", "success").put("message", extracted)
+                }
+
+                "click_ui_element" -> {
+                    val target = args.optString("target_name", "").ifBlank { args.optString("text", "") }.trim()
+                    val x = if (args.has("x")) args.optInt("x") else null
+                    val y = if (args.has("y")) args.optInt("y") else null
+
+                    val a11y = AutomationAccessibilityService.instance
+                    val clicked = if (a11y != null) {
+                        if (x != null && y != null) {
+                            val dm = context.resources.displayMetrics
+                            val realX = (x / 1000f) * dm.widthPixels
+                            val realY = (y / 1000f) * dm.heightPixels
+                            a11y.clickAt(realX, realY)
+                        } else {
+                            a11y.clickNodeWithText(target)
+                        }
+                    } else false
+
+                    JSONObject().put("status", if (clicked) "success" else "error")
+                        .put("message", if (clicked) "Tapped '$target'." else "Could not tap '$target'. Ensure Accessibility Service is enabled.")
+                }
+
+                "type_text" -> {
+                    val text = args.optString("text", "")
+                    val a11y = AutomationAccessibilityService.instance
+                    val typed = a11y?.typeText(text) ?: false
+                    JSONObject().put("status", if (typed) "success" else "error")
+                        .put("message", if (typed) "Typed \"$text\"." else "Could not type. No active input focus.")
+                }
+
+                "scroll_screen" -> {
+                    val dir = args.optString("direction", "down")
+                    val a11y = AutomationAccessibilityService.instance
+                    val scrolled = a11y?.performScroll(dir) ?: false
+                    JSONObject().put("status", if (scrolled) "success" else "error")
+                        .put("message", if (scrolled) "Scrolled $dir." else "Scroll failed.")
+                }
+
+                "press_key" -> {
+                    val key = args.optString("key", "home")
+                    val a11y = AutomationAccessibilityService.instance
+                    val actionCode = when (key.lowercase()) {
+                        "back" -> AccessibilityService.GLOBAL_ACTION_BACK
+                        "recents" -> AccessibilityService.GLOBAL_ACTION_RECENTS
+                        else -> AccessibilityService.GLOBAL_ACTION_HOME
+                    }
+                    val ok = a11y?.performGlobalAction(actionCode) ?: false
+                    JSONObject().put("status", if (ok) "success" else "error")
+                        .put("message", "Pressed $key.")
+                }
+
+                "inspect_screen" -> {
+                    val a11y = AutomationAccessibilityService.instance
+                    val root = a11y?.getActiveRootNode()
+                    val pkg = a11y?.foregroundPackage ?: root?.packageName?.toString() ?: "unknown"
+                    val elements = mutableListOf<String>()
+
+                    fun walk(node: AccessibilityNodeInfo, depth: Int) {
+                        if (depth > 6 || elements.size > 25) return
+                        val text = node.text?.toString()?.trim()
+                        val desc = node.contentDescription?.toString()?.trim()
+                        val label = text?.takeIf { it.isNotBlank() } ?: desc?.takeIf { it.isNotBlank() }
+                        if (label != null && label.length > 1 && !elements.contains(label)) {
+                            elements.add(label)
+                        }
+                        for (i in 0 until node.childCount) {
+                            node.getChild(i)?.let { walk(it, depth + 1) }
+                        }
+                    }
+
+                    if (root != null) walk(root, 0)
+                    JSONObject().put("status", "success")
+                        .put("foreground_app", pkg)
+                        .put("visible_elements", JSONArray(elements))
+                        .put("screen_sharing_active", ScreenCaptureManager.getInstance().isSharing.value)
+                }
+
+                "request_screen_share" -> {
+                    val scm = ScreenCaptureManager.getInstance()
+                    if (scm.isSharing.value) {
+                        JSONObject().put("status", "success").put("message", "Screen sharing is already active.")
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            requestScreenShareCallback?.invoke()
+                        }
+                        JSONObject().put("status", "prompted")
+                            .put("message", "Prompted user with the screen share dialog on screen.")
                     }
                 }
 
                 "open_aura_app" -> {
                     bringAuraToForeground(context)
-                    JSONObject().put("status", "success").put("message", "Brought Aura AI to foreground")
-                }
-
-                "send_whatsapp_message" -> {
-                    val recipient = args.optString("recipient_name", "")
-                    val message = args.optString("message_text", "")
-                    val appNumber = args.optInt("app_number", 1)
-                    val confirmed = args.optBoolean("confirmed", true)
-
-                    sendWhatsAppMessage(context, recipient, message, appNumber, confirmed)
-                }
-
-                "click_ui_element" -> {
-                    val target = args.optString("element_id_or_text", "").ifBlank { args.optString("text", "") }
-                    AndroidAutomation.call(context, "android_tap", JSONObject().apply {
-                        put("text", target)
-                        put("element_id", target)
-                    })
-                }
-
-                "type_text" -> {
-                    val text = args.optString("text", "")
-                    val submit = args.optBoolean("submit", false)
-                    AndroidAutomation.call(context, "android_type_text", JSONObject().apply {
-                        put("text", text)
-                        put("submit", submit)
-                    })
-                }
-
-                "scroll_screen" -> {
-                    val dir = args.optString("direction", "down")
-                    AndroidAutomation.call(context, "android_scroll", JSONObject().apply {
-                        put("direction", dir)
-                    })
-                }
-
-                "press_key" -> {
-                    val key = args.optString("key_name", "home")
-                    AndroidAutomation.call(context, "android_global_action", JSONObject().apply {
-                        put("action", key)
-                    })
-                }
-
-                "open_website" -> {
-                    val url = args.optString("url", "https://google.com")
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(intent)
-                    JSONObject().put("status", "success").put("message", "Opened $url")
-                }
-
-                "search_in_chrome" -> {
-                    val q = args.optString("query", "")
-                    val url = "https://www.google.com/search?q=" + Uri.encode(q)
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(intent)
-                    JSONObject().put("status", "success").put("message", "Searched for $q")
-                }
-
-                "inspect_screen" -> {
-                    AndroidAutomation.call(context, "android_get_ui_tree", JSONObject())
-                }
-
-                // --- 4. Terminal & Coding Tools ---
-                "execute_terminal_command" -> {
-                    val command = args.optString("command", "").trim()
-                    val workDir = args.optString("working_directory").takeIf { !it.isNullOrBlank() }
-                        ?: "/data/user/0/com.termux/files/home/projects"
-
-                    if (command.isBlank()) {
-                        JSONObject().put("status", "error").put("message", "command cannot be empty")
-                    } else {
-                        try {
-                            LocalTerminalBridge.instance.sendCommand(command = command)
-                        } catch (_: Exception) {}
-
-                        val res = LocalEnvironmentManager.executeCommand(
-                            command = command,
-                            context = context,
-                            workingDir = workDir,
-                            timeoutSeconds = 40
-                        )
-                        JSONObject().apply {
-                            put("status", if (res.exitCode == 0) "success" else "error")
-                            put("exit_code", res.exitCode)
-                            put("output", res.output.ifBlank { "(executed successfully with no output)" })
-                            put("duration_ms", res.durationMs)
-                        }
-                    }
+                    JSONObject().put("status", "success").put("message", "Brought Aura AI to foreground.")
                 }
 
                 "write_project_file" -> {
@@ -502,6 +654,38 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                 }
 
+                "execute_terminal_command" -> {
+                    val command = args.optString("command", "").trim()
+                    val workDir = args.optString("working_directory").takeIf { !it.isNullOrBlank() }
+                        ?: "/data/user/0/com.termux/files/home/projects"
+
+                    if (command.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "command cannot be empty")
+                    } else {
+                        try {
+                            LocalTerminalBridge.instance.sendCommand(command = command)
+                        } catch (_: Exception) {}
+
+                        val res = LocalEnvironmentManager.executeCommand(
+                            command = command,
+                            context = context,
+                            workingDir = workDir,
+                            timeoutSeconds = 40
+                        )
+                        JSONObject().apply {
+                            put("status", if (res.exitCode == 0) "success" else "error")
+                            put("exit_code", res.exitCode)
+                            put("output", res.output.ifBlank { "(executed successfully)" })
+                            put("duration_ms", res.durationMs)
+                        }
+                    }
+                }
+
+                "task_completed" -> {
+                    val summary = args.optString("summary", "Task completed.")
+                    JSONObject().put("status", "success").put("message", summary)
+                }
+
                 else -> {
                     JSONObject().put("status", "error").put("message", "Unknown tool: $name")
                 }
@@ -512,136 +696,16 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         }
     }
 
-    private fun sendWhatsAppMessage(
-        context: Context,
-        recipient: String,
-        message: String,
-        appNumber: Int,
-        confirmed: Boolean
-    ): JSONObject {
-        // Resolve contact phone number
-        val digits = resolveContactPhoneNumber(context, recipient)
-        if (digits.isNullOrBlank()) {
-            return JSONObject().put("status", "error").put("message", "Could not find contact '$recipient' in your phone contacts.")
-        }
-
-        var formattedNumber = digits.filter { it.isDigit() }
-        if (formattedNumber.length == 10) {
-            formattedNumber = "91$formattedNumber"
-        } else if (formattedNumber.startsWith("0") && formattedNumber.length == 11) {
-            formattedNumber = "91" + formattedNumber.substring(1)
-        }
-
-        val encoded = Uri.encode(message)
-        val deepLink = "https://api.whatsapp.com/send?phone=$formattedNumber&text=$encoded"
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(deepLink)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            setPackage(if (appNumber == 2) "com.whatsapp.w4b" else "com.whatsapp")
-        }
-
-        try {
-            context.startActivity(intent)
-            scheduleWhatsAppAutoSend()
-            return JSONObject().put("status", "success").put("message", "Message sent to $recipient on WhatsApp.")
-        } catch (e: Exception) {
-            return try {
-                val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(deepLink)).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                }
-                context.startActivity(fallbackIntent)
-                scheduleWhatsAppAutoSend()
-                JSONObject().put("status", "success").put("message", "Message sent via WhatsApp.")
-            } catch (e2: Exception) {
-                JSONObject().put("status", "error").put("message", "Could not open WhatsApp: ${e2.message}")
-            }
-        }
-    }
-
-    private fun scheduleWhatsAppAutoSend() {
-        val handler = Handler(Looper.getMainLooper())
-        handler.postDelayed(object : Runnable {
-            var attempts = 0
-            override fun run() {
-                val svc = AutomationAccessibilityService.instance
-                val root = svc?.rootInActiveWindow
-                if (root != null) {
-                    val sendNode = findWhatsAppSendButton(root)
-                    if (sendNode != null) {
-                        sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        Log.d(TAG, "Tapped WhatsApp send button via Accessibility!")
-                        return
-                    }
-                }
-                attempts++
-                if (attempts < 12) {
-                    handler.postDelayed(this, 300)
-                }
-            }
-        }, 500)
-    }
-
-    private fun findWhatsAppSendButton(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
-        val text = node.text?.toString()?.lowercase() ?: ""
-        val viewId = node.viewIdResourceName?.lowercase() ?: ""
-
-        if (desc == "send" || desc == "send message" || text == "send" || viewId.endsWith(":id/send")) {
-            return node
-        }
-
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val found = findWhatsAppSendButton(child)
-            if (found != null) return found
-        }
-        return null
-    }
-
-    private fun resolveContactPhoneNumber(context: Context, name: String): String? {
-        val digitsOnly = name.filter { it.isDigit() }
-        if (digitsOnly.length >= 10) {
-            return digitsOnly
-        }
-
-        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.READ_CONTACTS
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-        if (!hasPermission) {
-            Log.w(TAG, "READ_CONTACTS permission not granted. Cannot look up contact '$name'.")
-            return null
-        }
-
-        val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
-        val projection = arrayOf(
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-            ContactsContract.CommonDataKinds.Phone.NUMBER
-        )
-        val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
-        val selectionArgs = arrayOf("%$name%")
-
-        context.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-                if (numberIndex >= 0) {
-                    return cursor.getString(numberIndex)
-                }
-            }
-        }
-        return null
-    }
-
     private fun bringAuraToForeground(context: Context) {
         try {
             val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             }
             if (intent != null) {
-                context.startActivity(intent)
+                ActivityLauncherHelper.startActivitySafely(context, intent)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to bring Aura AI to foreground: ${e.message}", e)
+            Log.e(TAG, "Failed to bring Aura AI to foreground: ${e.message}")
         }
     }
 }

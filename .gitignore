@@ -61,6 +61,8 @@ termux-app/
 /backup_bootstrap
 output/
 /build-artifacts/
+output_*/
+*.apk
 app/aura-debug.jks
 .agents/
 flow_mcp/

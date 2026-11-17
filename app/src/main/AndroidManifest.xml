@@ -292,7 +292,7 @@
         <service
             android:name="com.example.gemini.data.live.AuraLiveVoiceService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone|mediaProjection" />
 
         <!-- Jarvis Quick Settings tile: tap to talk from anywhere -->
         <service

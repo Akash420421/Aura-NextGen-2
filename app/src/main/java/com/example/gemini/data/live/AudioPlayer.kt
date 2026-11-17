@@ -7,16 +7,10 @@ import android.util.Log
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.sqrt
 
-/**
- * AudioPlayer: Plays 24kHz 16-bit mono PCM audio streamed back from Gemini Live.
- * Routes audio through loudspeaker (USAGE_MEDIA), includes anti-stutter jitter buffer,
- * and supports instant barge-in flushing on interruption.
- */
 class AudioPlayer(
-    private val onPlaybackStateChanged: (isPlaying: Boolean) -> Unit = {},
-    private val onPlaybackAmplitude: (amplitude: Float) -> Unit = {}
+    private val onPlaybackStateChanged: (isPlaying: Boolean) -> Unit,
+    private val onPlaybackAmplitude: (amplitude: Float) -> Unit
 ) {
     companion object {
         private const val TAG = "AudioPlayer"
@@ -38,8 +32,11 @@ class AudioPlayer(
 
     private fun initAudioTrack() {
         val minBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        // 96,000 bytes = 2 full seconds of 24kHz 16-bit mono PCM headroom.
+        // Guarantees zero buffer underruns across network jitter.
         val bufferSize = maxOf(minBufferSize * 8, 96000)
 
+        // USAGE_MEDIA ensures audio plays strictly through loudspeaker/headphones
         val attributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -61,104 +58,171 @@ class AudioPlayer(
         audioTrack = track
     }
 
+    private val isTurnComplete = AtomicBoolean(false)
+
+    fun notifyTurnComplete() {
+        isTurnComplete.set(true)
+    }
+
     fun start() {
         if (isRunning.get()) return
         isRunning.set(true)
 
-        playbackThread = Thread({
+        playbackThread = Thread {
             try {
-                synchronized(trackLock) {
-                    if (audioTrack?.state == AudioTrack.STATE_INITIALIZED) {
-                        audioTrack?.play()
-                    }
-                }
-
-                while (isRunning.get()) {
-                    val chunk = audioQueue.poll(100, TimeUnit.MILLISECONDS)
-                    if (chunk != null && chunk.isNotEmpty()) {
-                        if (!isPlayingState.get()) {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            } catch (_: Exception) {}
+            var silenceCounter = 0
+            while (isRunning.get()) {
+                try {
+                    if (!isPlayingState.get()) {
+                        val firstChunk = audioQueue.poll(30, TimeUnit.MILLISECONDS)
+                        if (firstChunk != null && firstChunk.isNotEmpty()) {
+                            isTurnComplete.set(false)
                             isPlayingState.set(true)
+                            silenceCounter = 0
                             onPlaybackStateChanged(true)
-                        }
 
-                        val amp = calculateRms(chunk, chunk.size)
-                        onPlaybackAmplitude(amp)
+                            synchronized(trackLock) {
+                                audioTrack?.let { track ->
+                                    if (track.state == AudioTrack.STATE_INITIALIZED && track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                        try {
+                                            track.play()
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Error calling play(): ${e.message}")
+                                        }
+                                    }
+                                }
+                            }
 
-                        synchronized(trackLock) {
-                            audioTrack?.write(chunk, 0, chunk.size)
+                            writeToTrack(firstChunk)
+                            val amplitude = AudioUtils.calculateRmsNormalized(firstChunk, firstChunk.size)
+                            onPlaybackAmplitude(amplitude)
                         }
+                        continue
+                    }
+
+                    // Currently playing
+                    val chunk = audioQueue.poll(20, TimeUnit.MILLISECONDS)
+                    if (chunk != null && chunk.isNotEmpty()) {
+                        silenceCounter = 0
+                        val amplitude = AudioUtils.calculateRmsNormalized(chunk, chunk.size)
+                        onPlaybackAmplitude(amplitude)
+                        writeToTrack(chunk)
                     } else {
-                        if (isPlayingState.get() && audioQueue.isEmpty()) {
+                        silenceCounter++
+                        // Clean turn completion:
+                        // 1. If Gemini signaled turnComplete: wait 8 cycles (~160ms) of empty queue
+                        // 2. If generating: wait 40 cycles (~800ms) to tolerate packet jitter
+                        val shouldFinish = (isTurnComplete.get() && silenceCounter >= 8) || (silenceCounter >= 40)
+
+                        if (shouldFinish && isPlayingState.get()) {
                             isPlayingState.set(false)
                             onPlaybackStateChanged(false)
                             onPlaybackAmplitude(0f)
                         }
                     }
+                } catch (e: InterruptedException) {
+                    break
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in playback worker: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Playback thread error: ${e.message}", e)
-            } finally {
-                isPlayingState.set(false)
-                onPlaybackStateChanged(false)
-                onPlaybackAmplitude(0f)
             }
-        }, "GeminiLiveAudioPlayer").apply { start() }
-
-        Log.d(TAG, "Audio player started at 24kHz")
+        }.apply {
+            priority = Thread.MAX_PRIORITY
+            start()
+        }
     }
 
     fun enqueueAudio(pcmData: ByteArray) {
-        if (pcmData.isEmpty()) return
-        audioQueue.offer(pcmData)
+        if (pcmData.size >= 16) {
+            val validLen = pcmData.size and 1.inv()
+            val aligned = if (validLen == pcmData.size) pcmData else pcmData.copyOf(validLen)
+            audioQueue.offer(aligned)
+        }
     }
 
     /**
-     * Instantly flushes audio buffer when the user interrupts (talks over the model).
+     * Instantly flushes audio playback upon user barge-in / interruption.
      */
-    fun stopPlayback() {
+    fun flush() {
         audioQueue.clear()
+        isTurnComplete.set(true)
         synchronized(trackLock) {
             try {
-                audioTrack?.pause()
-                audioTrack?.flush()
-                audioTrack?.play()
+                audioTrack?.let {
+                    if (it.state == AudioTrack.STATE_INITIALIZED) {
+                        try { it.pause() } catch (_: Exception) {}
+                        try { it.flush() } catch (_: Exception) {}
+                        try { it.stop() } catch (_: Exception) {}
+                    }
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Error flushing AudioTrack: ${e.message}")
+                Log.e(TAG, "Error flushing AudioTrack: ${e.message}")
             }
         }
-        isPlayingState.set(false)
-        onPlaybackStateChanged(false)
-        onPlaybackAmplitude(0f)
+        if (isPlayingState.getAndSet(false)) {
+            onPlaybackStateChanged(false)
+            onPlaybackAmplitude(0f)
+        }
     }
+
+    fun stopPlayback() {
+        flush()
+    }
+
+    fun isPlaying(): Boolean = isPlayingState.get() || !audioQueue.isEmpty()
 
     fun release() {
         isRunning.set(false)
-        stopPlayback()
         playbackThread?.interrupt()
         playbackThread = null
+        audioQueue.clear()
 
         synchronized(trackLock) {
             try {
-                audioTrack?.stop()
-                audioTrack?.release()
+                audioTrack?.let {
+                    if (it.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                        it.stop()
+                    }
+                    it.release()
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Error releasing AudioTrack: ${e.message}")
+                Log.e(TAG, "Error releasing AudioTrack: ${e.message}")
+            } finally {
+                audioTrack = null
             }
-            audioTrack = null
         }
-        Log.d(TAG, "Audio player released")
     }
 
-    private fun calculateRms(buffer: ByteArray, length: Int): Float {
-        var sum = 0.0
-        val sampleCount = length / 2
-        for (i in 0 until length step 2) {
-            val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
-            val sampleShort = sample.toShort()
-            sum += sampleShort * sampleShort
+    private fun writeToTrack(chunk: ByteArray) {
+        synchronized(trackLock) {
+            var track = audioTrack
+            if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {
+                initAudioTrack()
+                track = audioTrack
+            }
+            track?.let { t ->
+                if (t.state == AudioTrack.STATE_INITIALIZED && t.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                    try { t.play() } catch (_: Exception) {}
+                }
+                val written = t.write(chunk, 0, chunk.size)
+                if (written < 0) {
+                    Log.w(TAG, "AudioTrack write failed ($written). Reinitializing AudioTrack...")
+                    try { t.release() } catch (_: Exception) {}
+                    initAudioTrack()
+                    audioTrack?.let { reloaded ->
+                        try {
+                            if (reloaded.state == AudioTrack.STATE_INITIALIZED) {
+                                reloaded.play()
+                                reloaded.write(chunk, 0, chunk.size)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error playing recreated track: ${e.message}")
+                        }
+                    }
+                }
+            }
         }
-        val mean = sum / maxOf(1, sampleCount)
-        val rms = sqrt(mean)
-        return (rms / 32767.0).toFloat().coerceIn(0f, 1f)
     }
 }

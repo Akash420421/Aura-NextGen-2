@@ -1,16 +1,16 @@
 {
-  "version_code": 227,
-  "version_name": "2.2.7",
+  "version_code": 230,
+  "version_name": "2.3.0",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.2.7 — Live Voice Action Engine Fixes & Real Terminal Execution",
-    "Fixed open_app to support name/package arguments and direct package resolution for WhatsApp, YouTube, Chrome, Settings, Camera",
-    "Smart Accessibility Tap: locate UI elements by visible text or content description (e.g. contact names like 'Abhishek') and click them directly",
-    "Smart Text Injection: automatic focus detection, editable node discovery, and automatic Send button tapping",
-    "Added open_aura_app to seamlessly bring Aura AI back to the foreground from other apps",
-    "Added execute_terminal_command, write_project_file, and read_project_file to Gemini Live for real coding and localhost execution without hallucination",
-    "Hardened Language Guardrails: strictly locks voice conversation to Hindi/Hinglish and ignores ambient background chatter",
-    "Voice Session Continuity: automatically records voice session actions into persistent memory"
+    "Aura AI v2.3.0 — Live Duplex Voice Engine Upgrade (Powered by Part 7 Architecture)",
+    "Sub-Second Live Voice Response: Zero thinking latency with thinking_budget 0 and low-latency PCM streaming",
+    "Hardware Echo & Noise Cancellation: Integrated AcousticEchoCanceler, AutomaticGainControl, and NoiseSuppressor",
+    "Acoustic Echo Decay Protection (AEDP): Prevents echo-triggered self-interruption and false listening loops",
+    "Live Screen Share Vision: 1 FPS continuous visual stream to Gemini Live with on-demand AI screen share trigger",
+    "Hands-Free WhatsApp & Phone Calls: Verified contact lookup, Indian phone format normalization, and accessibility send automation",
+    "Instant YouTube Playback: Clean query resolution and immediate video play via deep links",
+    "Real-Time Chat Transcripts: Voice conversations and executed tool actions automatically saved into chat history"
   ],
   "is_critical": false
 }

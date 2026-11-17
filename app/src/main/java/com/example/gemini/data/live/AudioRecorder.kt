@@ -11,25 +11,20 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.sqrt
 
-/**
- * AudioRecorder: Captures 16kHz 16-bit mono PCM audio in 20ms chunks (640 bytes)
- * for streaming into Gemini Live WebSocket. Applies hardware Acoustic Echo Cancellation,
- * Noise Suppression, and Automatic Gain Control.
- */
 class AudioRecorder(
-    private val onAudioChunk: (chunk: ByteArray, amplitude: Float) -> Unit
+    private val onAudioChunk: (chunk: ByteArray, amplitude: Float, frequencyData: AudioFrequencyData) -> Unit
 ) {
     companion object {
         private const val TAG = "AudioRecorder"
         const val SAMPLE_RATE = 16000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
-        // 16000 samples/sec * 0.02s * 2 bytes/sample = 640 bytes per 20ms chunk
+        // Ultra-low latency 20ms chunk: 16000 samples/sec * 0.02s * 2 bytes/sample = 640 bytes
         const val CHUNK_SIZE_BYTES = 640
     }
 
@@ -40,6 +35,10 @@ class AudioRecorder(
     private var recordingJob: Job? = null
     private val isRecording = AtomicBoolean(false)
     val isMuted = AtomicBoolean(false)
+
+    fun setMuted(muted: Boolean) {
+        isMuted.set(muted)
+    }
 
     @SuppressLint("MissingPermission")
     fun start(scope: CoroutineScope): Boolean {
@@ -63,61 +62,121 @@ class AudioRecorder(
             )
 
             if (record.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord failed to initialize")
+                Log.e(TAG, "AudioRecord initialization failed")
                 record.release()
                 return false
             }
 
-            audioRecord = record
-
-            // Attach hardware acoustic effects to suppress feedback loop
-            val audioSessionId = record.audioSessionId
+            val sessionId = record.audioSessionId
             if (AcousticEchoCanceler.isAvailable()) {
-                echoCanceler = AcousticEchoCanceler.create(audioSessionId)?.apply {
-                    enabled = true
+                try {
+                    echoCanceler = AcousticEchoCanceler.create(sessionId)?.apply {
+                        enabled = true
+                    }
+                    Log.i(TAG, "Hardware AcousticEchoCanceler enabled on session $sessionId")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to enable AcousticEchoCanceler: ${e.message}")
                 }
             }
+
             if (NoiseSuppressor.isAvailable()) {
-                noiseSuppressor = NoiseSuppressor.create(audioSessionId)?.apply {
-                    enabled = true
+                try {
+                    noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply {
+                        enabled = true
+                    }
+                    Log.i(TAG, "Hardware NoiseSuppressor enabled on session $sessionId")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to enable NoiseSuppressor: ${e.message}")
                 }
             }
+
             if (AutomaticGainControl.isAvailable()) {
-                automaticGainControl = AutomaticGainControl.create(audioSessionId)?.apply {
-                    enabled = true
+                try {
+                    automaticGainControl = AutomaticGainControl.create(sessionId)?.apply {
+                        enabled = true
+                    }
+                    Log.i(TAG, "Hardware AutomaticGainControl enabled on session $sessionId")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to enable AutomaticGainControl: ${e.message}")
                 }
             }
 
             record.startRecording()
+            audioRecord = record
             isRecording.set(true)
 
             recordingJob = scope.launch(Dispatchers.IO) {
+                try {
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+                } catch (_: Exception) {}
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
+                var currentRecord: AudioRecord? = record
                 while (isActive && isRecording.get()) {
-                    val read = record.read(buffer, 0, buffer.size)
-                    if (read > 0) {
-                        val amplitude = calculateRms(buffer, read)
-                        if (!isMuted.get()) {
-                            val chunk = buffer.copyOf(read)
-                            onAudioChunk(chunk, amplitude)
-                        } else {
-                            // If muted, send zeroed silence or skip
-                            onAudioChunk(ByteArray(0), 0f)
+                    var consecutiveErrors = 0
+                    while (isActive && isRecording.get() && currentRecord != null) {
+                        try {
+                            val readBytes = currentRecord.read(buffer, 0, buffer.size)
+                            if (readBytes > 0) {
+                                consecutiveErrors = 0
+                                val freq = AudioUtils.analyzeFrequency(buffer, readBytes, SAMPLE_RATE)
+                                if (!isMuted.get()) {
+                                    val chunkCopy = buffer.copyOf(readBytes)
+                                    onAudioChunk(chunkCopy, freq.amplitude, freq)
+                                } else {
+                                    onAudioChunk(ByteArray(0), 0f, AudioFrequencyData())
+                                }
+                            } else if (readBytes < 0) {
+                                consecutiveErrors++
+                                Log.w(TAG, "AudioRecord read error code: $readBytes (error count: $consecutiveErrors)")
+                                delay(40)
+                                if (consecutiveErrors > 10 && isRecording.get()) {
+                                    Log.e(TAG, "Consecutive AudioRecord read errors exceeded limit. Auto-recovering...")
+                                    break
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Exception during AudioRecord read loop: ${e.message}", e)
+                            delay(50)
+                        }
+                    }
+
+                    // Auto-recovery
+                    if (isActive && isRecording.get()) {
+                        delay(400)
+                        try { currentRecord?.release() } catch (_: Exception) {}
+                        try {
+                            val newRecord = AudioRecord(
+                                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                                SAMPLE_RATE,
+                                CHANNEL_CONFIG,
+                                AUDIO_FORMAT,
+                                bufferSize
+                            )
+                            if (newRecord.state == AudioRecord.STATE_INITIALIZED) {
+                                newRecord.startRecording()
+                                currentRecord = newRecord
+                                audioRecord = newRecord
+                                Log.i(TAG, "AudioRecord successfully auto-recovered and restarted!")
+                            } else {
+                                newRecord.release()
+                                delay(1000)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "AudioRecord auto-recovery failed: ${e.message}", e)
+                            delay(1000)
                         }
                     }
                 }
             }
-            Log.d(TAG, "Audio recording started at 16kHz")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start recording: ${e.message}", e)
-            stop()
+            Log.e(TAG, "Error initializing AudioRecord: ${e.message}", e)
             false
         }
     }
 
     fun stop() {
-        if (!isRecording.compareAndSet(true, false)) return
+        isRecording.set(false)
         recordingJob?.cancel()
         recordingJob = null
 
@@ -125,33 +184,16 @@ class AudioRecorder(
             audioRecord?.stop()
             audioRecord?.release()
         } catch (e: Exception) {
-            Log.w(TAG, "Error stopping AudioRecord: ${e.message}")
+            Log.e(TAG, "Error stopping AudioRecord: ${e.message}")
+        } finally {
+            audioRecord = null
         }
-        audioRecord = null
 
-        try {
-            echoCanceler?.release()
-            noiseSuppressor?.release()
-            automaticGainControl?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error releasing audio effects: ${e.message}")
-        }
+        try { echoCanceler?.release() } catch (_: Exception) {}
         echoCanceler = null
+        try { noiseSuppressor?.release() } catch (_: Exception) {}
         noiseSuppressor = null
+        try { automaticGainControl?.release() } catch (_: Exception) {}
         automaticGainControl = null
-        Log.d(TAG, "Audio recording stopped")
-    }
-
-    private fun calculateRms(buffer: ByteArray, length: Int): Float {
-        var sum = 0.0
-        val sampleCount = length / 2
-        for (i in 0 until length step 2) {
-            val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
-            val sampleShort = sample.toShort()
-            sum += sampleShort * sampleShort
-        }
-        val mean = sum / maxOf(1, sampleCount)
-        val rms = sqrt(mean)
-        return (rms / 32767.0).toFloat().coerceIn(0f, 1f)
     }
 }

@@ -478,7 +478,9 @@ fun ChatScreen(
 
     val auraJarvisMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            val liveKey = com.example.gemini.data.jarvis.JarvisPreferences.liveApiKey.value.trim()
+            val liveKey = com.example.gemini.data.jarvis.JarvisPreferences.liveApiKey.value.trim().ifBlank {
+                com.example.gemini.data.jarvis.JarvisPreferences.ttsApiKey.value.trim()
+            }
             if (liveKey.isNotBlank()) {
                 com.example.gemini.data.live.AuraLiveVoiceManager.toggleSession(context)
             } else {
@@ -492,7 +494,9 @@ fun ChatScreen(
     }
     val startAuraJarvis: () -> Unit = {
         val liveManager = com.example.gemini.data.live.AuraLiveVoiceManager
-        val liveKey = com.example.gemini.data.jarvis.JarvisPreferences.liveApiKey.value.trim()
+        val liveKey = com.example.gemini.data.jarvis.JarvisPreferences.liveApiKey.value.trim().ifBlank {
+            com.example.gemini.data.jarvis.JarvisPreferences.ttsApiKey.value.trim()
+        }
 
         if (!com.example.gemini.data.jarvis.JarvisController.hasMic()) {
             auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
@@ -520,7 +524,9 @@ fun ChatScreen(
                     val projection = projectionManager.getMediaProjection(result.resultCode, result.data!!)
                     if (projection != null) {
                         val metrics = context.resources.displayMetrics
-                        val started = com.example.gemini.data.vision.ScreenCaptureManager.getInstance().startCapture(projection, metrics)
+                        val started = com.example.gemini.data.vision.ScreenCaptureManager.getInstance().startCapture(projection, metrics) { jpeg ->
+                            com.example.gemini.data.live.AuraLiveVoiceManager.sendScreenFrame(jpeg)
+                        }
                         if (started) {
                             Toast.makeText(context, "Screen sharing started", Toast.LENGTH_SHORT).show()
                         } else {
@@ -533,6 +539,17 @@ fun ChatScreen(
                     Toast.makeText(context, "Screen share error: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+
+    DisposableEffect(viewModel) {
+        com.example.gemini.data.live.ChatContextBridge.attach(viewModel)
+        com.example.gemini.data.live.AuraLiveVoiceManager.requestScreenShareCallback = {
+            val pm = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
+            pm?.let { screenCaptureLauncher.launch(it.createScreenCaptureIntent()) }
+        }
+        onDispose {
+            com.example.gemini.data.live.AuraLiveVoiceManager.requestScreenShareCallback = null
         }
     }
     val pendingApprovals by viewModel.pendingApprovals.collectAsState()
