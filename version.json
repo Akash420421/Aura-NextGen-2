@@ -1,13 +1,13 @@
 {
-  "version_code": 232,
-  "version_name": "2.3.2",
+  "version_code": 233,
+  "version_name": "2.3.3",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.2 — Gemini 3.8 Audio Model Upgrade & Mission Bot Floating Dialog",
-    "Upgraded Gemini Speech API to official active gemini-3.8-flash model (resolving HTTP 404)",
-    "Replaced large intrusive Mission/Task banner in chat with a cute floating robot icon",
-    "Tapping cute robot badge opens full Mission & Tasks popup dialog with status and autopilot controls",
-    "Removed Free Natural Voice (Edge TTS) option as requested"
+    "Aura AI v2.3.3 — Deepgram Aura Human Voice Integration ($200 Free Trial)",
+    "Integrated ultra-realistic, low-latency Deepgram Aura TTS as the default voice engine",
+    "Configured with Asteria (Warm Female), Luna (Bright Female), Orion (Approachable Male), Arcas, and Athena",
+    "Pre-configured and validated Deepgram API key with instant sub-second audio generation",
+    "Maintained cute floating robot badge and mission popup dialog"
   ],
   "is_critical": false
 }

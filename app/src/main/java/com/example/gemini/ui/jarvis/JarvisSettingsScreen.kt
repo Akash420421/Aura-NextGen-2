@@ -485,6 +485,7 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                     val engine by P.ttsEngine.state.collectAsState()
                     JChips(
                         listOf(
+                            "deepgram" to "Deepgram Aura",
                             "gemini" to "Google Gemini",
                             "android" to "This device",
                             "google_cloud" to "Google Cloud",
@@ -508,6 +509,22 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                             }
                         }
                         JField("Language (optional, e.g. en-US)", language) { P.ttsLanguage.set(it) }
+                    } else if (engine == "deepgram") {
+                        val key by P.ttsApiKey.state.collectAsState()
+                        JField("Deepgram API key", key, secret = true) { P.ttsApiKey.set(it) }
+                        JHint("Ultra-fast human studio voice powered by Deepgram Aura (\$200 free trial active).")
+                        Text("Voice", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        JChips(
+                            listOf(
+                                "aura-asteria-en" to "Asteria (Warm Female)",
+                                "aura-luna-en" to "Luna (Bright Female)",
+                                "aura-orion-en" to "Orion (Approachable Male)",
+                                "aura-arcas-en" to "Arcas (Deep Male)",
+                                "aura-athena-en" to "Athena (Calm Female)",
+                                "aura-helios-en" to "Helios (Warm Male)"
+                            ),
+                            voice.ifBlank { "aura-asteria-en" }
+                        ) { P.ttsVoice.set(it) }
                     } else if (engine == "gemini") {
                         val key by P.ttsApiKey.state.collectAsState()
                         JField("Gemini API key (AI Studio)", key, secret = true) { P.ttsApiKey.set(it) }

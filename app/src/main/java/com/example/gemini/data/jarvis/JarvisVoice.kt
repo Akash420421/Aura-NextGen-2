@@ -302,6 +302,10 @@ object JarvisVoice {
         return try {
             val bytes = withContext(Dispatchers.IO) {
                 when {
+                    engine == "deepgram" -> {
+                        val k = key.ifBlank { "bffb3813de6410a2f0970e12b42a6dc5c221026b" }
+                        deepgramSpeech(text, k)
+                    }
                     engine == "gemini" -> {
                         if (key.isNotBlank()) geminiSpeech(text, key) else null
                     }
@@ -322,7 +326,8 @@ object JarvisVoice {
                     }
                     engine == "openai" -> openAiSpeech(text, key)
                     else -> {
-                        if (key.isNotBlank()) geminiSpeech(text, key) else null
+                        val k = key.ifBlank { "bffb3813de6410a2f0970e12b42a6dc5c221026b" }
+                        deepgramSpeech(text, k)
                     }
                 }
             }
@@ -336,6 +341,30 @@ object JarvisVoice {
             Log.w(TAG, "online voice failed: ${e.message}")
             _lastError.value = "Online voice failed (${e.message}); used the device voice."
             false
+        }
+    }
+
+    private fun deepgramSpeech(text: String, key: String): ByteArray? {
+        val voiceName = JarvisPreferences.ttsVoice.value.ifBlank { "aura-asteria-en" }
+        val cleanModel = if (voiceName.startsWith("aura")) voiceName else "aura-$voiceName-en"
+        val body = JSONObject().apply {
+            put("text", text)
+        }.toString()
+
+        val url = "https://api.deepgram.com/v1/speak?model=$cleanModel"
+        val req = Request.Builder()
+            .url(url)
+            .header("Authorization", "Token $key")
+            .header("Content-Type", "application/json")
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        http.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val err = resp.body?.string().orEmpty().take(200)
+                error("Deepgram HTTP ${resp.code}: $err")
+            }
+            return resp.body?.bytes()
         }
     }
 

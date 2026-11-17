@@ -79,13 +79,13 @@ object JarvisPreferences {
     val liveVoice = pref("live_voice", "Puck")
 
     // ---- voice output
-    /** "gemini" (Google Gemini Audio API), "android" (device TTS), "google_cloud" or "openai". */
-    val ttsEngine = pref("tts_engine", "gemini")
-    val ttsVoice = pref("tts_voice", "Puck")
+    /** "deepgram" (Deepgram Aura TTS), "gemini" (Google Gemini Audio API), "android" (device TTS), "google_cloud" or "openai". */
+    val ttsEngine = pref("tts_engine", "deepgram")
+    val ttsVoice = pref("tts_voice", "aura-asteria-en")
     val ttsLanguage = pref("tts_language", "")
     val ttsRate = pref("tts_rate", 1.0f)
     val ttsPitch = pref("tts_pitch", 1.0f)
-    val ttsApiKey = pref("tts_api_key", "")
+    val ttsApiKey = pref("tts_api_key", "bffb3813de6410a2f0970e12b42a6dc5c221026b")
     val ttsBaseUrl = pref("tts_base_url", "")
     val ttsModel = pref("tts_model", "")
     /** Floating draggable orb overlay inside the app (disabled by default to prevent screen obstruction). */
