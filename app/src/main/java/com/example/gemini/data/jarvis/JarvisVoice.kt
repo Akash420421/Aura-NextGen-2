@@ -444,13 +444,15 @@ object JarvisVoice {
         return header + pcmData
     }
 
-    private fun edgeSpeech(text: String): ByteArray? {
+    private suspend fun edgeSpeech(text: String): ByteArray? {
         val lang = JarvisPreferences.ttsLanguage.value.ifBlank { "hi-IN" }
         val isHindi = lang.startsWith("hi", ignoreCase = true) || text.any { it.code in 0x0900..0x097F }
         val voice = if (isHindi) "hi-IN-SwaraNeural" else "en-US-JennyNeural"
         val rate = JarvisPreferences.ttsRate.value
-        val ratePercent = "${((rate - 1f) * 100).toInt():+d}%"
-        val pitchPercent = "${((JarvisPreferences.ttsPitch.value - 1f) * 50).toInt():+d}Hz"
+        val rateVal = ((rate - 1f) * 100).toInt()
+        val ratePercent = if (rateVal >= 0) "+$rateVal%" else "$rateVal%"
+        val pitchVal = ((JarvisPreferences.ttsPitch.value - 1f) * 50).toInt()
+        val pitchPercent = if (pitchVal >= 0) "+${pitchVal}Hz" else "${pitchVal}Hz"
         val escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
         val ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='$lang'><voice name='$voice'><prosody pitch='$pitchPercent' rate='$ratePercent'>$escaped</prosody></voice></speak>"
@@ -503,19 +505,17 @@ object JarvisVoice {
             }
         })
 
-        try {
-            val success = kotlinx.coroutines.runBlocking {
-                withTimeoutOrNull(12000L) { done.await() } ?: false
-            }
+        return try {
+            val success = withTimeoutOrNull(12000L) { done.await() } ?: false
             if (success) {
                 val bytes = synchronized(output) { output.toByteArray() }
-                if (bytes.isNotEmpty()) return bytes
-            }
+                if (bytes.isNotEmpty()) bytes else null
+            } else null
         } catch (_: Exception) {
+            null
         } finally {
             try { ws.close(1000, null) } catch (_: Exception) {}
         }
-        return null
     }
 
     private fun googleCloud(text: String, key: String): ByteArray? {
