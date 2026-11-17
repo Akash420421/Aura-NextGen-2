@@ -176,15 +176,18 @@ fun JarvisOverlay() {
     val activeTasks = tasks.count { it.active }
     val attention = mcpProblem || tasks.any { it.state.needsUser }
 
-    if (style == "fullscreen" && expanded) {
-        FullScreenJarvis(phase, level, steps, line, showTranscript, showActivity, sendProgress, holding, autoNow, quiet, onTap)
-    } else {
-        OrbLayer(
-            phase = phase, level = level, expanded = expanded, showPill = showPill, steps = steps, line = line,
-            showTranscript = showTranscript, showActivity = showActivity, sendProgress = sendProgress, holding = holding,
-            auto = autoNow, quiet = quiet, notice = notice, orbSize = if (voiceOn) orbSize else "hidden", activeTasks = activeTasks,
-            attention = attention, tasks = tasks, onTap = onTap, onNoticeAction = onNoticeAction
-        )
+    val floatingOrbEnabled by JarvisPreferences.floatingOrbEnabled.state.collectAsState()
+    if (floatingOrbEnabled) {
+        if (style == "fullscreen" && expanded) {
+            FullScreenJarvis(phase, level, steps, line, showTranscript, showActivity, sendProgress, holding, autoNow, quiet, onTap)
+        } else {
+            OrbLayer(
+                phase = phase, level = level, expanded = expanded, showPill = showPill, steps = steps, line = line,
+                showTranscript = showTranscript, showActivity = showActivity, sendProgress = sendProgress, holding = holding,
+                auto = autoNow, quiet = quiet, notice = notice, orbSize = if (voiceOn) orbSize else "hidden", activeTasks = activeTasks,
+                attention = attention, tasks = tasks, onTap = onTap, onNoticeAction = onNoticeAction
+            )
+        }
     }
     if (panelOpen && voiceOn) JarvisPanel(onTalk = onTap, onNoticeAction = onNoticeAction)
     if (quickOpen && voiceOn) JarvisQuickSettings(onClose = { JarvisController.quickSettingsOpen.value = false })

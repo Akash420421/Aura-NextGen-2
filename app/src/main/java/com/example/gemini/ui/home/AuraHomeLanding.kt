@@ -184,24 +184,14 @@ fun AuraVoiceWelcome(
     onStart: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val livePhase by com.example.gemini.data.live.AuraLiveVoiceManager.phase.collectAsState()
-    val liveStatus by com.example.gemini.data.live.AuraLiveVoiceManager.statusText.collectAsState()
     val jarvisPhase by com.example.gemini.data.jarvis.JarvisController.phase.collectAsState()
+    val heard by com.example.gemini.data.jarvis.JarvisController.heard.collectAsState()
+    val said by com.example.gemini.data.jarvis.JarvisController.said.collectAsState()
 
-    val effectivePhase = when (livePhase) {
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING,
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> com.example.gemini.data.jarvis.JarvisController.Phase.THINKING
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> jarvisPhase
-    }
-
-    val prompt = if (livePhase != com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE) {
-        liveStatus
-    } else when (effectivePhase) {
-        com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> "Listening — tap the orb to stop"
-        com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> "Jarvis is thinking…"
-        com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> "Jarvis is speaking — tap to interrupt"
+    val prompt = when (jarvisPhase) {
+        com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> heard.ifBlank { "Listening — tap the orb to stop" }
+        com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> "Agent is working…"
+        com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> said.ifBlank { "Speaking — tap to interrupt" }
         else -> "Tap the orb to start conversation"
     }
 
@@ -238,8 +228,15 @@ fun AuraVoiceWelcome(
         Spacer(Modifier.weight(0.28f))
         com.example.gemini.ui.components.AuraOrbView(
             modifier = Modifier.size(260.dp),
-            phase = effectivePhase,
-            onOrbTapped = onStart
+            phase = jarvisPhase,
+            onOrbTapped = {
+                when (jarvisPhase) {
+                    com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> com.example.gemini.data.jarvis.JarvisController.finishListening()
+                    com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> com.example.gemini.data.jarvis.JarvisController.silence()
+                    com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> com.example.gemini.data.jarvis.JarvisController.stopEverything()
+                    else -> onStart()
+                }
+            }
         )
         Spacer(Modifier.weight(1f))
     }
@@ -263,19 +260,14 @@ fun AuraVoiceActions(
     modifier: Modifier = Modifier
 ) {
     val phase by com.example.gemini.data.jarvis.JarvisController.phase.collectAsState()
-    val livePhase by com.example.gemini.data.live.AuraLiveVoiceManager.phase.collectAsState()
     val isSharing by com.example.gemini.data.vision.ScreenCaptureManager.getInstance().isSharing.collectAsState()
     val currentLang by com.example.gemini.data.voice.AgyVoicePreferences.language.collectAsState()
     var showLanguageDialog by remember { mutableStateOf(false) }
 
-    val startLabel = when {
-        livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> "Tap to Stop"
-        livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> "Tap to Interrupt"
-        livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> "Thinking…"
-        livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> "Connecting…"
-        phase == com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> "Tap to Send"
-        phase == com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> "Thinking…"
-        phase == com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> "Tap to Talk"
+    val startLabel = when (phase) {
+        com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> "Tap to Send"
+        com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> "Agent Working…"
+        com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> "Tap to Interrupt"
         else -> "Tap to Start"
     }
 
@@ -307,10 +299,7 @@ fun AuraVoiceActions(
 
         Surface(
             onClick = {
-                val liveManager = com.example.gemini.data.live.AuraLiveVoiceManager
-                if (liveManager.isLive()) {
-                    liveManager.stopSession()
-                } else when (phase) {
+                when (phase) {
                     com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> com.example.gemini.data.jarvis.JarvisController.finishListening()
                     com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> com.example.gemini.data.jarvis.JarvisController.silence()
                     com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> com.example.gemini.data.jarvis.JarvisController.stopEverything()
@@ -324,14 +313,10 @@ fun AuraVoiceActions(
                 .height(56.dp)
                 .defaultMinSize(minWidth = 160.dp)
         ) {
-            val (accentColor, iconVector) = when {
-                livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING ||
-                phase == com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> Color(0xFFDC2626) to Icons.Filled.Stop
-                livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING ||
-                phase == com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> Color(0xFF16A34A) to Icons.Rounded.Mic
-                livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING ||
-                livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING ||
-                phase == com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> Color(0xFFD97706) to Icons.Default.HourglassEmpty
+            val (accentColor, iconVector) = when (phase) {
+                com.example.gemini.data.jarvis.JarvisController.Phase.SPEAKING -> Color(0xFFDC2626) to Icons.Filled.Stop
+                com.example.gemini.data.jarvis.JarvisController.Phase.LISTENING -> Color(0xFF16A34A) to Icons.Rounded.Mic
+                com.example.gemini.data.jarvis.JarvisController.Phase.THINKING -> Color(0xFFD97706) to Icons.Default.HourglassEmpty
                 else -> AuraBlue to Icons.Rounded.Mic
             }
             Row(

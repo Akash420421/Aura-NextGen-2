@@ -79,15 +79,17 @@ object JarvisPreferences {
     val liveVoice = pref("live_voice", "Puck")
 
     // ---- voice output
-    /** "android" (device TTS), "google_cloud" or "openai" (any OpenAI-compatible /audio/speech API). */
-    val ttsEngine = pref("tts_engine", "android")
-    val ttsVoice = pref("tts_voice", "")
+    /** "gemini" (Google Gemini Audio API), "edge" (free natural neural voices), "android" (device TTS), "google_cloud" or "openai". */
+    val ttsEngine = pref("tts_engine", "gemini")
+    val ttsVoice = pref("tts_voice", "Puck")
     val ttsLanguage = pref("tts_language", "")
     val ttsRate = pref("tts_rate", 1.0f)
     val ttsPitch = pref("tts_pitch", 1.0f)
     val ttsApiKey = pref("tts_api_key", "")
     val ttsBaseUrl = pref("tts_base_url", "")
     val ttsModel = pref("tts_model", "")
+    /** Floating draggable orb overlay inside the app (disabled by default to prevent screen obstruction). */
+    val floatingOrbEnabled = pref("floating_orb_enabled", false)
     /** Jarvis says short progress updates while it works. */
     val speakProgress = pref("speak_progress", false)
     /** Quiet mode: Jarvis shows its answers on the card instead of saying them (meetings, night). */
@@ -123,14 +125,13 @@ object JarvisPreferences {
      * jarvis_speak listen_after, and a question always counts), "always" (after every answer while you are talking to
      * it) or "never" (only jarvis_ask still listens).
      */
-    val listenAfter = pref("listen_after", "auto")
+    val listenAfter = pref("listen_after", "always")
     /** How long the microphone waits for a reply after Jarvis spoke; no word at all in this time closes it (seconds). */
     val followUpSeconds = pref("follow_up_s", 8)
     /**
-     * Send by itself when you pause. Off (the default): what you say is sent only by a send phrase, the Send button, the
-     * headset button or the notification, so taking a break to think never sends half a sentence.
+     * Send by itself when you pause.
      */
-    val autoSend = pref("auto_send", false)
+    val autoSend = pref("auto_send", true)
     /** How the pause is judged when [autoSend] is on: "smart" (longer when the sentence sounds unfinished) or "pause" (fixed). */
     val sendMode = pref("send_mode", "smart")
     /**
@@ -213,7 +214,7 @@ object JarvisPreferences {
     /** The agent of the last Jarvis text chat the user opened (the next one starts with it); blank: Jarvis' agent. */
     val textChatAgent = pref("text_chat_agent", "")
     /** Jarvis chats in the chat list's other tabs too: "none" (only under Jarvis), "text" (the user's Jarvis chats) or "all". */
-    val jarvisInAll = pref("jarvis_in_all", "none")
+    val jarvisInAll = pref("jarvis_in_all", "all")
     /** Quick switches shown in the Jarvis panel, in order (ids of [com.example.gemini.ui.jarvis.QuickSwitch]). */
     val quickPins = pref("quick_pins", "handsfree,voice,send,pause,answers,screen")
 

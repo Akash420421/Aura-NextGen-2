@@ -478,14 +478,13 @@ fun ChatScreen(
 
     val auraJarvisMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            val liveKey = com.example.gemini.data.jarvis.JarvisPreferences.liveApiKey.value.trim().ifBlank {
-                com.example.gemini.data.jarvis.JarvisPreferences.ttsApiKey.value.trim()
+            if (!com.example.gemini.data.jarvis.JarvisPreferences.enabled.value) {
+                com.example.gemini.data.jarvis.JarvisPreferences.enabled.set(true)
             }
-            if (liveKey.isNotBlank()) {
-                com.example.gemini.data.live.AuraLiveVoiceManager.toggleSession(context)
-            } else {
-                com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+            if (!com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.value) {
+                com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.set(true)
             }
+            com.example.gemini.data.jarvis.JarvisController.onMicPressed()
         } else {
             com.example.gemini.ui.components.AppToastHelper.showToast(
                 "Aura voice needs microphone access.", com.example.gemini.ui.components.ChatToastType.ERROR
@@ -493,15 +492,8 @@ fun ChatScreen(
         }
     }
     val startAuraJarvis: () -> Unit = {
-        val liveManager = com.example.gemini.data.live.AuraLiveVoiceManager
-        val liveKey = com.example.gemini.data.jarvis.JarvisPreferences.liveApiKey.value.trim().ifBlank {
-            com.example.gemini.data.jarvis.JarvisPreferences.ttsApiKey.value.trim()
-        }
-
         if (!com.example.gemini.data.jarvis.JarvisController.hasMic()) {
             auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
-        } else if (liveKey.isNotBlank()) {
-            liveManager.toggleSession(context)
         } else {
             if (!com.example.gemini.data.jarvis.JarvisPreferences.enabled.value) {
                 com.example.gemini.data.jarvis.JarvisPreferences.enabled.set(true)
@@ -510,7 +502,6 @@ fun ChatScreen(
                 com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.set(true)
             }
             com.example.gemini.data.jarvis.JarvisController.onMicPressed()
-            Toast.makeText(context, "Tip: Add your Gemini API key in Settings → Jarvis for continuous duplex voice!", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -2071,7 +2062,7 @@ fun ChatScreen(
                     val isExistingChat = messages.isEmpty() && isExistingConversation && isLoadingConversation
                     Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, error=$conversationError, isServerStopped=$isServerStopped")
 
-                    if (auraHomeVoice) {
+                    if (auraHomeVoice && messages.isEmpty()) {
                         com.example.gemini.ui.home.AuraVoiceWelcome(
                             userName = agyAuthInfo.displayName,
                             onStart = startAuraJarvis

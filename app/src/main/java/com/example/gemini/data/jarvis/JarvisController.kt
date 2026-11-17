@@ -499,7 +499,11 @@ object JarvisController {
     /** The Jarvis chat's last reply as words (its thinking, tool markers and error cards taken out, see [JarvisText]). */
     private suspend fun lastJarvisReply(): JarvisText.Reply? {
         val id = JarvisPreferences.currentChatId.value
-        val raw = if (JarvisPreferences.currentChatAgent.value == AgentKind.CLAUDE.name) {
+        val screenMsg = if (attached && vm.currentConversation.value != null && (id.isBlank() || vm.currentConversation.value?.id == id)) {
+            vm.messages.value.lastOrNull { it.role == MessageRole.ASSISTANT && it.content.isNotBlank() }?.content
+        } else null
+
+        val raw = screenMsg ?: if (JarvisPreferences.currentChatAgent.value == AgentKind.CLAUDE.name) {
             jarvisClaude.messages.value.lastOrNull { it.role == MessageRole.ASSISTANT && it.content.isNotBlank() }?.content
         } else if (JarvisPreferences.currentChatAgent.value == AgentKind.OPENCODE.name) {
             jarvisOpenCode.messages.value.lastOrNull { it.role == MessageRole.ASSISTANT && it.content.isNotBlank() }?.content
@@ -1523,11 +1527,17 @@ object JarvisController {
         val carry = carryText
         carryText = ""
         val agent = JarvisPreferences.agentKind
-            ?: throw JarvisSetupException("I don't have an agent yet. Pick one for me in Settings, Jarvis, Agent.")
-        if (agent !in vm.enabledAgents.value) {
-            throw JarvisSetupException("${agentLabel()} is turned off in the app. Turn it on in Settings, Agents, or pick another agent for me in Settings, Jarvis, Agent.")
+            ?: (if (attached) vm.currentConversation.value?.agent ?: vm.enabledAgents.value.firstOrNull() else null)
+            ?: AgentKind.AGY
+        var chatId = JarvisPreferences.currentChatId.value
+        if (chatId.isBlank() && attached && vm.currentConversation.value != null) {
+            val screenId = vm.currentConversation.value?.id.orEmpty()
+            if (screenId.isNotBlank()) {
+                chatId = screenId
+                JarvisPreferences.currentChatId.set(chatId)
+                JarvisPreferences.addChatId(chatId)
+            }
         }
-        val chatId = JarvisPreferences.currentChatId.value
         val freshChat = chatId.isBlank() || JarvisPreferences.currentChatAgent.value != agent.name
         // the full guide goes into the first message of a chat (again when the guide changed with an app update)
         val needsBoot = freshChat || JarvisPreferences.bootSentFor.value != "$chatId|${JarvisSkill.version}"
@@ -1574,6 +1584,14 @@ object JarvisController {
         JarvisPreferences.profileSentFor.set("${JarvisPreferences.currentChatId.value}|${JarvisSkill.profileHash()}")
         JarvisPreferences.currentChatMessages.set(JarvisPreferences.currentChatMessages.value + 1)
         touch()
+        if (attached) {
+            val activeId = JarvisPreferences.currentChatId.value
+            if (activeId.isNotBlank() && vm.currentConversation.value?.id != activeId) {
+                scope.launch(Dispatchers.Main) {
+                    vm.selectConversation(activeId)
+                }
+            }
+        }
         // Claude reports a missing chat as an error of the chat, a moment after sending
         if (agent == AgentKind.CLAUDE && existingId.isNotBlank() && !retried) {
             scope.launch {

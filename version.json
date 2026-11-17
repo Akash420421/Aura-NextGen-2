@@ -1,16 +1,15 @@
 {
-  "version_code": 230,
-  "version_name": "2.3.0",
+  "version_code": 231,
+  "version_name": "2.3.1",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.0 — Live Duplex Voice Engine Upgrade (Powered by Part 7 Architecture)",
-    "Sub-Second Live Voice Response: Zero thinking latency with thinking_budget 0 and low-latency PCM streaming",
-    "Hardware Echo & Noise Cancellation: Integrated AcousticEchoCanceler, AutomaticGainControl, and NoiseSuppressor",
-    "Acoustic Echo Decay Protection (AEDP): Prevents echo-triggered self-interruption and false listening loops",
-    "Live Screen Share Vision: 1 FPS continuous visual stream to Gemini Live with on-demand AI screen share trigger",
-    "Hands-Free WhatsApp & Phone Calls: Verified contact lookup, Indian phone format normalization, and accessibility send automation",
-    "Instant YouTube Playback: Clean query resolution and immediate video play via deep links",
-    "Real-Time Chat Transcripts: Voice conversations and executed tool actions automatically saved into chat history"
+    "Aura AI v2.3.1 — Unified Inbuilt Voice Engine & Gemini Audio Fix",
+    "Connected Inbuilt Voice directly with Visible Real-Time Chat & Agent Actions",
+    "Fixed HTTP 401 OAuth2 error by routing Google AI Studio keys directly to Gemini Audio API",
+    "Added 100% Free High-Quality Microsoft Edge Natural Neural Voices (No API key needed)",
+    "Disabled floating draggable bubble by default to prevent screen obstruction",
+    "Hands-Free Continuous Voice Call Loop with Auto-Send & Auto-Listen",
+    "Integrated Central Orb and Dynamic Bottom Pill button for seamless voice control"
   ],
   "is_critical": false
 }

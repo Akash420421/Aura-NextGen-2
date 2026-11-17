@@ -483,7 +483,16 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                     val quiet by P.quietMode.state.collectAsState()
                     JSwitch("Quiet mode", "Jarvis shows its answers on the card instead of saying them (meetings, night). Also in quick settings (tune icon).", quiet) { P.quietMode.set(it) }
                     val engine by P.ttsEngine.state.collectAsState()
-                    JChips(listOf("android" to "This device", "google_cloud" to "Google Cloud", "openai" to "OpenAI-compatible"), engine) { P.ttsEngine.set(it) }
+                    JChips(
+                        listOf(
+                            "gemini" to "Google Gemini",
+                            "edge" to "Free Natural Voice",
+                            "android" to "This device",
+                            "google_cloud" to "Google Cloud",
+                            "openai" to "OpenAI-compatible"
+                        ),
+                        engine
+                    ) { P.ttsEngine.set(it) }
                     val voice by P.ttsVoice.state.collectAsState()
                     val language by P.ttsLanguage.state.collectAsState()
                     if (engine == "android") {
@@ -500,12 +509,25 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                             }
                         }
                         JField("Language (optional, e.g. en-US)", language) { P.ttsLanguage.set(it) }
+                    } else if (engine == "edge") {
+                        JHint("100% Free natural studio voice (Hindi Swara & English Jenny). No API key needed!")
+                        JField("Language code (default hi-IN or en-US)", language) { P.ttsLanguage.set(it) }
+                    } else if (engine == "gemini") {
+                        val key by P.ttsApiKey.state.collectAsState()
+                        JField("Gemini API key (AI Studio)", key, secret = true) { P.ttsApiKey.set(it) }
+                        JHint("Works directly with your free Google AI Studio key (AIzaSy...). No OAuth2 needed!")
+                        Text("Voice", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        JChips(
+                            listOf("Puck" to "Puck", "Aoede" to "Aoede", "Charon" to "Charon", "Fenrir" to "Fenrir", "Kore" to "Kore", "Leda" to "Leda"),
+                            voice.ifBlank { "Puck" }
+                        ) { P.ttsVoice.set(it) }
                     } else {
                         val key by P.ttsApiKey.state.collectAsState()
                         JField("API key", key, secret = true) { P.ttsApiKey.set(it) }
                         if (engine == "google_cloud") {
                             JField("Voice name (e.g. en-US-Neural2-F)", voice) { P.ttsVoice.set(it) }
                             JField("Language code (e.g. en-US)", language) { P.ttsLanguage.set(it) }
+                            JHint("Note: If using a Google AI Studio key (AIzaSy...), Aura AI automatically routes to Gemini Speech to prevent HTTP 401 errors.")
                         } else {
                             val base by P.ttsBaseUrl.state.collectAsState()
                             val model by P.ttsModel.state.collectAsState()
@@ -623,6 +645,8 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                     Text("Keep the screen on", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     JChips(listOf("always" to "While Jarvis is on", "active" to "While it's active", "off" to "Never"), screenOn) { P.keepScreenOn.set(it) }
                     JHint("“While it's active”: while Jarvis listens, works or speaks, or a task runs. Running chats of both agents keep the screen on anyway.")
+                    val floatingEnabled by P.floatingOrbEnabled.state.collectAsState()
+                    JSwitch("Show floating draggable bubble", "Display the draggable bubble overlay across the screen. Turn off to keep the UI clean and use the in-app Voice screen instead.", floatingEnabled) { P.floatingOrbEnabled.set(it) }
                     val size by P.orbSize.state.collectAsState()
                     Text("Orb while idle", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     JChips(listOf("tiny" to "Tiny", "small" to "Small", "normal" to "Normal", "hidden" to "Hidden"), size) { P.orbSize.set(it) }

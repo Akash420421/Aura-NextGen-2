@@ -29,9 +29,15 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.math.abs
@@ -289,14 +295,40 @@ object JarvisVoice {
     // ---- online voices
 
     private suspend fun playOnline(engine: String, text: String): Boolean {
-        val key = JarvisPreferences.ttsApiKey.value.trim()
-        if (key.isBlank()) {
-            _lastError.value = "No API key set for the online voice; using the device voice."
-            return false
+        val key = JarvisPreferences.ttsApiKey.value.trim().ifBlank {
+            JarvisPreferences.liveApiKey.value.trim()
         }
+
         return try {
             val bytes = withContext(Dispatchers.IO) {
-                if (engine == "google_cloud") googleCloud(text, key) else openAiSpeech(text, key)
+                when {
+                    engine == "edge" -> edgeSpeech(text)
+                    engine == "gemini" -> {
+                        if (key.isNotBlank()) geminiSpeech(text, key) ?: edgeSpeech(text)
+                        else edgeSpeech(text)
+                    }
+                    engine == "google_cloud" -> {
+                        // If user entered a Google AI Studio Gemini API key (AIzaSy...), use Gemini Speech!
+                        if (key.startsWith("AIzaSy")) {
+                            geminiSpeech(text, key) ?: edgeSpeech(text)
+                        } else {
+                            try {
+                                googleCloud(text, key)
+                            } catch (e: Exception) {
+                                val msg = e.message.orEmpty()
+                                if (msg.contains("401") || msg.contains("API keys are not supported")) {
+                                    // Fallback seamlessly to Gemini Speech with the same key
+                                    geminiSpeech(text, key) ?: edgeSpeech(text)
+                                } else throw e
+                            }
+                        }
+                    }
+                    engine == "openai" -> openAiSpeech(text, key)
+                    else -> {
+                        if (key.isNotBlank()) geminiSpeech(text, key) ?: edgeSpeech(text)
+                        else edgeSpeech(text)
+                    }
+                }
             }
             if (bytes == null || bytes.isEmpty()) return false
             _lastError.value = null
@@ -309,6 +341,181 @@ object JarvisVoice {
             _lastError.value = "Online voice failed (${e.message}); used the device voice."
             false
         }
+    }
+
+    private fun geminiSpeech(text: String, key: String): ByteArray? {
+        val voiceName = JarvisPreferences.liveVoice.value.ifBlank {
+            JarvisPreferences.ttsVoice.value.ifBlank { "Puck" }
+        }
+        val cleanVoice = when (voiceName.lowercase()) {
+            "puck" -> "Puck"
+            "aoede" -> "Aoede"
+            "charon" -> "Charon"
+            "fenrir" -> "Fenrir"
+            "kore" -> "Kore"
+            "leda" -> "Leda"
+            else -> "Puck"
+        }
+        val body = JSONObject().apply {
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().apply {
+                    put("text", "Read this aloud clearly, naturally and expressively:\n\n$text")
+                }))
+            }))
+            put("generationConfig", JSONObject().apply {
+                put("responseModalities", JSONArray().put("AUDIO"))
+                put("speechConfig", JSONObject().apply {
+                    put("voiceConfig", JSONObject().apply {
+                        put("prebuiltVoiceConfig", JSONObject().apply {
+                            put("voiceName", cleanVoice)
+                        })
+                    })
+                })
+            })
+        }.toString()
+
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$key"
+        val req = Request.Builder()
+            .url(url)
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        http.newCall(req).execute().use { resp ->
+            val s = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val errMsg = JSONObject(s.ifBlank { "{}" }).optJSONObject("error")?.optString("message").orEmpty()
+                error("Gemini Speech HTTP ${resp.code} $errMsg")
+            }
+            val json = JSONObject(s)
+            val candidates = json.optJSONArray("candidates") ?: return null
+            if (candidates.length() == 0) return null
+            val parts = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts") ?: return null
+            for (i in 0 until parts.length()) {
+                val part = parts.getJSONObject(i)
+                val inlineData = part.optJSONObject("inlineData")
+                if (inlineData != null) {
+                    val dataBase64 = inlineData.optString("data")
+                    val mimeType = inlineData.optString("mimeType")
+                    if (dataBase64.isNotBlank()) {
+                        val rawAudio = Base64.decode(dataBase64, Base64.DEFAULT)
+                        return if (mimeType.contains("wav", ignoreCase = true) ||
+                            (rawAudio.size > 4 && rawAudio[0] == 'R'.code.toByte() && rawAudio[1] == 'I'.code.toByte())) {
+                            rawAudio
+                        } else {
+                            wrapPcmToWav(rawAudio, 24000, 1)
+                        }
+                    }
+                }
+            }
+            return null
+        }
+    }
+
+    private fun wrapPcmToWav(pcmData: ByteArray, sampleRate: Int, channels: Int): ByteArray {
+        val totalAudioLen = pcmData.size.toLong()
+        val totalDataLen = totalAudioLen + 36
+        val byteRate = (sampleRate * channels * 2).toLong()
+        val header = ByteArray(44)
+        header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
+        header[4] = (totalDataLen and 0xff).toByte()
+        header[5] = ((totalDataLen shr 8) and 0xff).toByte()
+        header[6] = ((totalDataLen shr 16) and 0xff).toByte()
+        header[7] = ((totalDataLen shr 24) and 0xff).toByte()
+        header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
+        header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
+        header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
+        header[20] = 1; header[21] = 0
+        header[22] = channels.toByte(); header[23] = 0
+        header[24] = (sampleRate and 0xff).toByte()
+        header[25] = ((sampleRate shr 8) and 0xff).toByte()
+        header[26] = ((sampleRate shr 16) and 0xff).toByte()
+        header[27] = ((sampleRate shr 24) and 0xff).toByte()
+        header[28] = (byteRate and 0xff).toByte()
+        header[29] = ((byteRate shr 8) and 0xff).toByte()
+        header[30] = ((byteRate shr 16) and 0xff).toByte()
+        header[31] = ((byteRate shr 24) and 0xff).toByte()
+        header[32] = (channels * 2).toByte(); header[33] = 0
+        header[34] = 16; header[35] = 0
+        header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
+        header[40] = (totalAudioLen and 0xff).toByte()
+        header[41] = ((totalAudioLen shr 8) and 0xff).toByte()
+        header[42] = ((totalAudioLen shr 16) and 0xff).toByte()
+        header[43] = ((totalAudioLen shr 24) and 0xff).toByte()
+        return header + pcmData
+    }
+
+    private fun edgeSpeech(text: String): ByteArray? {
+        val lang = JarvisPreferences.ttsLanguage.value.ifBlank { "hi-IN" }
+        val isHindi = lang.startsWith("hi", ignoreCase = true) || text.any { it.code in 0x0900..0x097F }
+        val voice = if (isHindi) "hi-IN-SwaraNeural" else "en-US-JennyNeural"
+        val rate = JarvisPreferences.ttsRate.value
+        val ratePercent = "${((rate - 1f) * 100).toInt():+d}%"
+        val pitchPercent = "${((JarvisPreferences.ttsPitch.value - 1f) * 50).toInt():+d}Hz"
+        val escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+        val ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='$lang'><voice name='$voice'><prosody pitch='$pitchPercent' rate='$ratePercent'>$escaped</prosody></voice></speak>"
+        val reqId = UUID.randomUUID().toString().replace("-", "")
+
+        val url = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+        val req = Request.Builder()
+            .url(url)
+            .header("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold")
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0")
+            .build()
+
+        val output = ByteArrayOutputStream()
+        val done = CompletableDeferred<Boolean>()
+
+        val ws = http.newWebSocket(req, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
+                val cfg = "Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"},\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}"
+                webSocket.send(cfg)
+                val msg = "X-RequestId:$reqId\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n$ssml"
+                webSocket.send(msg)
+            }
+
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                val data = bytes.toByteArray()
+                if (data.size > 2) {
+                    val headerLen = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
+                    val audioStart = 2 + headerLen
+                    if (data.size > audioStart) {
+                        synchronized(output) {
+                            output.write(data, audioStart, data.size - audioStart)
+                        }
+                    }
+                }
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                if (text.contains("Path:turn.end")) {
+                    webSocket.close(1000, null)
+                    done.complete(true)
+                }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
+                done.complete(false)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                done.complete(true)
+            }
+        })
+
+        try {
+            val success = kotlinx.coroutines.runBlocking {
+                withTimeoutOrNull(12000L) { done.await() } ?: false
+            }
+            if (success) {
+                val bytes = synchronized(output) { output.toByteArray() }
+                if (bytes.isNotEmpty()) return bytes
+            }
+        } catch (_: Exception) {
+        } finally {
+            try { ws.close(1000, null) } catch (_: Exception) {}
+        }
+        return null
     }
 
     private fun googleCloud(text: String, key: String): ByteArray? {
