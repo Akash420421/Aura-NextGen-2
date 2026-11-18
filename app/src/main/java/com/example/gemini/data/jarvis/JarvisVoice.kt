@@ -295,7 +295,8 @@ object JarvisVoice {
     // ---- online voices
 
     private suspend fun playOnline(engine: String, text: String): Boolean {
-        val key = JarvisPreferences.ttsApiKey.value.trim().ifBlank {
+        // Each engine reads its own dedicated key so switching engines never sends the wrong credential.
+        val genericKey = JarvisPreferences.ttsApiKey.value.trim().ifBlank {
             JarvisPreferences.liveApiKey.value.trim()
         }
 
@@ -303,14 +304,16 @@ object JarvisVoice {
             val bytes = withContext(Dispatchers.IO) {
                 when {
                     engine == "deepgram" -> {
-                        val k = key.ifBlank { "bffb3813de6410a2f0970e12b42a6dc5c221026b" }
+                        val k = JarvisPreferences.deepgramApiKey.value.trim()
+                            .ifBlank { "bffb3813de6410a2f0970e12b42a6dc5c221026b" }
                         deepgramSpeech(text, k)
                     }
                     engine == "gemini" -> {
-                        if (key.isNotBlank()) geminiSpeech(text, key) else null
+                        val k = genericKey.ifBlank { JarvisPreferences.liveApiKey.value.trim() }
+                        if (k.isNotBlank()) geminiSpeech(text, k) else null
                     }
                     engine == "google_cloud" -> {
-                        // If user entered a Google AI Studio Gemini API key (AIzaSy...), use Gemini Speech!
+                        val key = genericKey
                         if (key.startsWith("AIzaSy")) {
                             geminiSpeech(text, key)
                         } else {
@@ -324,9 +327,11 @@ object JarvisVoice {
                             }
                         }
                     }
-                    engine == "openai" -> openAiSpeech(text, key)
+                    engine == "openai" -> openAiSpeech(text, genericKey)
                     else -> {
-                        val k = key.ifBlank { "bffb3813de6410a2f0970e12b42a6dc5c221026b" }
+                        // Default fallback: try Deepgram with its own key
+                        val k = JarvisPreferences.deepgramApiKey.value.trim()
+                            .ifBlank { "bffb3813de6410a2f0970e12b42a6dc5c221026b" }
                         deepgramSpeech(text, k)
                     }
                 }
@@ -400,7 +405,7 @@ object JarvisVoice {
         }.toString()
 
         val preferredModel = JarvisPreferences.ttsModel.value.ifBlank { "gemini-3.8-flash" }
-        val candidateModels = listOf(preferredModel, "gemini-2.5-flash", "gemini-1.5-flash").distinct()
+        val candidateModels = listOf(preferredModel, "gemini-2.5-flash").distinct()
 
         var lastErr = ""
         for (model in candidateModels) {

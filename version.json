@@ -1,12 +1,13 @@
 {
-  "version_code": 234,
-  "version_name": "2.3.4",
+  "version_code": 235,
+  "version_name": "2.3.5",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.4 — Deepgram Aura Voice Playback & Settings Status Fix",
-    "Fixed voice playback dispatch in JarvisVoice to route Deepgram Aura and Gemini to online speech instead of device fallback",
-    "Fixed settings overview row to correctly display 'Deepgram Aura' when selected",
-    "Enabled immediate human studio voice on Test Voice and chat replies"
+    "Aura AI v2.3.5 — Separate Deepgram & Gemini API Keys",
+    "Deepgram now has its own dedicated API key field — switching engines no longer overwrites keys",
+    "Pre-configured Deepgram key works immediately without manual entry",
+    "Removed deprecated gemini-1.5-flash model from Gemini Speech fallback chain",
+    "Gemini Speech now tries gemini-3.8-flash then gemini-2.5-flash only"
   ],
   "is_critical": false
 }

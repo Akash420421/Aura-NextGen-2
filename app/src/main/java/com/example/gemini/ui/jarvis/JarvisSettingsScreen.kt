@@ -512,8 +512,8 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                         }
                         JField("Language (optional, e.g. en-US)", language) { P.ttsLanguage.set(it) }
                     } else if (engine == "deepgram") {
-                        val key by P.ttsApiKey.state.collectAsState()
-                        JField("Deepgram API key", key, secret = true) { P.ttsApiKey.set(it) }
+                        val dgKey by P.deepgramApiKey.state.collectAsState()
+                        JField("Deepgram API key", dgKey, secret = true) { P.deepgramApiKey.set(it) }
                         JHint("Ultra-fast human studio voice powered by Deepgram Aura (\$200 free trial active).")
                         Text("Voice", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         JChips(

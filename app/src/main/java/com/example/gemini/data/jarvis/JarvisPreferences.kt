@@ -85,7 +85,9 @@ object JarvisPreferences {
     val ttsLanguage = pref("tts_language", "")
     val ttsRate = pref("tts_rate", 1.0f)
     val ttsPitch = pref("tts_pitch", 1.0f)
-    val ttsApiKey = pref("tts_api_key", "bffb3813de6410a2f0970e12b42a6dc5c221026b")
+    val ttsApiKey = pref("tts_api_key", "")
+    /** Dedicated Deepgram API key so it never gets overwritten when switching engines. */
+    val deepgramApiKey = pref("deepgram_api_key", "bffb3813de6410a2f0970e12b42a6dc5c221026b")
     val ttsBaseUrl = pref("tts_base_url", "")
     val ttsModel = pref("tts_model", "")
     /** Floating draggable orb overlay inside the app (disabled by default to prevent screen obstruction). */
