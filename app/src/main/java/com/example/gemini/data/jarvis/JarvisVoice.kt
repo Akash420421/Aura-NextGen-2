@@ -175,7 +175,7 @@ object JarvisVoice {
         for (chunk in chunks(text)) {
             val engine = JarvisPreferences.ttsEngine.value
             val ok = when (engine) {
-                "google_cloud", "openai" -> playOnline(engine, chunk)
+                "deepgram", "gemini", "google_cloud", "openai" -> playOnline(engine, chunk)
                 else -> false
             }
             if (!ok) speakAndroid(chunk)

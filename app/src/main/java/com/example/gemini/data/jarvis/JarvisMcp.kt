@@ -1423,7 +1423,7 @@ object JarvisMcp {
             bool("jarvis_quiet_mode", "Show answers instead of speaking them", true, { P.quietMode.value }, { P.quietMode.set(it) }),
             num("jarvis_voice_speed", "Speaking speed", true, 0.5f..2f, { P.ttsRate.value }, { P.ttsRate.set(it) }),
             num("jarvis_voice_pitch", "Voice pitch", true, 0.5f..2f, { P.ttsPitch.value }, { P.ttsPitch.set(it) }),
-            choice("jarvis_voice_engine", "Voice: device, Google Cloud or OpenAI-compatible (online ones need a key in settings)", true, listOf("android", "google_cloud", "openai"), { P.ttsEngine.value }, { P.ttsEngine.set(it) }),
+            choice("jarvis_voice_engine", "Voice: Deepgram Aura, Google Gemini, device, Google Cloud or OpenAI-compatible", true, listOf("deepgram", "gemini", "android", "google_cloud", "openai"), { P.ttsEngine.value }, { P.ttsEngine.set(it) }),
             bool("jarvis_speak_progress", "Say short progress lines during long work", true, { P.speakProgress.value }, { P.speakProgress.set(it) }),
             bool("jarvis_auto_send", "Send by itself when the user pauses (off: only a send phrase, Send or the headset button sends)", true, { P.autoSend.value }, { P.autoSend.set(it) }),
             choice("jarvis_auto_send_style", "With auto send: smart pause (longer when unfinished) or a fixed pause", true, listOf("smart", "pause"), { if (P.sendMode.value == "pause") "pause" else "smart" }, { P.sendMode.set(it) }),

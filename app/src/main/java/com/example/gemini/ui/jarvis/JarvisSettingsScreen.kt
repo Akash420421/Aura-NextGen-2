@@ -124,6 +124,8 @@ fun JarvisSettingsScreen(cardBg: Color, cardBorder: BorderStroke, onOpen: (Jarvi
                 row(JarvisSettingsPage.LISTEN, I.Mic, c.accentIndigo, "Listening & sending", if (autoSend) "Auto-send" else "Manual send"),
                 row(JarvisSettingsPage.VOICE, I.RecordVoiceOver, c.accentAlt, "Voice output", when {
                     quiet -> "Quiet"
+                    engine == "deepgram" -> "Deepgram Aura"
+                    engine == "gemini" -> "Google Gemini"
                     engine == "google_cloud" -> "Google Cloud"
                     engine == "openai" -> "OpenAI"
                     else -> "This device"

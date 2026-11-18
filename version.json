@@ -1,13 +1,12 @@
 {
-  "version_code": 233,
-  "version_name": "2.3.3",
+  "version_code": 234,
+  "version_name": "2.3.4",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.3 — Deepgram Aura Human Voice Integration ($200 Free Trial)",
-    "Integrated ultra-realistic, low-latency Deepgram Aura TTS as the default voice engine",
-    "Configured with Asteria (Warm Female), Luna (Bright Female), Orion (Approachable Male), Arcas, and Athena",
-    "Pre-configured and validated Deepgram API key with instant sub-second audio generation",
-    "Maintained cute floating robot badge and mission popup dialog"
+    "Aura AI v2.3.4 — Deepgram Aura Voice Playback & Settings Status Fix",
+    "Fixed voice playback dispatch in JarvisVoice to route Deepgram Aura and Gemini to online speech instead of device fallback",
+    "Fixed settings overview row to correctly display 'Deepgram Aura' when selected",
+    "Enabled immediate human studio voice on Test Voice and chat replies"
   ],
   "is_critical": false
 }
