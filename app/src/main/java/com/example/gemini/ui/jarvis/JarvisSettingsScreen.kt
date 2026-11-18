@@ -529,13 +529,84 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                         ) { P.ttsVoice.set(it) }
                     } else if (engine == "gemini") {
                         val key by P.ttsApiKey.state.collectAsState()
-                        JField("Gemini API key (AI Studio)", key, secret = true) { P.ttsApiKey.set(it) }
-                        JHint("Uses Google AI Studio Gemini API (gemini-3.8-flash) directly with your free key (AIzaSy...).")
+                        val liveKey by P.liveApiKey.state.collectAsState()
+                        val effectiveKey = key.ifBlank { liveKey }
+                        JField("Gemini API key (AI Studio)", effectiveKey, secret = true) {
+                            P.ttsApiKey.set(it)
+                            P.liveApiKey.set(it)
+                        }
+                        JHint("Uses Google AI Studio Gemini Live API (gemini-3.8-live / 3.1-flash) with your free key (AIzaSy...).")
+
+                        Spacer(Modifier.height(6.dp))
+                        Text("Live / Voice Model", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        val selectedModel by P.liveModel.state.collectAsState()
+
+                        var detectedModels by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+                        var isDetecting by remember { mutableStateOf(false) }
+                        var detectStatus by remember { mutableStateOf<String?>(null) }
+
+                        val baseModels = listOf(
+                            "models/gemini-3.8-live" to "Gemini 3.8 Live",
+                            "models/gemini-3.1-flash-live-preview" to "Gemini 3.1 Flash",
+                            "models/gemini-3.1-flash-agent" to "Gemini 3.1 Flash Agent"
+                        )
+                        val availableModels = (baseModels + detectedModels).distinctBy { it.first }
+
+                        JChips(
+                            availableModels,
+                            selectedModel.ifBlank { "models/gemini-3.8-live" }
+                        ) {
+                            P.liveModel.set(it)
+                            P.ttsModel.set(it)
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    val k = effectiveKey.trim()
+                                    if (k.isBlank()) {
+                                        detectStatus = "Enter an API key first"
+                                        return@OutlinedButton
+                                    }
+                                    isDetecting = true
+                                    detectStatus = "Querying API..."
+                                    scope.launch {
+                                        val list = JarvisVoice.detectGeminiModels(k)
+                                        if (list.isNotEmpty()) {
+                                            detectedModels = list
+                                            detectStatus = "Found ${list.size} active models"
+                                        } else {
+                                            detectStatus = "Check key or network"
+                                        }
+                                        isDetecting = false
+                                    }
+                                },
+                                enabled = !isDetecting
+                            ) {
+                                Text(if (isDetecting) "Detecting..." else "Auto-Detect Models", fontSize = 12.sp)
+                            }
+                            detectStatus?.let {
+                                Text(
+                                    it,
+                                    fontSize = 11.sp,
+                                    color = if (it.startsWith("Found")) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
                         Text("Voice", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         JChips(
                             listOf("Puck" to "Puck", "Aoede" to "Aoede", "Charon" to "Charon", "Fenrir" to "Fenrir", "Kore" to "Kore", "Leda" to "Leda"),
                             voice.ifBlank { "Puck" }
-                        ) { P.ttsVoice.set(it) }
+                        ) {
+                            P.ttsVoice.set(it)
+                            P.liveVoice.set(it)
+                        }
                     } else {
                         val key by P.ttsApiKey.state.collectAsState()
                         JField("API key", key, secret = true) { P.ttsApiKey.set(it) }

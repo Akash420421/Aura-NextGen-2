@@ -304,8 +304,12 @@ object JarvisVoice {
             val bytes = withContext(Dispatchers.IO) {
                 when {
                     engine == "deepgram" -> {
-                        val k = JarvisPreferences.deepgramApiKey.value.trim()
-                            .ifBlank { "bffb3813de6410a2f0970e12b42a6dc5c221026b" }
+                        val rawK = JarvisPreferences.deepgramApiKey.value.trim()
+                        val k = if (rawK.startsWith("AIzaSy") || rawK.length < 35) {
+                            "bffb3813de6410a2f0970e12b42a6dc5c221026b"
+                        } else {
+                            rawK
+                        }
                         deepgramSpeech(text, k)
                     }
                     engine == "gemini" -> {
@@ -330,8 +334,12 @@ object JarvisVoice {
                     engine == "openai" -> openAiSpeech(text, genericKey)
                     else -> {
                         // Default fallback: try Deepgram with its own key
-                        val k = JarvisPreferences.deepgramApiKey.value.trim()
-                            .ifBlank { "bffb3813de6410a2f0970e12b42a6dc5c221026b" }
+                        val rawK = JarvisPreferences.deepgramApiKey.value.trim()
+                        val k = if (rawK.startsWith("AIzaSy") || rawK.length < 35) {
+                            "bffb3813de6410a2f0970e12b42a6dc5c221026b"
+                        } else {
+                            rawK
+                        }
                         deepgramSpeech(text, k)
                     }
                 }
@@ -373,7 +381,7 @@ object JarvisVoice {
         }
     }
 
-    private fun geminiSpeech(text: String, key: String): ByteArray? {
+    private suspend fun geminiSpeech(text: String, key: String): ByteArray? = withContext(Dispatchers.IO) {
         val voiceName = JarvisPreferences.liveVoice.value.ifBlank {
             JarvisPreferences.ttsVoice.value.ifBlank { "Puck" }
         }
@@ -386,73 +394,141 @@ object JarvisVoice {
             "leda" -> "Leda"
             else -> "Puck"
         }
-        val body = JSONObject().apply {
-            put("contents", JSONArray().put(JSONObject().apply {
-                put("parts", JSONArray().put(JSONObject().apply {
-                    put("text", "Read this aloud clearly, naturally and expressively:\n\n$text")
-                }))
-            }))
-            put("generationConfig", JSONObject().apply {
-                put("responseModalities", JSONArray().put("AUDIO"))
-                put("speechConfig", JSONObject().apply {
-                    put("voiceConfig", JSONObject().apply {
-                        put("prebuiltVoiceConfig", JSONObject().apply {
-                            put("voiceName", cleanVoice)
+        val rawModel = JarvisPreferences.liveModel.value.ifBlank {
+            JarvisPreferences.ttsModel.value.ifBlank { "models/gemini-3.8-live" }
+        }
+        val cleanModel = if (rawModel.startsWith("models/")) rawModel else "models/$rawModel"
+
+        val pcmOut = ByteArrayOutputStream()
+        val deferred = CompletableDeferred<ByteArray?>()
+
+        val wsUrl = "${com.example.gemini.data.live.GeminiConstants.WS_BASE_URL}?key=$key"
+        val req = Request.Builder().url(wsUrl).build()
+
+        var ws: WebSocket? = null
+        val listener = object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
+                // 1. Send BidiSetup
+                val setup = JSONObject().apply {
+                    put("setup", JSONObject().apply {
+                        put("model", cleanModel)
+                        put("generationConfig", JSONObject().apply {
+                            put("responseModalities", JSONArray().put("AUDIO"))
+                            put("speechConfig", JSONObject().apply {
+                                put("voiceConfig", JSONObject().apply {
+                                    put("prebuiltVoiceConfig", JSONObject().apply {
+                                        put("voiceName", cleanVoice)
+                                    })
+                                })
+                            })
                         })
                     })
-                })
-            })
-        }.toString()
+                }
+                webSocket.send(setup.toString())
 
-        val preferredModel = JarvisPreferences.ttsModel.value.ifBlank { "gemini-3.8-flash" }
-        val candidateModels = listOf(preferredModel, "gemini-2.5-flash").distinct()
+                // 2. Send client text to be read out loud
+                val content = JSONObject().apply {
+                    put("clientContent", JSONObject().apply {
+                        put("turns", JSONArray().put(JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().put(JSONObject().apply {
+                                put("text", "Read this aloud clearly, naturally and expressively:\n\n$text")
+                            }))
+                        }))
+                        put("turnComplete", true)
+                    })
+                }
+                webSocket.send(content.toString())
+            }
 
-        var lastErr = ""
-        for (model in candidateModels) {
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key"
-            val req = Request.Builder()
-                .url(url)
-                .post(body.toRequestBody("application/json".toMediaType()))
-                .build()
-
-            try {
-                http.newCall(req).execute().use { resp ->
-                    val s = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        val errMsg = JSONObject(s.ifBlank { "{}" }).optJSONObject("error")?.optString("message").orEmpty()
-                        lastErr = "Gemini Speech HTTP ${resp.code} ($model): $errMsg"
-                        return@use
-                    }
-                    val json = JSONObject(s)
-                    val candidates = json.optJSONArray("candidates") ?: return@use
-                    if (candidates.length() == 0) return@use
-                    val parts = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts") ?: return@use
-                    for (i in 0 until parts.length()) {
-                        val part = parts.getJSONObject(i)
-                        val inlineData = part.optJSONObject("inlineData")
-                        if (inlineData != null) {
-                            val dataBase64 = inlineData.optString("data")
-                            val mimeType = inlineData.optString("mimeType")
-                            if (dataBase64.isNotBlank()) {
-                                val rawAudio = Base64.decode(dataBase64, Base64.DEFAULT)
-                                return if (mimeType.contains("wav", ignoreCase = true) ||
-                                    (rawAudio.size > 4 && rawAudio[0] == 'R'.code.toByte() && rawAudio[1] == 'I'.code.toByte())) {
-                                    rawAudio
-                                } else {
-                                    wrapPcmToWav(rawAudio, 24000, 1)
+            override fun onMessage(webSocket: WebSocket, textMsg: String) {
+                try {
+                    val root = JSONObject(textMsg)
+                    val serverContent = root.optJSONObject("serverContent")
+                    if (serverContent != null) {
+                        val modelTurn = serverContent.optJSONObject("modelTurn")
+                        val parts = modelTurn?.optJSONArray("parts")
+                        if (parts != null) {
+                            for (i in 0 until parts.length()) {
+                                val inlineData = parts.getJSONObject(i).optJSONObject("inlineData")
+                                val base64Data = inlineData?.optString("data")
+                                if (!base64Data.isNullOrBlank()) {
+                                    val bytes = Base64.decode(base64Data, Base64.DEFAULT)
+                                    synchronized(pcmOut) { pcmOut.write(bytes) }
                                 }
                             }
                         }
+                        if (serverContent.optBoolean("turnComplete", false)) {
+                            webSocket.close(1000, "Done")
+                            val raw = synchronized(pcmOut) { pcmOut.toByteArray() }
+                            deferred.complete(if (raw.isNotEmpty()) wrapPcmToWav(raw, 24000, 1) else null)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error in Gemini Live audio parsing: ${e.message}")
+                }
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
+                Log.w(TAG, "Gemini Live speech WS failure: ${t.message}")
+                if (!deferred.isCompleted) {
+                    val raw = synchronized(pcmOut) { pcmOut.toByteArray() }
+                    if (raw.isNotEmpty()) {
+                        deferred.complete(wrapPcmToWav(raw, 24000, 1))
+                    } else {
+                        deferred.completeExceptionally(Exception("Gemini Live speech failed: ${t.message}"))
                     }
                 }
-            } catch (e: Exception) {
-                lastErr = e.message.orEmpty()
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (!deferred.isCompleted) {
+                    val raw = synchronized(pcmOut) { pcmOut.toByteArray() }
+                    deferred.complete(if (raw.isNotEmpty()) wrapPcmToWav(raw, 24000, 1) else null)
+                }
             }
         }
-        if (lastErr.isNotBlank()) {
-            error(lastErr)
+
+        ws = http.newWebSocket(req, listener)
+
+        try {
+            withTimeoutOrNull(9000) {
+                deferred.await()
+            } ?: run {
+                ws?.cancel()
+                val raw = synchronized(pcmOut) { pcmOut.toByteArray() }
+                if (raw.isNotEmpty()) wrapPcmToWav(raw, 24000, 1) else throw Exception("Gemini Live speech timed out")
+            }
+        } catch (e: Exception) {
+            ws?.cancel()
+            throw e
         }
-        return null
+    }
+
+    suspend fun detectGeminiModels(key: String): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+        if (key.isBlank()) return@withContext emptyList()
+        try {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$key"
+            val req = Request.Builder().url(url).build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val json = JSONObject(resp.body?.string().orEmpty())
+                val arr = json.optJSONArray("models") ?: return@withContext emptyList()
+                val result = mutableListOf<Pair<String, String>>()
+                for (i in 0 until arr.length()) {
+                    val m = arr.getJSONObject(i)
+                    val name = m.optString("name")
+                    val disp = m.optString("displayName").ifBlank { name.removePrefix("models/") }
+                    if (name.contains("live", ignoreCase = true) || name.contains("flash", ignoreCase = true) || name.contains("gemini", ignoreCase = true)) {
+                        result += name to disp
+                    }
+                }
+                result
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to detect models: ${e.message}")
+            emptyList()
+        }
     }
 
     private fun wrapPcmToWav(pcmData: ByteArray, sampleRate: Int, channels: Int): ByteArray {

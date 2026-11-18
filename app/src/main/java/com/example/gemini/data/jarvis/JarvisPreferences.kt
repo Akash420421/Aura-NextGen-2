@@ -89,7 +89,7 @@ object JarvisPreferences {
     /** Dedicated Deepgram API key so it never gets overwritten when switching engines. */
     val deepgramApiKey = pref("deepgram_api_key", "bffb3813de6410a2f0970e12b42a6dc5c221026b")
     val ttsBaseUrl = pref("tts_base_url", "")
-    val ttsModel = pref("tts_model", "")
+    val ttsModel = pref("tts_model", "models/gemini-3.8-live")
     /** Floating draggable orb overlay inside the app (disabled by default to prevent screen obstruction). */
     val floatingOrbEnabled = pref("floating_orb_enabled", false)
     /** Jarvis says short progress updates while it works. */
@@ -257,6 +257,16 @@ object JarvisPreferences {
         sp = p
         all.forEach { it.load(p) }
         _chatIds.value = p.getStringSet("chat_ids", emptySet())?.toSet().orEmpty()
+        // Automatic migration & cleanup for active reliable models and valid keys
+        if (deepgramApiKey.value.startsWith("AIzaSy") || deepgramApiKey.value.isBlank()) {
+            deepgramApiKey.set("bffb3813de6410a2f0970e12b42a6dc5c221026b")
+        }
+        if (ttsModel.value.contains("1.5") || ttsModel.value.isBlank()) {
+            ttsModel.set("models/gemini-3.8-live")
+        }
+        if (liveModel.value.contains("1.5") || liveModel.value.isBlank()) {
+            liveModel.set("models/gemini-3.8-live")
+        }
     }
 
     @Synchronized

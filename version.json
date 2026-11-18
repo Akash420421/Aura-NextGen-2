@@ -1,13 +1,13 @@
 {
-  "version_code": 235,
-  "version_name": "2.3.5",
+  "version_code": 236,
+  "version_name": "2.3.6",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.5 — Separate Deepgram & Gemini API Keys",
-    "Deepgram now has its own dedicated API key field — switching engines no longer overwrites keys",
-    "Pre-configured Deepgram key works immediately without manual entry",
-    "Removed deprecated gemini-1.5-flash model from Gemini Speech fallback chain",
-    "Gemini Speech now tries gemini-3.8-flash then gemini-2.5-flash only"
+    "Aura AI v2.3.6 — Live Model Selection & Auto-Detect (Part 7 Parity)",
+    "Added Live Model selector chips for Google Gemini in Voice Output (Gemini 3.8 Live, Gemini 3.1 Flash, Gemini 3.1 Flash Agent)",
+    "Added Auto-Detect Models button to query Google AI Studio and fetch active models for the user's API key",
+    "Switched Gemini Speech to WebSocket Live Audio Synthesis for full compatibility with AI Studio keys",
+    "Automated cleanup of stale 1.5 model references and Deepgram key sanitization to prevent 401/404"
   ],
   "is_critical": false
 }
