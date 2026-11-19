@@ -36,11 +36,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.rounded.Mic
@@ -181,18 +188,37 @@ fun AuraSuggestionPillChip(
 @Composable
 fun AuraVoiceWelcome(
     userName: String? = null,
-    onStart: () -> Unit,
+    onActionTap: () -> Unit,
+    onActionDoubleTap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val livePhase by com.example.gemini.data.live.AuraLiveVoiceManager.phase.collectAsState()
     val liveStatusText by com.example.gemini.data.live.AuraLiveVoiceManager.statusText.collectAsState()
-    val lastTranscript by com.example.gemini.data.live.AuraLiveVoiceManager.lastTranscript.collectAsState()
+    val spokenSentence by com.example.gemini.data.live.AuraLiveVoiceManager.spokenSentence.collectAsState()
+
+    var displayedSpokenText by remember { mutableStateOf("") }
+    LaunchedEffect(spokenSentence, livePhase) {
+        if (livePhase != com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING) {
+            displayedSpokenText = ""
+            return@LaunchedEffect
+        }
+        val target = spokenSentence.trim()
+        if (target.length > displayedSpokenText.length) {
+            for (i in (displayedSpokenText.length + 1)..target.length) {
+                displayedSpokenText = target.take(i)
+                delay(14L) // typewriter character reveal for full readable sentence
+            }
+        } else {
+            displayedSpokenText = target
+        }
+    }
 
     val prompt = when (livePhase) {
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> liveStatusText.ifBlank { "Connecting to Gemini Live…" }
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> "Listening — speak anytime"
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> liveStatusText.ifBlank { "Jarvis thinking / working…" }
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> lastTranscript.ifBlank { "Jarvis speaking — tap to interrupt" }
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> "Working on task…"
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> if (displayedSpokenText.isNotBlank()) displayedSpokenText else "Jarvis speaking…"
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.MUTED -> "Muted — single tap to unmute, double tap to stop"
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> "Tap the orb to start conversation"
     }
 
@@ -229,16 +255,31 @@ fun AuraVoiceWelcome(
         Spacer(Modifier.height(8.dp))
         Text(
             text = prompt,
-            color = AuraMuted,
+            color = if (livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING && displayedSpokenText.isNotBlank()) AuraInk else AuraMuted,
             fontSize = 15.sp,
-            textAlign = TextAlign.Center
+            lineHeight = 21.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 44.dp)
         )
         Spacer(Modifier.weight(0.28f))
-        com.example.gemini.ui.components.AuraOrbView(
-            modifier = Modifier.size(260.dp),
-            phase = legacyPhase,
-            onOrbTapped = onStart
-        )
+        Box(
+            modifier = Modifier
+                .size(260.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { onActionTap() },
+                        onDoubleTap = { onActionDoubleTap() }
+                    )
+                }
+        ) {
+            com.example.gemini.ui.components.AuraOrbView(
+                modifier = Modifier.fillMaxSize(),
+                phase = legacyPhase,
+                onOrbTapped = onActionTap
+            )
+        }
         Spacer(Modifier.weight(1f))
     }
 }
@@ -255,7 +296,8 @@ fun AuraHomeModeSwitcher(isVoice: Boolean, onSelect: (Boolean) -> Unit, modifier
 @Composable
 fun AuraVoiceActions(
     autoSend: Boolean,
-    onStart: () -> Unit,
+    onActionTap: () -> Unit,
+    onActionDoubleTap: () -> Unit = {},
     onScreen: () -> Unit,
     onToggleAuto: () -> Unit,
     modifier: Modifier = Modifier
@@ -265,12 +307,13 @@ fun AuraVoiceActions(
     val currentLang by com.example.gemini.data.voice.AgyVoicePreferences.language.collectAsState()
     var showLanguageDialog by remember { mutableStateOf(false) }
 
-    val startLabel = when (livePhase) {
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> "Connecting…"
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> "Listening…"
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> "Working…"
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> "Tap to Stop"
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> "Tap to Start"
+    val (startLabel, accentColor, iconVector) = when (livePhase) {
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> Triple("Connecting…", Color(0xFFD97706), Icons.Default.HourglassEmpty)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> Triple("Listening…", Color(0xFF16A34A), Icons.Rounded.Mic)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> Triple("Working…", Color(0xFFD97706), Icons.Default.HourglassEmpty)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> Triple("Speaking…", Color(0xFF2563EB), Icons.Filled.VolumeUp)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.MUTED -> Triple("Muted", Color(0xFFDC2626), Icons.Filled.MicOff)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> Triple("Tap to Start", AuraBlue, Icons.Rounded.Mic)
     }
 
     val languageLabel = remember(currentLang) {
@@ -300,21 +343,19 @@ fun AuraVoiceActions(
         }
 
         Surface(
-            onClick = onStart,
             shape = RoundedCornerShape(28.dp),
             color = Color.White,
             shadowElevation = 3.dp,
             modifier = Modifier
                 .height(56.dp)
                 .defaultMinSize(minWidth = 160.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { onActionTap() },
+                        onDoubleTap = { onActionDoubleTap() }
+                    )
+                }
         ) {
-            val (accentColor, iconVector) = when (livePhase) {
-                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> Color(0xFFDC2626) to Icons.Filled.Stop
-                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> Color(0xFF16A34A) to Icons.Rounded.Mic
-                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> Color(0xFFD97706) to Icons.Default.HourglassEmpty
-                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> Color(0xFFD97706) to Icons.Default.HourglassEmpty
-                else -> AuraBlue to Icons.Rounded.Mic
-            }
             Row(
                 modifier = Modifier.padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.Center,

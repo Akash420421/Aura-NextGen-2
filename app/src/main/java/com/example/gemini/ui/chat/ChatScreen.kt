@@ -304,6 +304,14 @@ fun ChatScreen(
     val hubStatus by viewModel.hubStatus.collectAsState()
     val systemConnectionState by viewModel.systemConnectionState.collectAsState()
     var auraHomeVoice by rememberSaveable { mutableStateOf(false) }
+
+    val requestSwitchToChat by com.example.gemini.data.live.ChatContextBridge.requestSwitchToChatTab.collectAsState()
+    LaunchedEffect(requestSwitchToChat) {
+        if (requestSwitchToChat) {
+            auraHomeVoice = false
+            com.example.gemini.data.live.ChatContextBridge.requestSwitchToChatTab.value = false
+        }
+    }
     // The clean Aura UI is permanent across all conversations.
     val isAuraHome = !isInFloatingWindow
     val auraAutoSend by com.example.gemini.data.jarvis.JarvisPreferences.autoSend.state.collectAsState()
@@ -478,23 +486,27 @@ fun ChatScreen(
 
     val auraJarvisMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            com.example.gemini.data.live.AuraLiveVoiceManager.toggleSession(context)
+            com.example.gemini.data.live.AuraLiveVoiceManager.handleActionTap(context)
         } else {
             com.example.gemini.ui.components.AppToastHelper.showToast(
                 "Aura voice needs microphone access.", com.example.gemini.ui.components.ChatToastType.ERROR
             )
         }
     }
-    val startAuraJarvis: () -> Unit = {
+    val onActionTapAuraJarvis: () -> Unit = {
         val hasMic = androidx.core.content.ContextCompat.checkSelfPermission(
             context, android.Manifest.permission.RECORD_AUDIO
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (!hasMic) {
             auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
         } else {
-            com.example.gemini.data.live.AuraLiveVoiceManager.toggleSession(context)
+            com.example.gemini.data.live.AuraLiveVoiceManager.handleActionTap(context)
         }
     }
+    val onActionDoubleTapAuraJarvis: () -> Unit = {
+        com.example.gemini.data.live.AuraLiveVoiceManager.handleActionDoubleTap(context)
+    }
+    val startAuraJarvis = onActionTapAuraJarvis
 
     val screenCaptureLauncher = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -2059,7 +2071,8 @@ fun ChatScreen(
                     if (auraHomeVoice && messages.isEmpty()) {
                         com.example.gemini.ui.home.AuraVoiceWelcome(
                             userName = agyAuthInfo.displayName,
-                            onStart = startAuraJarvis
+                            onActionTap = onActionTapAuraJarvis,
+                            onActionDoubleTap = onActionDoubleTapAuraJarvis
                         )
                     } else if (messages.isEmpty()) {
                         com.example.gemini.ui.home.AuraChatWelcome(
@@ -2905,7 +2918,8 @@ fun ChatScreen(
                 if (isAuraHome && auraHomeVoice) {
                     com.example.gemini.ui.home.AuraVoiceActions(
                         autoSend = auraAutoSend,
-                        onStart = startAuraJarvis,
+                        onActionTap = onActionTapAuraJarvis,
+                        onActionDoubleTap = onActionDoubleTapAuraJarvis,
                         onScreen = {
                             val scm = com.example.gemini.data.vision.ScreenCaptureManager.getInstance()
                             if (scm.isSharing.value) {

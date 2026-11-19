@@ -31,9 +31,120 @@ object ChatContextBridge {
     private val _lastActiveChatTitle = MutableStateFlow("")
     val lastActiveChatTitle: StateFlow<String> = _lastActiveChatTitle.asStateFlow()
 
+    var activeVoiceConvId: String? = null
+    val requestSwitchToChatTab = MutableStateFlow(false)
+
     fun attach(vm: ChatViewModel) {
         viewModel = vm
         Log.i(TAG, "Attached ChatViewModel to ChatContextBridge")
+    }
+
+    fun startVoiceSessionConversation(): String {
+        val vm = viewModel ?: return ""
+        val timeStr = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
+        val convId = UUID.randomUUID().toString()
+        activeVoiceConvId = convId
+        val conv = Conversation(
+            id = convId,
+            title = "Voice Session • $timeStr"
+        )
+        try {
+            val prop = vm.javaClass.getDeclaredField("store")
+            prop.isAccessible = true
+            val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore
+            store?.let {
+                it.conversations.value = listOf(conv) + it.conversations.value.filter { c -> c.id != convId }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create voice session conversation: ${e.message}")
+        }
+        return convId
+    }
+
+    fun endVoiceSessionConversation() {
+        // Keep active conversation reference in drawer list
+    }
+
+    fun recordVoiceUserTurn(text: String) {
+        val vm = viewModel ?: return
+        val convId = activeVoiceConvId ?: return
+        val msg = ChatMessage(
+            conversationId = convId,
+            role = MessageRole.USER,
+            content = text,
+            viaVoice = true
+        )
+        appendVoiceMessage(vm, convId, msg)
+    }
+
+    fun recordVoiceAssistantTurn(textChunk: String) {
+        val vm = viewModel ?: return
+        val convId = activeVoiceConvId ?: return
+        try {
+            val prop = vm.javaClass.getDeclaredField("store")
+            prop.isAccessible = true
+            val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore ?: return
+
+            if (store.currentConversation.value?.id == convId) {
+                val currentList = store.messages.value.toMutableList()
+                val lastMsg = currentList.lastOrNull()
+                if (lastMsg != null && lastMsg.role == MessageRole.ASSISTANT && lastMsg.viaVoice) {
+                    val updated = lastMsg.copy(content = lastMsg.content + textChunk)
+                    currentList[currentList.size - 1] = updated
+                    store.messages.value = currentList
+                } else {
+                    val newMsg = ChatMessage(
+                        conversationId = convId,
+                        role = MessageRole.ASSISTANT,
+                        content = textChunk,
+                        viaVoice = true
+                    )
+                    store.messages.value = currentList + newMsg
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun appendVoiceMessage(vm: ChatViewModel, convId: String, msg: ChatMessage) {
+        try {
+            val prop = vm.javaClass.getDeclaredField("store")
+            prop.isAccessible = true
+            val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore ?: return
+            if (store.currentConversation.value?.id == convId) {
+                store.messages.value = store.messages.value + msg
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun openCurrentVoiceChat(): String {
+        val vm = viewModel ?: return "Chat system is not available."
+        val convId = activeVoiceConvId
+        return if (convId != null) {
+            vm.selectConversation(convId)
+            requestSwitchToChatTab.value = true
+            "Switched to current voice chat on screen."
+        } else {
+            "No active voice chat found."
+        }
+    }
+
+    fun openPreviousVoiceChat(): String {
+        val vm = viewModel ?: return "Chat system is not available."
+        val all = vm.allConversations.value
+        val prev = all.filter {
+            it.id != activeVoiceConvId && (
+                it.title.startsWith("Voice Session", ignoreCase = true) ||
+                it.title.contains("Voice", ignoreCase = true)
+            )
+        }.sortedByDescending { it.updatedAt }.firstOrNull()
+
+        return if (prev != null) {
+            vm.selectConversation(prev.id)
+            requestSwitchToChatTab.value = true
+            "Opened previous voice conversation '${prev.title}' on screen."
+        } else {
+            "No previous voice conversations found."
+        }
     }
 
     fun getCurrentConversation(): Conversation? = viewModel?.currentConversation?.value
@@ -105,6 +216,15 @@ object ChatContextBridge {
     suspend fun startNewChatTask(prompt: String): String = withContext(Dispatchers.Main) {
         val vm = viewModel ?: return@withContext "Error: App chat is not connected. Open the chat screen first."
         if (prompt.isBlank()) return@withContext "Error: Task prompt cannot be empty."
+
+        val lowerPrompt = prompt.lowercase()
+        val capabilityPhrases = listOf(
+            "tum kya kya kar sakte ho", "kya kar sakte ho", "capabilities", "what can you do", "help me understand"
+        )
+        if (capabilityPhrases.any { lowerPrompt.contains(it) }) {
+            Log.w(TAG, "Blocked capability query from executing as code task: $prompt")
+            return@withContext "Ye ek question hai, koi coding task nahi. Kripya aawaz me natural jawab dein."
+        }
 
         val now = System.currentTimeMillis()
         if (prompt.trim() == lastSentPrompt.trim() && (now - lastSentTime < 25_000L)) {

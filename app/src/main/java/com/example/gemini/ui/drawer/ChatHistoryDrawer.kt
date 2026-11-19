@@ -106,7 +106,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-enum class DrawerTabFilter { ALL, PIN, PROJECT, ARCHIVE }
+enum class DrawerTabFilter { ALL, PIN, PROJECT, VOICE, ARCHIVE }
 
 @Composable
 fun ChatHistoryDrawer(
@@ -257,6 +257,12 @@ fun ChatHistoryDrawer(
                     it.cloudProjectId != null ||
                     it.title.contains("project", ignoreCase = true) ||
                     it.title.contains("workspace", ignoreCase = true)
+                )
+            }
+            DrawerTabFilter.VOICE -> baseChats.filter {
+                it.id !in archivedIds && !it.archived && (
+                    it.title.startsWith("Voice Session", ignoreCase = true) ||
+                    it.title.contains("Voice", ignoreCase = true)
                 )
             }
             DrawerTabFilter.ARCHIVE -> baseChats.filter { it.id in archivedIds || it.archived }
@@ -947,6 +953,7 @@ fun ChatHistoryDrawer(
                     DrawerTabFilter.ALL to "All",
                     DrawerTabFilter.PIN to "Pin",
                     DrawerTabFilter.PROJECT to "Project",
+                    DrawerTabFilter.VOICE to "Voice",
                     DrawerTabFilter.ARCHIVE to "Archive"
                 )
                 tabItems.forEach { (cat, label) ->

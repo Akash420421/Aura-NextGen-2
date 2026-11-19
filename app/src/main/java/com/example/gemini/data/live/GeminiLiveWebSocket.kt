@@ -288,7 +288,27 @@ class GeminiLiveWebSocket(
                 })
             })
 
-            // 0e. delegate_task_to_app_agent (alias)
+            // 0e. open_current_voice_chat
+            put(JSONObject().apply {
+                put("name", "open_current_voice_chat")
+                put("description", "Opens the active ongoing voice conversation in the chat screen so the user can see the messages. Call when user asks 'hamari chat kholo', 'current chat open karo', or 'chat dikhao'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 0f. open_previous_voice_chat
+            put(JSONObject().apply {
+                put("name", "open_previous_voice_chat")
+                put("description", "Opens the previous voice session in the chat screen. Call when user asks 'pichhli chat kholo' or 'previous chat open karo'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 0g. delegate_task_to_app_agent (alias)
             put(JSONObject().apply {
                 put("name", "delegate_task_to_app_agent")
                 put("description", "Delegates a task to the app's internal agent.")

@@ -1,15 +1,15 @@
 {
-  "version_code": 238,
-  "version_name": "2.3.8",
+  "version_code": 239,
+  "version_name": "2.3.9",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.8 — Deep App Task Delegation, Zero-ScreenShare Status Checking & Noise Isolation",
-    "Delegated New Chat Task Creation: Voice mode instructs app to create a new chat for building websites/apps/servers, keeping voice mode clean and responsive",
-    "Zero-ScreenShare Status Checking: Gemini Live checks real-time task progress, files, and localhost servers directly via check_task_status without asking for screen share",
-    "Real-Time Task Updates: Forward modifications and feature requests to running tasks via send_task_update",
-    "Full App State Inspection: inspect_app_state reports active chats, tasks, and localhost servers",
-    "Queue-Storm Prevention: Anti-duplicate guard and streaming checks prevent multi-queued duplicate generation loops",
-    "Noise & Hallucination Isolation: Speech fragments and ambient whispers no longer pollute chat text history"
+    "Aura AI v2.3.9 — Smooth Typewriter Voice, Mute Lifecycles, Voice Drawer Category & Draggable Jarvis Bot",
+    "Typewriter Full-Line Subtitles: Assistant spoken responses reveal character-by-character as a smooth readable line above the orb",
+    "Silent Background Execution & Capability Protection: AI explains capabilities naturally without bragging about new chats, and never accidentally triggers tasks without explicit command",
+    "Voice Category in Drawer: New 'Voice' filter chip in navigation drawer displays all ongoing and past voice conversations",
+    "Voice Chat Navigation Tools: Open active voice chat ('hamari chat kholo') or previous voice chat ('pichhli chat kholo') directly on screen",
+    "5 Clear Voice States & Mute Control: Connecting, Listening, Working, Speaking, Muted. Single tap toggles Mute/Unmute while keeping session alive; Double tap stops session",
+    "Draggable Mini Jarvis Bot: The floating robot badge above the composer can now be freely dragged anywhere on screen"
   ],
   "is_critical": false
 }

@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicLong
 object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private const val TAG = "AuraLiveVoiceManager"
 
-    enum class Phase { IDLE, CONNECTING, LISTENING, THINKING, SPEAKING }
+    enum class Phase { IDLE, CONNECTING, LISTENING, THINKING, SPEAKING, MUTED }
 
     private val _phase = MutableStateFlow(Phase.IDLE)
     val phase: StateFlow<Phase> = _phase.asStateFlow()
@@ -57,6 +57,9 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     private val _lastTranscript = MutableStateFlow("")
     val lastTranscript: StateFlow<String> = _lastTranscript.asStateFlow()
+
+    private val _spokenSentence = MutableStateFlow("")
+    val spokenSentence: StateFlow<String> = _spokenSentence.asStateFlow()
 
     private var appContext: Context? = null
     private var scope: CoroutineScope? = null
@@ -81,6 +84,45 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     fun isLive(): Boolean = _phase.value != Phase.IDLE
 
+    fun toggleMute() {
+        if (_phase.value == Phase.MUTED) {
+            unmute()
+        } else if (_phase.value != Phase.IDLE && _phase.value != Phase.CONNECTING) {
+            mute()
+        }
+    }
+
+    fun mute() {
+        if (isLive() && _phase.value != Phase.MUTED) {
+            _phase.value = Phase.MUTED
+            _statusText.value = "Muted"
+            _amplitude.value = 0f
+            audioPlayer?.flush()
+        }
+    }
+
+    fun unmute() {
+        if (_phase.value == Phase.MUTED) {
+            _phase.value = Phase.LISTENING
+            _statusText.value = "Listening..."
+        }
+    }
+
+    fun handleActionTap(context: Context) {
+        if (!isLive()) {
+            startSession(context)
+        } else {
+            toggleMute()
+        }
+    }
+
+    fun handleActionDoubleTap(context: Context) {
+        if (isLive()) {
+            stopSession()
+            Toast.makeText(context, "Voice session ended", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun toggleSession(context: Context) {
         if (isLive()) {
             stopSession()
@@ -94,6 +136,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         appContext = context.applicationContext
         AuraMemoryManager.init(context)
         phoneControlManager = PhoneControlManager(context.applicationContext)
+        _spokenSentence.value = ""
+        ChatContextBridge.startVoiceSessionConversation()
 
         val apiKey = JarvisPreferences.liveApiKey.value.trim().ifBlank {
             JarvisPreferences.ttsApiKey.value.trim()
@@ -138,20 +182,22 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             }
         ).apply { start() }
 
-        // Initialize AudioRecorder with AEDP protection
+        // Initialize AudioRecorder with AEDP protection & mute support
         audioRecorder = AudioRecorder { chunk, amp, _ ->
             val now = System.currentTimeMillis()
             val isAedpActive = (now - lastSpeakerActiveTimestamp.get()) < AEDP_POST_SPEAKER_WINDOW_MS
             val isAssistantSpeaking = _phase.value == Phase.SPEAKING
+            val isMuted = _phase.value == Phase.MUTED
 
             if (_phase.value == Phase.LISTENING) {
                 _amplitude.value = amp
+            } else if (isMuted) {
+                _amplitude.value = 0f
             }
 
-            // Suppress audio while assistant speaks unless headset is plugged in, to prevent acoustic echo loop
-            val hasHeadset = headsetRouter?.isHeadsetConnected() == true
-            if (!isAssistantSpeaking || hasHeadset) {
-                if (!isAedpActive || hasHeadset) {
+            // Suppress audio when muted or while assistant speaks (unless headset is connected)
+            if (!isMuted && (!isAssistantSpeaking || headsetRouter?.isHeadsetConnected() == true)) {
+                if (!isAedpActive || headsetRouter?.isHeadsetConnected() == true) {
                     webSocket?.sendAudioChunk(chunk)
                 }
             }
@@ -198,6 +244,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         _phase.value = Phase.IDLE
         _amplitude.value = 0f
         _statusText.value = "Tap to Start"
+        _spokenSentence.value = ""
+        ChatContextBridge.endVoiceSessionConversation()
     }
 
     fun sendScreenFrame(jpegBytes: ByteArray) {
@@ -215,31 +263,40 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- Ignore ambient background noise or unrelated room chatter completely.\n\n")
 
         sb.append("### HYBRID VOICE & AGENT ARCHITECTURE:\n")
-        sb.append("1. NORMAL CONVERSATIONS (HANDLED BY YOU DIRECTLY IN VOICE):\n")
-        sb.append("   - Casual talk, greetings, general questions, explanations, discussions, advice, and knowledge queries:\n")
-        sb.append("   - You MUST answer IMMEDIATELY and DIRECTLY in voice (Hindi/Hinglish). Do NOT delegate normal conversations.\n\n")
-        sb.append("2. COMPLEX TASKS & CREATING PROJECTS (START NEW CHAT TASK):\n")
-        sb.append("   - Whenever the user asks you to:\n")
-        sb.append("     * Build or create an app, website, UI, game, or coding project\n")
-        sb.append("     * Host a local server (e.g. localhost:8080, python3 http server)\n")
-        sb.append("     * Execute terminal commands, run bash scripts, or complex multi-step missions\n")
-        sb.append("   - You MUST IMMEDIATELY call `start_new_chat_task(prompt=...)`!\n")
-        sb.append("   - This instructs the app to spawn a new dedicated project chat and execute the creation there while your voice session stays fast and uninterrupted.\n")
-        sb.append("   - Acknowledge warmly in voice (e.g. \"Haan bilkul! Main abhi ek new chat create karke ye website banana shuru kar raha hoon.\").\n\n")
+        sb.append("1. NORMAL CONVERSATIONS & CAPABILITY QUESTIONS (ANSWER DIRECTLY IN VOICE):\n")
+        sb.append("   - Casual talk, greetings, general questions, explanations, discussions, advice, and asking what you can do:\n")
+        sb.append("   - You MUST answer IMMEDIATELY and DIRECTLY in voice (Hindi/Hinglish).\n")
+        sb.append("   - When asked what you can do (e.g. 'tum kya kya kar sakte ho?', 'kya kar sakte ho?'): Answer naturally in voice describing phone automation, playing music, web search, and coding capabilities. DO NOT CALL ANY TOOLS! DO NOT START BUILDING OR CREATING ANYTHING!\n")
+        sb.append("   - NEVER boast or mention internal app features! NEVER say: 'main new chat shuru kar sakta hoon', 'main new chat create karta hoon', or 'task delegate karta hoon'. All internal workflows are completely SILENT to the user!\n\n")
+
+        sb.append("2. COMPLEX CODING & PROJECT CREATION (ONLY WHEN EXPLICITLY ORDERED):\n")
+        sb.append("   - STRICT CONFIRMATION RULE: ONLY call `start_new_chat_task(prompt=...)` if the user EXPLICITLY and UNAMBIGUOUSLY commands you to build, create, or code something right now (e.g. 'ek website banao', 'landing page create karo', 'python script likho')!\n")
+        sb.append("   - NEVER call this tool when answering questions about what you can do, or during greetings, or on ambient audio.\n")
+        sb.append("   - Speak a brief confirmation in first-person (e.g. 'Haan bilkul sir, main abhi ye website banana shuru karta hoon.'). Do NOT mention new chats.\n")
+        sb.append("   - NEVER re-send or repeat a task.\n\n")
+
         sb.append("3. CHECKING TASK / WEBSITE STATUS (ZERO SCREEN SHARE NEEDED):\n")
         sb.append("   - Whenever the user asks about progress or status (e.g. 'Website kitni bani?', 'Status kya hai?', 'Server start hua kya?', 'Kahan tak kaam hua?'):\n")
         sb.append("   - NEVER ask for screen share! DO NOT call `request_screen_share` for status!\n")
         sb.append("   - Call `check_task_status()` immediately. It inspects running background tasks, localhost web servers (ports 8080/3000), and code progress.\n")
-        sb.append("   - Report the status back in voice naturally in Hindi/Hinglish in FIRST PERSON as if you are doing it (e.g. \"Main abhi HTML aur CSS structure likh raha hoon, localhost:8080 pe server live hai!\").\n\n")
-        sb.append("4. UPDATING OR MODIFYING RUNNING TASKS:\n")
+        sb.append("   - Report the status back in voice naturally in Hindi/Hinglish in FIRST PERSON as if you are doing it.\n\n")
+
+        sb.append("4. OPENING VOICE CHATS ON SCREEN:\n")
+        sb.append("   - When the user asks: 'hamari chat kholo', 'current chat open karo', 'jo baat chal rahi hai wo chat dikhao' -> Call `open_current_voice_chat()`.\n")
+        sb.append("   - When the user asks: 'pichhli chat kholo', 'previous chat open karo' -> Call `open_previous_voice_chat()`.\n\n")
+
+        sb.append("5. UPDATING OR MODIFYING RUNNING TASKS:\n")
         sb.append("   - When the user asks to modify the website/app (e.g. 'usme dark mode add karo', 'button ka color red karo'):\n")
         sb.append("   - Call `send_task_update(instruction=...)`.\n\n")
-        sb.append("5. INSPECTING APP STATE:\n")
+
+        sb.append("6. INSPECTING APP STATE:\n")
         sb.append("   - When the user asks what tasks, chats, or servers are running in the app, call `inspect_app_state()`.\n\n")
-        sb.append("6. SCREEN SHARE:\n")
+
+        sb.append("7. SCREEN SHARE:\n")
         sb.append("   - ONLY call `request_screen_share` if the user EXPLICITLY asks to share or look at their device screen (e.g. 'meri screen dekho', 'screen share chalu karo'). Never for task status.\n\n")
-        sb.append("7. FIRST-PERSON PERSONAL OWNERSHIP:\n")
-        sb.append("   - NEVER say: \"Antigravity ka response aaya hai\", \"App ne ye reply kiya\", or \"Chat mein ye likha hai\". You ARE Jarvis / Aura, the app is your body. Speak with complete personal ownership!\n\n")
+
+        sb.append("8. FIRST-PERSON PERSONAL OWNERSHIP:\n")
+        sb.append("   - NEVER say: 'Antigravity ka response aaya hai', 'App ne ye reply kiya', or 'Chat mein ye likha hai'. You ARE Jarvis / Aura, the app is your body. Speak with complete personal ownership!\n\n")
 
         sb.append("### ZERO-HALLUCINATION ACTION EXECUTION:\n")
         sb.append("- When asked to open an app -> ALWAYS call open_app(app_name).\n")
@@ -293,23 +350,38 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     override fun onAssistantTextReceived(textChunk: String) {
         _lastTranscript.value = textChunk
-        // Speech is handled directly over audio channel; do not inject raw fragments into text chat
+        _spokenSentence.value = (_spokenSentence.value + textChunk).trimStart()
+        ChatContextBridge.recordVoiceAssistantTurn(textChunk)
     }
 
     override fun onUserTextReceived(textChunk: String) {
         _lastTranscript.value = textChunk
-        AuraMemoryManager.learnFromConversation(textChunk)
+        _spokenSentence.value = ""
+        if (!isNoiseOrForeignHallucination(textChunk)) {
+            ChatContextBridge.recordVoiceUserTurn(textChunk)
+            AuraMemoryManager.learnFromConversation(textChunk)
+        }
+    }
+
+    private fun isNoiseOrForeignHallucination(text: String): Boolean {
+        val t = text.trim()
+        if (t.length < 3) return true
+        if (t.contains("¿") || t.contains("¡")) return true
+        val lower = t.lowercase()
+        val foreignGlitches = listOf("yo calla", "pero bien", "esto qué es", "qué ha pasado", "habla", "gracias por ver")
+        return foreignGlitches.any { lower.contains(it) }
     }
 
     override fun onInterrupted() {
         audioPlayer?.flush()
+        _spokenSentence.value = ""
         _phase.value = Phase.LISTENING
         _statusText.value = "Listening..."
     }
 
     override fun onTurnCompleted() {
         audioPlayer?.notifyTurnComplete()
-        if (_phase.value != Phase.SPEAKING) {
+        if (_phase.value != Phase.SPEAKING && _phase.value != Phase.MUTED) {
             _phase.value = Phase.LISTENING
             _statusText.value = "Listening..."
         }
@@ -368,6 +440,22 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         put("status", "success")
                         put("summary", statusSummary)
                         put("message", statusSummary)
+                    }
+                }
+
+                "open_current_voice_chat" -> {
+                    val msg = ChatContextBridge.openCurrentVoiceChat()
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("message", msg)
+                    }
+                }
+
+                "open_previous_voice_chat" -> {
+                    val msg = ChatContextBridge.openPreviousVoiceChat()
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("message", msg)
                     }
                 }
 

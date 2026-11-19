@@ -412,6 +412,9 @@ object JarvisVoice {
                 val setup = JSONObject().apply {
                     put("setup", JSONObject().apply {
                         put("model", cleanModel)
+                        put("system_instruction", JSONObject().apply {
+                            put("parts", JSONArray().put(JSONObject().put("text", "You are an instant speech synthesizer. Immediately speak the user's provided text out loud clearly with natural intonation. Do not add conversational fillers or responses.")))
+                        })
                         put("generation_config", JSONObject().apply {
                             put("response_modalities", JSONArray().put("AUDIO"))
                             put("speech_config", JSONObject().apply {
@@ -430,6 +433,15 @@ object JarvisVoice {
             override fun onMessage(webSocket: WebSocket, textMsg: String) {
                 try {
                     val root = JSONObject(textMsg)
+
+                    if (root.has("error")) {
+                        val errObj = root.optJSONObject("error")
+                        val errMsg = errObj?.optString("message") ?: root.optString("error")
+                        Log.e(TAG, "Gemini Live speech server error: $errMsg")
+                        deferred.completeExceptionally(Exception(errMsg))
+                        webSocket.close(1000, "Error")
+                        return
+                    }
 
                     // Send text to read aloud only AFTER setup handshake is completed
                     if (root.has("setupComplete") || root.has("setup_complete")) {
@@ -499,12 +511,12 @@ object JarvisVoice {
         ws = http.newWebSocket(req, listener)
 
         try {
-            withTimeoutOrNull(9000) {
+            withTimeoutOrNull(25000) {
                 deferred.await()
             } ?: run {
                 ws?.cancel()
                 val raw = synchronized(pcmOut) { pcmOut.toByteArray() }
-                if (raw.isNotEmpty()) wrapPcmToWav(raw, 24000, 1) else throw Exception("Gemini Live speech timed out")
+                if (raw.isNotEmpty()) wrapPcmToWav(raw, 24000, 1) else throw Exception("Gemini Live speech timed out (network latency)")
             }
         } catch (e: Exception) {
             ws?.cancel()
