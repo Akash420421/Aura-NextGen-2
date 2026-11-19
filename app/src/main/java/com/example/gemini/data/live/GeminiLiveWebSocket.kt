@@ -236,16 +236,68 @@ class GeminiLiveWebSocket(
 
     private fun buildToolDeclarations(): JSONArray {
         return JSONArray().apply {
-            // 0. delegate_task_to_app_agent (Primary tool for all complex project, app, coding, hosting, and terminal tasks)
+            // 0. start_new_chat_task
             put(JSONObject().apply {
-                put("name", "delegate_task_to_app_agent")
-                put("description", "Delegates a complex task, coding project, app creation, website creation, local server hosting (e.g. localhost:8080), mission, or terminal workflow to the Aura app's internal agent (Antigravity/Claude). Use this whenever the user asks to build, create, code, host, or execute tasks. Provide the complete detailed instructions as 'prompt'.")
+                put("name", "start_new_chat_task")
+                put("description", "Instructs the app to create a new chat and build the requested website, app, local server, or complex task there. The task will run in that dedicated chat, keeping the voice session responsive. Provide the complete request as 'prompt'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("prompt", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "The complete task prompt/instructions to inject into the app chat for the agent to execute.")
+                            put("description", "The complete task instructions to execute in the new chat.")
+                        })
+                    })
+                    put("required", JSONArray().put("prompt"))
+                })
+            })
+
+            // 0b. check_task_status
+            put(JSONObject().apply {
+                put("name", "check_task_status")
+                put("description", "Checks the live real-time progress, files created, and localhost server status of active tasks/websites without needing screen share. Call whenever the user asks for status or progress (e.g. 'website kitni ban gayi?', 'status kya hai?', 'kahan tak kaam hua?').")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 0c. send_task_update
+            put(JSONObject().apply {
+                put("name", "send_task_update")
+                put("description", "Sends a modification, correction, or new feature to the running website/task (e.g. 'dark mode add karo', 'button color change karo').")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("instruction", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The exact update or change to apply to the running task.")
+                        })
+                    })
+                    put("required", JSONArray().put("instruction"))
+                })
+            })
+
+            // 0d. inspect_app_state
+            put(JSONObject().apply {
+                put("name", "inspect_app_state")
+                put("description", "Inspects the whole app: lists active chats, running background tasks, and active localhost web servers.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 0e. delegate_task_to_app_agent (alias)
+            put(JSONObject().apply {
+                put("name", "delegate_task_to_app_agent")
+                put("description", "Delegates a task to the app's internal agent.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("prompt", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The task prompt.")
                         })
                     })
                     put("required", JSONArray().put("prompt"))

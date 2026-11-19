@@ -218,15 +218,27 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("1. NORMAL CONVERSATIONS (HANDLED BY YOU DIRECTLY IN VOICE):\n")
         sb.append("   - Casual talk, greetings, general questions, explanations, discussions, advice, and knowledge queries:\n")
         sb.append("   - You MUST answer IMMEDIATELY and DIRECTLY in voice (Hindi/Hinglish). Do NOT delegate normal conversations.\n\n")
-        sb.append("2. COMPLEX TASKS & AGENT INSTRUCTIONS (DELEGATE TO APP AGENT):\n")
+        sb.append("2. COMPLEX TASKS & CREATING PROJECTS (START NEW CHAT TASK):\n")
         sb.append("   - Whenever the user asks you to:\n")
-        sb.append("     * Build or create an app, website, UI, or coding project\n")
+        sb.append("     * Build or create an app, website, UI, game, or coding project\n")
         sb.append("     * Host a local server (e.g. localhost:8080, python3 http server)\n")
-        sb.append("     * Execute terminal commands, run bash scripts, or project builds\n")
-        sb.append("     * Control chats, run complex missions, or multi-step agent tasks\n")
-        sb.append("   - You MUST IMMEDIATELY call `delegate_task_to_app_agent(prompt=...)`!\n")
-        sb.append("   - Say a very brief acknowledgment before or during delegation (e.g. \"Haan bilkul sir, main abhi ye shuru karta hoon.\").\n")
-        sb.append("   - CRITICAL SPOKEN READ-BACK RULE: When `delegate_task_to_app_agent` finishes and returns the result, YOU MUST speak the outcome back to the user in voice in Hindi/Hinglish in FIRST PERSON as if YOU did the work yourself! (e.g. \"Maine calculator app bana diya hai aur index.html save kar di hai. Localhost:8080 pe server bhi start kar diya hai!\").\n")
+        sb.append("     * Execute terminal commands, run bash scripts, or complex multi-step missions\n")
+        sb.append("   - You MUST IMMEDIATELY call `start_new_chat_task(prompt=...)`!\n")
+        sb.append("   - This instructs the app to spawn a new dedicated project chat and execute the creation there while your voice session stays fast and uninterrupted.\n")
+        sb.append("   - Acknowledge warmly in voice (e.g. \"Haan bilkul! Main abhi ek new chat create karke ye website banana shuru kar raha hoon.\").\n\n")
+        sb.append("3. CHECKING TASK / WEBSITE STATUS (ZERO SCREEN SHARE NEEDED):\n")
+        sb.append("   - Whenever the user asks about progress or status (e.g. 'Website kitni bani?', 'Status kya hai?', 'Server start hua kya?', 'Kahan tak kaam hua?'):\n")
+        sb.append("   - NEVER ask for screen share! DO NOT call `request_screen_share` for status!\n")
+        sb.append("   - Call `check_task_status()` immediately. It inspects running background tasks, localhost web servers (ports 8080/3000), and code progress.\n")
+        sb.append("   - Report the status back in voice naturally in Hindi/Hinglish in FIRST PERSON as if you are doing it (e.g. \"Main abhi HTML aur CSS structure likh raha hoon, localhost:8080 pe server live hai!\").\n\n")
+        sb.append("4. UPDATING OR MODIFYING RUNNING TASKS:\n")
+        sb.append("   - When the user asks to modify the website/app (e.g. 'usme dark mode add karo', 'button ka color red karo'):\n")
+        sb.append("   - Call `send_task_update(instruction=...)`.\n\n")
+        sb.append("5. INSPECTING APP STATE:\n")
+        sb.append("   - When the user asks what tasks, chats, or servers are running in the app, call `inspect_app_state()`.\n\n")
+        sb.append("6. SCREEN SHARE:\n")
+        sb.append("   - ONLY call `request_screen_share` if the user EXPLICITLY asks to share or look at their device screen (e.g. 'meri screen dekho', 'screen share chalu karo'). Never for task status.\n\n")
+        sb.append("7. FIRST-PERSON PERSONAL OWNERSHIP:\n")
         sb.append("   - NEVER say: \"Antigravity ka response aaya hai\", \"App ne ye reply kiya\", or \"Chat mein ye likha hai\". You ARE Jarvis / Aura, the app is your body. Speak with complete personal ownership!\n\n")
 
         sb.append("### ZERO-HALLUCINATION ACTION EXECUTION:\n")
@@ -281,11 +293,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     override fun onAssistantTextReceived(textChunk: String) {
         _lastTranscript.value = textChunk
-        ChatContextBridge.recordAssistantTurn(textChunk)
+        // Speech is handled directly over audio channel; do not inject raw fragments into text chat
     }
 
     override fun onUserTextReceived(textChunk: String) {
-        ChatContextBridge.recordUserTurn(textChunk)
+        _lastTranscript.value = textChunk
         AuraMemoryManager.learnFromConversation(textChunk)
     }
 
@@ -332,6 +344,56 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
         return try {
             when (name) {
+                "start_new_chat_task" -> {
+                    val prompt = args.optString("prompt", "").trim()
+                    if (prompt.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "Task prompt cannot be empty.")
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            _phase.value = Phase.THINKING
+                            _statusText.value = "Starting in new chat..."
+                        }
+                        val reply = ChatContextBridge.startNewChatTask(prompt)
+                        JSONObject().apply {
+                            put("status", "success")
+                            put("result", reply)
+                            put("message", reply)
+                        }
+                    }
+                }
+
+                "check_task_status" -> {
+                    val statusSummary = ChatContextBridge.checkActiveTaskStatus()
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("summary", statusSummary)
+                        put("message", statusSummary)
+                    }
+                }
+
+                "send_task_update" -> {
+                    val instruction = args.optString("instruction", "").trim()
+                    if (instruction.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "Instruction cannot be empty.")
+                    } else {
+                        val reply = ChatContextBridge.sendTaskUpdate(instruction)
+                        JSONObject().apply {
+                            put("status", "success")
+                            put("result", reply)
+                            put("message", reply)
+                        }
+                    }
+                }
+
+                "inspect_app_state" -> {
+                    val appState = ChatContextBridge.inspectAppState()
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("app_state", appState)
+                        put("message", appState)
+                    }
+                }
+
                 "delegate_task_to_app_agent", "execute_in_app_chat" -> {
                     val prompt = args.optString("prompt", "").ifBlank { args.optString("task", "") }.trim()
                     if (prompt.isBlank()) {
@@ -339,13 +401,13 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     } else {
                         withContext(Dispatchers.Main) {
                             _phase.value = Phase.THINKING
-                            _statusText.value = "Executing in chat..."
+                            _statusText.value = "Delegating to agent..."
                         }
-                        val reply = ChatContextBridge.executeTaskInChat(prompt)
+                        val reply = ChatContextBridge.startNewChatTask(prompt)
                         JSONObject().apply {
                             put("status", "success")
                             put("result", reply)
-                            put("message", "Task executed successfully by the agent. Details: $reply")
+                            put("message", reply)
                         }
                     }
                 }

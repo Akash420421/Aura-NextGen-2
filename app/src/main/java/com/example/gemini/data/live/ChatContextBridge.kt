@@ -84,6 +84,176 @@ object ChatContextBridge {
         }
     }
 
+    private var lastSentPrompt: String = ""
+    private var lastSentTime: Long = 0L
+
+    private fun isPortOpen(port: Int): Boolean {
+        return try {
+            java.net.Socket().use { socket ->
+                socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 200)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Instructs the current chat agent to create a new chat and build the project/task there.
+     * Includes anti-duplicate guard to prevent prompt looping or queued message flooding.
+     */
+    suspend fun startNewChatTask(prompt: String): String = withContext(Dispatchers.Main) {
+        val vm = viewModel ?: return@withContext "Error: App chat is not connected. Open the chat screen first."
+        if (prompt.isBlank()) return@withContext "Error: Task prompt cannot be empty."
+
+        val now = System.currentTimeMillis()
+        if (prompt.trim() == lastSentPrompt.trim() && (now - lastSentTime < 25_000L)) {
+            Log.w(TAG, "Duplicate prompt blocked by guard: $prompt")
+            return@withContext "Ye task already app me chal raha hai aur agent kaam kar raha hai. Aap 'status kya hai' poochh sakte hain."
+        }
+
+        // Guard against queue storm: if agent is currently streaming, don't spam sendMessage into queue
+        if (vm.isStreaming.value) {
+            Log.w(TAG, "Agent is currently streaming, blocking duplicate task prompt from queueing")
+            return@withContext "Agent abhi ek task pe actively kaam kar raha hai. Kripya thoda wait karein ya 'status kya hai' poochhein."
+        }
+
+        lastSentPrompt = prompt.trim()
+        lastSentTime = now
+
+        try {
+            ensureConversationExists(vm)
+            val initialMsgCount = vm.messages.value.size
+
+            // Instruct the current chat to create a new chat and execute the task in that new chat
+            val formatted = "Ek new chat create karo aur usme ye website/task execute karo:\n\n$prompt"
+            Log.i(TAG, "Sending new chat task prompt to app chat: $formatted")
+
+            vm.sendMessage(formatted)
+
+            // Wait up to 8s for initial acknowledgment from the agent
+            val waitStart = System.currentTimeMillis()
+            while (System.currentTimeMillis() - waitStart < 8000L) {
+                val currentMsgs = vm.messages.value
+                val lastMsg = currentMsgs.lastOrNull()
+                if (lastMsg != null && lastMsg.role == MessageRole.ASSISTANT && lastMsg.content.isNotBlank() && currentMsgs.size > initialMsgCount) {
+                    return@withContext lastMsg.content
+                }
+                delay(200L)
+            }
+
+            return@withContext "Maine new chat create karke task start karne ka instruction bhej diya hai aur agent ne kaam shuru kar diya hai."
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting new chat task: ${e.message}", e)
+            return@withContext "Error: ${e.message}"
+        }
+    }
+
+    /**
+     * Checks real-time progress of active background tasks, websites, and apps.
+     * Reads JarvisTasks, checks localhost web servers (8080, 3000, 5173), and checks chat stream.
+     * Zero screen share required.
+     */
+    suspend fun checkActiveTaskStatus(): String = withContext(Dispatchers.IO) {
+        val sb = StringBuilder()
+
+        // 1. Check Jarvis background tasks
+        val tasks = com.example.gemini.data.jarvis.JarvisTasks.tasks.value
+        val activeTasks = tasks.filter { it.active }
+        val recentTasks = if (activeTasks.isNotEmpty()) activeTasks else tasks.take(2)
+        if (recentTasks.isNotEmpty()) {
+            recentTasks.forEach { t ->
+                sb.append("Task: \"${t.title}\" (${t.state.label})")
+                if (t.note.isNotBlank()) sb.append(" - Progress: ${t.note}")
+                if (t.result.isNotBlank()) sb.append(" - Output: ${t.result.take(150)}")
+                sb.append("\n")
+            }
+        }
+
+        // 2. Check Localhost Servers
+        val commonPorts = listOf(8080, 3000, 5173, 8000)
+        val openPorts = commonPorts.filter { isPortOpen(it) }
+        if (openPorts.isNotEmpty()) {
+            sb.append("Localhost servers running: ")
+            sb.append(openPorts.joinToString(", ") { "http://localhost:$it" })
+            sb.append("\n")
+        }
+
+        // 3. Check Chat Stream State
+        val vm = viewModel
+        if (vm != null) {
+            val isStreaming = vm.isStreaming.value
+            val msgs = vm.messages.value
+            val lastMsg = msgs.lastOrNull { it.role == MessageRole.ASSISTANT && it.content.isNotBlank() }
+            if (isStreaming) {
+                sb.append("Agent is actively writing and generating code right now.\n")
+                if (lastMsg != null) {
+                    sb.append("Latest text: ${lastMsg.content.takeLast(180)}\n")
+                }
+            } else if (lastMsg != null && sb.isEmpty()) {
+                sb.append("Latest chat output: ${lastMsg.content.take(250)}\n")
+            }
+        }
+
+        if (sb.isEmpty()) {
+            return@withContext "No active tasks or background builds are running currently."
+        }
+        return@withContext sb.toString().trim()
+    }
+
+    /**
+     * Sends an update, correction, or new feature request to the running project task.
+     */
+    suspend fun sendTaskUpdate(instruction: String): String = withContext(Dispatchers.Main) {
+        val vm = viewModel ?: return@withContext "Error: App chat is not connected."
+        if (instruction.isBlank()) return@withContext "Error: Instruction cannot be empty."
+
+        try {
+            ensureConversationExists(vm)
+            val updateMsg = "Jo website/task banayi ja rahi hai, usme ye update karo: $instruction"
+            vm.sendMessage(updateMsg)
+            return@withContext "Update task chat mein bhej diya gaya hai: $instruction"
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending task update: ${e.message}", e)
+            return@withContext "Error: ${e.message}"
+        }
+    }
+
+    /**
+     * Inspects the internal state of the whole Aura app (chats, background tasks, open servers, active project).
+     */
+    suspend fun inspectAppState(): String = withContext(Dispatchers.IO) {
+        val sb = StringBuilder()
+        val vm = viewModel
+        val conv = vm?.currentConversation?.value
+        val allConvs = vm?.allConversations?.value ?: emptyList()
+        sb.append("Current Chat: \"${conv?.title ?: "None"}\"\n")
+        sb.append("Total Chats: ${allConvs.size}\n")
+        if (allConvs.isNotEmpty()) {
+            sb.append("Recent Chats: ")
+            sb.append(allConvs.take(4).joinToString(", ") { "\"${it.title}\"" })
+            sb.append("\n")
+        }
+
+        // Active Tasks
+        val tasks = com.example.gemini.data.jarvis.JarvisTasks.tasks.value
+        sb.append("Running Tasks (${tasks.count { it.active }} active):\n")
+        tasks.take(3).forEach { t ->
+            sb.append("- ${t.title}: ${t.state.label} (${t.note.ifBlank { "working" }})\n")
+        }
+
+        // Localhost servers
+        val ports = listOf(8080, 3000, 5173, 8000)
+        val openPorts = ports.filter { isPortOpen(it) }
+        if (openPorts.isNotEmpty()) {
+            sb.append("Open Local Servers: ")
+            sb.append(openPorts.joinToString(", ") { "http://localhost:$it" })
+            sb.append("\n")
+        }
+
+        return@withContext sb.toString().trim()
+    }
+
     /**
      * Executes a complex user task by injecting it directly into the app's active chat session
      * (triggering Antigravity / Claude / Codex agent with all native tools and bash capabilities).

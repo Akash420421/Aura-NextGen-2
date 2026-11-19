@@ -1,14 +1,15 @@
 {
-  "version_code": 237,
-  "version_name": "2.3.7",
+  "version_code": 238,
+  "version_name": "2.3.8",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.7 — Hybrid Gemini Live Voice Mode & In-App Task Delegation (Part 7 Parity)",
-    "Real-time duplex live voice mode powered directly by Google Gemini Live API",
-    "Hybrid task delegation: Normal conversations answered instantly in voice; complex tasks (apps, websites, local server hosting, terminal workflows) injected into app chat",
-    "Natural first-person spoken read-back: Jarvis speaks completed task results in conversational Hindi/Hinglish as its own",
-    "Screen sharing parity with Part 7: Real-time 768px MediaProjection streaming directly to Gemini Live",
-    "Fixed Gemini Live TTS handshake protocol to eliminate speech synthesis timeouts"
+    "Aura AI v2.3.8 — Deep App Task Delegation, Zero-ScreenShare Status Checking & Noise Isolation",
+    "Delegated New Chat Task Creation: Voice mode instructs app to create a new chat for building websites/apps/servers, keeping voice mode clean and responsive",
+    "Zero-ScreenShare Status Checking: Gemini Live checks real-time task progress, files, and localhost servers directly via check_task_status without asking for screen share",
+    "Real-Time Task Updates: Forward modifications and feature requests to running tasks via send_task_update",
+    "Full App State Inspection: inspect_app_state reports active chats, tasks, and localhost servers",
+    "Queue-Storm Prevention: Anti-duplicate guard and streaming checks prevent multi-queued duplicate generation loops",
+    "Noise & Hallucination Isolation: Speech fragments and ambient whispers no longer pollute chat text history"
   ],
   "is_critical": false
 }
