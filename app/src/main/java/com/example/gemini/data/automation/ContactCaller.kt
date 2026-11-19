@@ -61,10 +61,17 @@ object ContactCaller {
     }
 
     fun findMatches(context: Context, spokenName: String): List<Contact> {
-        if (!hasPermission(context, Manifest.permission.READ_CONTACTS)) return emptyList()
-
+        AuraContactsManager.init(context)
         val cleanQuery = cleanQueryString(spokenName)
         if (cleanQuery.isEmpty()) return emptyList()
+
+        // 1. Check Custom Contacts first (Nicknames & Custom numbers take priority!)
+        val customMatch = AuraContactsManager.findCustomMatch(cleanQuery)
+        if (customMatch != null) {
+            return listOf(Contact(customMatch.name, customMatch.number))
+        }
+
+        if (!hasPermission(context, Manifest.permission.READ_CONTACTS)) return emptyList()
 
         val rawCleanQuery = cleanQuery.replace(Regex("[^a-z0-9]"), "")
 

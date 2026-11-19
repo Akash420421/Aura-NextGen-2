@@ -282,7 +282,11 @@ private fun OrbLayer(
                             )
                         }
                         .pointerInput(Unit) {
-                            detectTapGestures(onTap = { onTap() }, onLongPress = { JarvisController.panelOpen.value = true })
+                            detectTapGestures(
+                                onTap = { onTap() },
+                                onDoubleTap = { JarvisController.panelOpen.value = true },
+                                onLongPress = { JarvisController.panelOpen.value = true }
+                            )
                         },
                     contentAlignment = Alignment.Center
                 ) {
@@ -682,7 +686,7 @@ fun SiriWaves(phase: Phase, level: Float, modifier: Modifier = Modifier) {
 }
 
 /**
- * The idle orb: Jarvis' robot face on a small glass disc (still: nothing animates while idle). Running tasks show as violet
+ * The idle orb: glowing multi-layer gradient Voice Orb disc. Running tasks show as violet
  * arcs around it, something that needs the user as an amber dot.
  */
 @Composable
@@ -690,10 +694,31 @@ fun IdleOrb(size: Dp, activeTasks: Int, attention: Boolean) {
     Canvas(Modifier.size(size)) {
         val c = Offset(this.size.width / 2, this.size.height / 2)
         val r = this.size.minDimension / 2
-        drawCircle(Color.Black.copy(alpha = 0.28f), radius = r, center = c.copy(y = c.y + r * 0.08f))
-        drawCircle(Brush.radialGradient(listOf(Color(0xF0182640), Color(0xF00A0F1C)), c, r), radius = r * 0.96f, center = c)
-        drawCircle(Cyan.copy(alpha = 0.5f), radius = r * 0.92f, center = c, style = Stroke(width = r * 0.06f))
-        drawJarvisBot(c, r * 1.32f, Cyan)
+        // Outer dark subtle glow
+        drawCircle(Color.Black.copy(alpha = 0.35f), radius = r, center = c.copy(y = c.y + r * 0.08f))
+        // Radial multi-color aura gradient (Deep Blue -> Electric Indigo -> Cyan core)
+        drawCircle(
+            Brush.radialGradient(
+                listOf(Color(0xFF22D3EE), Color(0xFF6366F1), Color(0xFF1E1B4B), Color(0xFF0F172A)),
+                c,
+                r
+            ),
+            radius = r * 0.94f,
+            center = c
+        )
+        // Pulsing inner highlight ring
+        drawCircle(
+            Brush.radialGradient(
+                listOf(Color(0x8038BDF8), Color(0x20818CF8), Color.Transparent),
+                c,
+                r * 0.85f
+            ),
+            radius = r * 0.85f,
+            center = c
+        )
+        // Subtle crisp border
+        drawCircle(Color(0xFF38BDF8).copy(alpha = 0.6f), radius = r * 0.94f, center = c, style = Stroke(width = r * 0.05f))
+
         if (activeTasks > 0) {
             val sweep = (360f / activeTasks.coerceAtMost(4)) - 14f
             for (i in 0 until activeTasks.coerceAtMost(4)) {
@@ -722,8 +747,7 @@ private fun TaskBadge(orb: Dp, count: Int, attention: Boolean) {
 }
 
 /**
- * The active orb: halo rings that follow the level around Jarvis' face. Listening: the eyes widen with your voice;
- * speaking: the mouth moves with Jarvis' voice; thinking: the eyes glance around and an arc spins.
+ * The active orb: glowing multi-layer gradient Voice Orb that follows the phase and audio level.
  */
 @Composable
 fun JarvisOrb(phase: Phase, level: Float, size: Dp) {
@@ -732,34 +756,58 @@ fun JarvisOrb(phase: Phase, level: Float, size: Dp) {
         return
     }
     val t = rememberInfiniteTransition(label = "orb")
-    val spin by t.animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "spin")
-    val breathe by t.animateFloat(0.92f, 1.08f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "breathe")
-    val glance by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "glance")
+    val spin by t.animateFloat(0f, 360f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "spin")
+    val breathe by t.animateFloat(0.88f, 1.12f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "breathe")
+    val pulse by t.animateFloat(0.95f, 1.05f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "pulse")
     val smooth by animateFloatAsState(level, tween(90), label = "level")
     val color = accentOf(phase)
     Canvas(Modifier.size(size)) {
         val c = Offset(this.size.width / 2, this.size.height / 2)
         val r = this.size.minDimension / 2
         val grow = when (phase) {
-            Phase.LISTENING, Phase.SPEAKING -> 1f + smooth * 0.35f
+            Phase.LISTENING, Phase.SPEAKING -> 1f + smooth * 0.45f
             else -> breathe
         }
-        drawCircle(Color(0xE60A0F1C), radius = r, center = c)
+
+        // Multi-layer glowing rings expanding outwards
         for (i in 1..3) {
-            drawCircle(color.copy(alpha = (0.2f - i * 0.05f).coerceAtLeast(0.03f)), radius = (r * (0.62f + i * 0.12f) * grow).coerceAtMost(r), center = c)
+            val ringRadius = (r * (0.6f + i * 0.14f) * grow).coerceAtMost(r)
+            drawCircle(
+                color.copy(alpha = (0.28f - i * 0.07f).coerceAtLeast(0.04f)),
+                radius = ringRadius,
+                center = c
+            )
         }
-        drawCircle(color.copy(alpha = 0.55f), radius = r * 0.93f, center = c, style = Stroke(width = r * 0.05f))
-        drawJarvisBot(
-            c, r * 1.3f, color,
-            lookX = if (phase == Phase.THINKING) glance else 0f,
-            mouth = if (phase == Phase.SPEAKING) smooth else 0f,
-            eyeGrow = if (phase == Phase.LISTENING) 1f + smooth * 0.35f else 1f
+
+        // Core glowing aura orb gradient
+        val coreColors = when (phase) {
+            Phase.LISTENING -> listOf(Color(0xFF38BDF8), Color(0xFF6366F1), Color(0xFF1E1B4B))
+            Phase.THINKING -> listOf(Color(0xFFA855F7), Color(0xFFEC4899), Color(0xFF312E81))
+            Phase.SPEAKING -> listOf(Color(0xFF34D399), Color(0xFF0284C7), Color(0xFF0F172A))
+            else -> listOf(Color(0xFF38BDF8), Color(0xFF6366F1), Color(0xFF0F172A))
+        }
+        drawCircle(
+            Brush.radialGradient(coreColors, c, r * 0.88f * grow.coerceAtMost(1.1f)),
+            radius = r * 0.82f * grow.coerceAtMost(1.1f),
+            center = c
         )
+
+        // Core bright center
+        drawCircle(
+            Color.White.copy(alpha = (0.65f + smooth * 0.35f).coerceAtMost(0.95f)),
+            radius = r * 0.28f * pulse,
+            center = c
+        )
+
+        // Outer crisp rim
+        drawCircle(color.copy(alpha = 0.7f), radius = r * 0.92f, center = c, style = Stroke(width = r * 0.05f))
+
         if (phase == Phase.THINKING) {
             drawArc(
-                Color.White.copy(alpha = 0.9f), startAngle = spin, sweepAngle = 110f, useCenter = false,
-                topLeft = Offset(c.x - r * 0.86f, c.y - r * 0.86f), size = Size(r * 1.72f, r * 1.72f),
-                style = Stroke(width = r * 0.07f, cap = StrokeCap.Round)
+                Brush.sweepGradient(listOf(Color.Transparent, Color(0xFFC084FC), Color.White)),
+                startAngle = spin, sweepAngle = 140f, useCenter = false,
+                topLeft = Offset(c.x - r * 0.88f, c.y - r * 0.88f), size = Size(r * 1.76f, r * 1.76f),
+                style = Stroke(width = r * 0.08f, cap = StrokeCap.Round)
             )
         }
     }

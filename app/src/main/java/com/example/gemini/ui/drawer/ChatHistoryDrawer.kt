@@ -953,8 +953,7 @@ fun ChatHistoryDrawer(
                     DrawerTabFilter.ALL to "All",
                     DrawerTabFilter.PIN to "Pin",
                     DrawerTabFilter.PROJECT to "Project",
-                    DrawerTabFilter.VOICE to "Voice",
-                    DrawerTabFilter.ARCHIVE to "Archive"
+                    DrawerTabFilter.VOICE to "Voice"
                 )
                 tabItems.forEach { (cat, label) ->
                     val selected = activeTabFilter == cat

@@ -39,110 +39,39 @@ import kotlinx.coroutines.launch
 private val JarvisCyan = Color(0xFF22D3EE)
 
 /** The sections of Settings → Jarvis: each opens on its own page (Settings → Jarvis → section). */
-enum class JarvisSettingsPage { AGENT, PERSONALITY, SETUP, WAKE, LISTEN, VOICE, TASKS, APPROVALS, SCREEN, CHAT, LIVE_API, MEMORY }
+enum class JarvisSettingsPage { AGENT, PERSONALITY, SETUP, WAKE, LISTEN, VOICE, TASKS, APPROVALS, SCREEN, CHAT, LIVE_API, MEMORY, AUTHORIZATIONS, CONTACTS }
 
 /**
- * Settings → Jarvis: the on/off switch, then one row per section ([JarvisSettingsPage]); a section opens on its own
+ * Settings → Jarvis: one row per section ([JarvisSettingsPage]); a section opens on its own
  * page ([JarvisSettingsSectionPage]), so this page stays light and opens at once.
  */
 @Composable
 fun JarvisSettingsScreen(cardBg: Color, cardBorder: BorderStroke, onOpen: (JarvisSettingsPage) -> Unit) {
     val P = JarvisPreferences
-    val enabled by P.enabled.state.collectAsState()
-    val agentName by P.agent.state.collectAsState()
     val hotword by P.hotword.state.collectAsState()
-    val autoSend by P.autoSend.state.collectAsState()
-    val engine by P.ttsEngine.state.collectAsState()
-    val quiet by P.quietMode.state.collectAsState()
-    val policy by P.permissionPolicy.state.collectAsState()
-    val voiceSide by P.voiceAssistant.state.collectAsState()
+    val liveApiKey by P.liveApiKey.state.collectAsState()
+    val allMemories by com.example.gemini.data.live.AuraMemoryManager.memories.collectAsState()
+    val c = com.example.gemini.theme.AppColors
+    val I = androidx.compose.material.icons.Icons.Outlined
+    fun row(page: JarvisSettingsPage, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, title: String, value: String? = null) =
+        com.example.gemini.ui.settings.SettingsRowItem(icon, tint, title, value) { onOpen(page) }
 
     Column(
         Modifier.fillMaxSize().bouncyVerticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        JCard(cardBg, cardBorder, "Jarvis") {
-            JSwitch(
-                "Turn on Jarvis",
-                "A hands-free assistant for the whole app: talk to open projects and files, run and watch tasks, answer approvals, " +
-                    "change settings, ask for help or your usage. Off by default; nothing listens until you turn it on.",
-                enabled
-            ) { JarvisController.setEnabled(it) }
-            if (enabled) {
-                JSwitch(
-                    "Floating button & voice",
-                    "Off = chat only: no floating button, no microphone, nothing read out loud. You use Jarvis in the Jarvis chats you open " +
-                        "from the chat list (Jarvis tab → New Jarvis chat), by typing.",
-                    voiceSide
-                ) { JarvisController.setVoiceAssistant(it) }
-            }
-            JHint(
-                if (!enabled || voiceSide) "Tap the orb to talk, long-press it for the Jarvis panel (tasks, conversation, typing, quick switches). " +
-                    "You can also type to Jarvis: Jarvis tab in the chat list → New Jarvis chat."
-                else "Chat only: open the Jarvis tab in the chat list and tap “New Jarvis chat”. Pick its agent and model like in any chat."
-            )
-        }
-        if (enabled && JarvisController.isAttached) {
-            JCard(cardBg, cardBorder, "Jarvis chats in the chat list") {
-                val inAll by P.jarvisInAll.state.collectAsState()
-                JChips(listOf("none" to "Only under Jarvis", "text" to "My Jarvis chats in All too", "all" to "All Jarvis chats in All too"), inAll) { P.jarvisInAll.set(it) }
-                JHint(when (inAll) {
-                    "text" -> "The Jarvis chats you opened yourself (New Jarvis chat) also show in All and the agent tabs; the voice chats Jarvis opens by itself stay under Jarvis."
-                    "all" -> "Every Jarvis chat, the voice chats Jarvis opens by itself too, also shows in All and the agent tabs."
-                    else -> "Jarvis chats are listed only under the Jarvis tab. The work chats Jarvis starts for its tasks are normal chats and always show in All."
-                })
-            }
-        }
-        if (!JarvisController.isAttached) {
-            Text("Jarvis is starting…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            return@Column
-        }
-        val liveApiKey by P.liveApiKey.state.collectAsState()
-        val allMemories by com.example.gemini.data.live.AuraMemoryManager.memories.collectAsState()
-        val c = com.example.gemini.theme.AppColors
-        val I = androidx.compose.material.icons.Icons.Outlined
-        fun row(page: JarvisSettingsPage, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, title: String, value: String? = null) =
-            com.example.gemini.ui.settings.SettingsRowItem(icon, tint, title, value) { onOpen(page) }
         listOf(
-            listOfNotNull(
+            listOf(
                 row(JarvisSettingsPage.LIVE_API, I.Key, c.accentTeal, "Gemini Live API", if (liveApiKey.isNotBlank()) "Configured • Ready" else "Enter API Key"),
                 row(JarvisSettingsPage.MEMORY, I.Psychology, c.accentIndigo, "Persistent Memory", "${allMemories.size} facts"),
-                row(JarvisSettingsPage.AGENT, I.SmartToy, c.info, "Voice agent & model", when (agentName) {
-                    AgentKind.AGY.name -> "Antigravity"
-                    AgentKind.CLAUDE.name -> "Claude Code"
-                    AgentKind.OPENCODE.name -> "OpenCode"
-                    AgentKind.CODEX.name -> "Codex"
-                    else -> "Not set"
-                }),
+                row(JarvisSettingsPage.AUTHORIZATIONS, I.Security, c.danger, "System Authorizations", "13 System Capabilities"),
+                row(JarvisSettingsPage.CONTACTS, I.Contacts, c.accentTeal, "Contacts & Quick Dial", "WhatsApp & Call Nicknames"),
+                row(JarvisSettingsPage.SETUP, I.Checklist, c.success, "Setup for Aura Voice"),
+                row(JarvisSettingsPage.WAKE, I.Hearing, c.accentTeal, "Waking Aura", if (hotword == "phrase") "Wake phrase" else "Button"),
                 row(JarvisSettingsPage.PERSONALITY, I.Face, c.accentPink, "Personality & you"),
-                // the setup checklist is only for a Jarvis that is turned on
-                if (enabled) row(JarvisSettingsPage.SETUP, I.Checklist, c.success, "Setup") else null
-            ),
-            // "chat only": nothing listens or speaks, so those pages are hidden
-            if (!voiceSide) emptyList() else listOf(
-                row(JarvisSettingsPage.WAKE, I.Hearing, c.accentTeal, "Waking Jarvis", if (hotword == "phrase") "Wake phrase" else "Button"),
-                row(JarvisSettingsPage.LISTEN, I.Mic, c.accentIndigo, "Listening & sending", if (autoSend) "Auto-send" else "Manual send"),
-                row(JarvisSettingsPage.VOICE, I.RecordVoiceOver, c.accentAlt, "Voice output", when {
-                    quiet -> "Quiet"
-                    engine == "deepgram" -> "Deepgram Aura"
-                    engine == "gemini" -> "Google Gemini"
-                    engine == "google_cloud" -> "Google Cloud"
-                    engine == "openai" -> "OpenAI"
-                    else -> "This device"
-                })
-            ),
-            listOf(
-                row(JarvisSettingsPage.TASKS, I.TaskAlt, c.warning, "Manager & tasks"),
-                row(JarvisSettingsPage.APPROVALS, I.VerifiedUser, c.danger, "Approvals", when (policy) {
-                    "auto_readonly" -> "Auto: read-only"
-                    "auto_except_risky" -> "Auto: not risky"
-                    "auto_all" -> "Auto: all"
-                    else -> "Ask each time"
-                }),
-                row(JarvisSettingsPage.SCREEN, I.Visibility, c.info, "Screen & look"),
-                row(JarvisSettingsPage.CHAT, I.ChatBubbleOutline, JarvisCyan, "Jarvis chat")
+                row(JarvisSettingsPage.SCREEN, I.Visibility, c.info, "Screen & look")
             )
-        ).filter { it.isNotEmpty() }.forEach { com.example.gemini.ui.settings.SettingsRowGroup(it, cardBg) }
+        ).forEach { com.example.gemini.ui.settings.SettingsRowGroup(it, cardBg) }
     }
 }
 
@@ -234,7 +163,7 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                 } else {
                     if (agent == null) {
                         JHint("Pick the agent Jarvis talks to first (Settings → Jarvis → Agent).")
-                    } else JCard(cardBg, cardBorder, "Setup for $agentTitle") {
+                    } else JCard(cardBg, cardBorder, "Setup for Aura Voice") {
                         val deviceId = remember(context) {
                             runCatching { android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "" }.getOrDefault("")
                         }
@@ -828,12 +757,12 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                 }
             }
             JarvisSettingsPage.MEMORY -> {
-                JCard(cardBg, cardBorder, "Persistent Memory (ChatGPT / Gemini style)") {
+                JCard(cardBg, cardBorder, "Persistent Memory") {
                     val memoryList by com.example.gemini.data.live.AuraMemoryManager.memories.collectAsState()
                     var newFact by remember { mutableStateOf("") }
 
                     Text(
-                        "Jarvis remembers your preferences, project stack, and personal facts across all chats and app restarts.",
+                        "Aura Voice remembers your preferences, project stack, and personal facts across all chats and app restarts.",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
@@ -920,6 +849,12 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                         }
                     }
                 }
+            }
+            JarvisSettingsPage.AUTHORIZATIONS -> {
+                com.example.gemini.ui.permissions.SystemAuthorizationsScreen(onBack = {})
+            }
+            JarvisSettingsPage.CONTACTS -> {
+                com.example.gemini.ui.contacts.ContactsScreen(onBack = {})
             }
         }
         Spacer(Modifier.height(24.dp))

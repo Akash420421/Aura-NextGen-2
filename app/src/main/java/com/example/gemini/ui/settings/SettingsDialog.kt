@@ -110,7 +110,9 @@ enum class SettingsSection(val title: String, val subtitle: String) {
     CODEX_PAGE("Codex", "Account, usage limits, permissions, MCP, server & install"),
     AGENTS("Agents", "Run Antigravity, Claude Code, OpenCode, Codex or several"),
     GLOBAL_CONTEXT("Global context", "What every chat is told about this app, and your own instructions"),
-    JARVIS("Jarvis", "Hands-free voice control of the whole app"),
+    JARVIS("Aura Voice", "Hands-free voice control of the whole app"),
+    JARVIS_PERMISSIONS("System Authorizations", "Permissions & Privacy Control"),
+    JARVIS_CONTACTS("Contacts & Quick Dial", "WhatsApp & Call contacts with custom nicknames"),
     JARVIS_AGENT("Jarvis · Agent", "Which agent and model Jarvis talks to"),
     JARVIS_PERSONALITY("Jarvis · Personality & you", "How Jarvis speaks, and what it should know about you"),
     JARVIS_SETUP("Jarvis · Setup", "The Jarvis MCP server, permissions and the microphone"),
@@ -139,6 +141,8 @@ enum class SettingsSection(val title: String, val subtitle: String) {
 
     /** The Jarvis section this page shows (Settings → Jarvis → …), or null. */
     val jarvisPage: com.example.gemini.ui.jarvis.JarvisSettingsPage? get() = when (this) {
+        JARVIS_PERMISSIONS -> com.example.gemini.ui.jarvis.JarvisSettingsPage.AUTHORIZATIONS
+        JARVIS_CONTACTS -> com.example.gemini.ui.jarvis.JarvisSettingsPage.CONTACTS
         JARVIS_AGENT -> com.example.gemini.ui.jarvis.JarvisSettingsPage.AGENT
         JARVIS_PERSONALITY -> com.example.gemini.ui.jarvis.JarvisSettingsPage.PERSONALITY
         JARVIS_SETUP -> com.example.gemini.ui.jarvis.JarvisSettingsPage.SETUP
@@ -632,6 +636,12 @@ fun SettingsDialog(
                         cardBg = cardBg,
                         cardBorder = cardBorder,
                         onOpen = { page -> currentSection = SettingsSection.entries.first { it.jarvisPage == page } }
+                    )
+                    SettingsSection.JARVIS_PERMISSIONS -> com.example.gemini.ui.permissions.SystemAuthorizationsScreen(
+                        onBack = { currentSection = SettingsSection.JARVIS }
+                    )
+                    SettingsSection.JARVIS_CONTACTS -> com.example.gemini.ui.contacts.ContactsScreen(
+                        onBack = { currentSection = SettingsSection.JARVIS }
                     )
                     SettingsSection.JARVIS_AGENT, SettingsSection.JARVIS_PERSONALITY, SettingsSection.JARVIS_SETUP,
                     SettingsSection.JARVIS_WAKE, SettingsSection.JARVIS_LISTEN, SettingsSection.JARVIS_VOICE,

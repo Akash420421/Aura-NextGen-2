@@ -46,6 +46,7 @@ class AntiGemApplication : Application(), coil.ImageLoaderFactory {
         // Reconnects adb when Wireless debugging turns back on (it gets a new port every time)
         AdbConnectManager.init(this)
         com.example.gemini.data.ssh.SshSessionFactory.init(this)
+        com.example.gemini.data.automation.AuraContactsManager.init(this)
         // the cloud project new Antigravity chats start in (Remote Agents), before the first chat is created
         com.example.gemini.data.agent.agy.AgyCloud.init(this)
         // Forks build with their own key, so only official release APKs report real usage.

@@ -1420,6 +1420,7 @@ fun ChatScreen(
                         ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
                     }
                     conversationBackStack.clear()
+                    auraHomeVoice = false
                     viewModel.selectConversation(id)
                     scope.launch { drawerState.close() }
                 },
@@ -1429,6 +1430,7 @@ fun ChatScreen(
                         ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
                     }
                     conversationBackStack.clear()
+                    auraHomeVoice = false
                     viewModel.startNewChat()
                     scope.launch { drawerState.close() }
                 },
@@ -1490,7 +1492,7 @@ fun ChatScreen(
                 },
                 onOpenVoiceSettings = {
                     scope.launch { drawerState.close() }
-                    requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS_VOICE
+                    requestedSettingsSection = com.example.gemini.ui.settings.SettingsSection.JARVIS
                     showSettingsDialog = true
                 },
                 // the sidebar stays open: the picker floats over it so the new look shows on the sidebar and the chat
@@ -2068,7 +2070,7 @@ fun ChatScreen(
                     val isExistingChat = messages.isEmpty() && isExistingConversation && isLoadingConversation
                     Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, error=$conversationError, isServerStopped=$isServerStopped")
 
-                    if (auraHomeVoice && messages.isEmpty()) {
+                    if (auraHomeVoice) {
                         com.example.gemini.ui.home.AuraVoiceWelcome(
                             userName = agyAuthInfo.displayName,
                             onActionTap = onActionTapAuraJarvis,
