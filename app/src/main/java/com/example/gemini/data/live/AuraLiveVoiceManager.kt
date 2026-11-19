@@ -98,8 +98,9 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             JarvisPreferences.ttsApiKey.value.trim()
         }
         if (apiKey.isBlank()) {
-            _statusText.value = "Please enter Gemini API Key in Settings"
+            _statusText.value = "Enter Gemini API Key in Settings"
             Log.e(TAG, "No API key configured in JarvisPreferences")
+            Toast.makeText(context, "Please enter your Gemini API Key in Settings → Jarvis → Live API", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -212,6 +213,21 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- Speak warmly, confidently, and keep your replies brief and direct (1-2 crisp sentences).\n")
         sb.append("- Ignore ambient background noise or unrelated room chatter completely.\n\n")
 
+        sb.append("### HYBRID VOICE & AGENT ARCHITECTURE:\n")
+        sb.append("1. NORMAL CONVERSATIONS (HANDLED BY YOU DIRECTLY IN VOICE):\n")
+        sb.append("   - Casual talk, greetings, general questions, explanations, discussions, advice, and knowledge queries:\n")
+        sb.append("   - You MUST answer IMMEDIATELY and DIRECTLY in voice (Hindi/Hinglish). Do NOT delegate normal conversations.\n\n")
+        sb.append("2. COMPLEX TASKS & AGENT INSTRUCTIONS (DELEGATE TO APP AGENT):\n")
+        sb.append("   - Whenever the user asks you to:\n")
+        sb.append("     * Build or create an app, website, UI, or coding project\n")
+        sb.append("     * Host a local server (e.g. localhost:8080, python3 http server)\n")
+        sb.append("     * Execute terminal commands, run bash scripts, or project builds\n")
+        sb.append("     * Control chats, run complex missions, or multi-step agent tasks\n")
+        sb.append("   - You MUST IMMEDIATELY call `delegate_task_to_app_agent(prompt=...)`!\n")
+        sb.append("   - Say a very brief acknowledgment before or during delegation (e.g. \"Haan bilkul sir, main abhi ye shuru karta hoon.\").\n")
+        sb.append("   - CRITICAL SPOKEN READ-BACK RULE: When `delegate_task_to_app_agent` finishes and returns the result, YOU MUST speak the outcome back to the user in voice in Hindi/Hinglish in FIRST PERSON as if YOU did the work yourself! (e.g. \"Maine calculator app bana diya hai aur index.html save kar di hai. Localhost:8080 pe server bhi start kar diya hai!\").\n")
+        sb.append("   - NEVER say: \"Antigravity ka response aaya hai\", \"App ne ye reply kiya\", or \"Chat mein ye likha hai\". You ARE Jarvis / Aura, the app is your body. Speak with complete personal ownership!\n\n")
+
         sb.append("### ZERO-HALLUCINATION ACTION EXECUTION:\n")
         sb.append("- When asked to open an app -> ALWAYS call open_app(app_name).\n")
         sb.append("- When asked to open a website -> ALWAYS call open_website(urls=[\"...\"]).\n")
@@ -315,6 +331,24 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
         return try {
             when (name) {
+                "delegate_task_to_app_agent", "execute_in_app_chat" -> {
+                    val prompt = args.optString("prompt", "").ifBlank { args.optString("task", "") }.trim()
+                    if (prompt.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "Task prompt cannot be empty.")
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            _phase.value = Phase.THINKING
+                            _statusText.value = "Executing in chat..."
+                        }
+                        val reply = ChatContextBridge.executeTaskInChat(prompt)
+                        JSONObject().apply {
+                            put("status", "success")
+                            put("result", reply)
+                            put("message", "Task executed successfully by the agent. Details: $reply")
+                        }
+                    }
+                }
+
                 "open_app" -> {
                     val appName = args.optString("app_name", "").ifBlank { args.optString("name", "") }.trim()
                     val appNumber = if (args.has("app_number")) args.optInt("app_number") else null

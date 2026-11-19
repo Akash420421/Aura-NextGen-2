@@ -478,13 +478,7 @@ fun ChatScreen(
 
     val auraJarvisMicPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            if (!com.example.gemini.data.jarvis.JarvisPreferences.enabled.value) {
-                com.example.gemini.data.jarvis.JarvisPreferences.enabled.set(true)
-            }
-            if (!com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.value) {
-                com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.set(true)
-            }
-            com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+            com.example.gemini.data.live.AuraLiveVoiceManager.toggleSession(context)
         } else {
             com.example.gemini.ui.components.AppToastHelper.showToast(
                 "Aura voice needs microphone access.", com.example.gemini.ui.components.ChatToastType.ERROR
@@ -492,16 +486,13 @@ fun ChatScreen(
         }
     }
     val startAuraJarvis: () -> Unit = {
-        if (!com.example.gemini.data.jarvis.JarvisController.hasMic()) {
+        val hasMic = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!hasMic) {
             auraJarvisMicPermission.launch(android.Manifest.permission.RECORD_AUDIO)
         } else {
-            if (!com.example.gemini.data.jarvis.JarvisPreferences.enabled.value) {
-                com.example.gemini.data.jarvis.JarvisPreferences.enabled.set(true)
-            }
-            if (!com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.value) {
-                com.example.gemini.data.jarvis.JarvisPreferences.voiceAssistant.set(true)
-            }
-            com.example.gemini.data.jarvis.JarvisController.onMicPressed()
+            com.example.gemini.data.live.AuraLiveVoiceManager.toggleSession(context)
         }
     }
 
@@ -515,11 +506,14 @@ fun ChatScreen(
                     val projection = projectionManager.getMediaProjection(result.resultCode, result.data!!)
                     if (projection != null) {
                         val metrics = context.resources.displayMetrics
+                        if (!com.example.gemini.data.live.AuraLiveVoiceManager.isLive()) {
+                            com.example.gemini.data.live.AuraLiveVoiceManager.startSession(context)
+                        }
                         val started = com.example.gemini.data.vision.ScreenCaptureManager.getInstance().startCapture(projection, metrics) { jpeg ->
                             com.example.gemini.data.live.AuraLiveVoiceManager.sendScreenFrame(jpeg)
                         }
                         if (started) {
-                            Toast.makeText(context, "Screen sharing started", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Screen sharing live. Jarvis is viewing your screen.", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(context, "Could not start screen sharing", Toast.LENGTH_SHORT).show()
                         }

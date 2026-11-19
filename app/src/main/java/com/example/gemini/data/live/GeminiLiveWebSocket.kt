@@ -236,6 +236,22 @@ class GeminiLiveWebSocket(
 
     private fun buildToolDeclarations(): JSONArray {
         return JSONArray().apply {
+            // 0. delegate_task_to_app_agent (Primary tool for all complex project, app, coding, hosting, and terminal tasks)
+            put(JSONObject().apply {
+                put("name", "delegate_task_to_app_agent")
+                put("description", "Delegates a complex task, coding project, app creation, website creation, local server hosting (e.g. localhost:8080), mission, or terminal workflow to the Aura app's internal agent (Antigravity/Claude). Use this whenever the user asks to build, create, code, host, or execute tasks. Provide the complete detailed instructions as 'prompt'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("prompt", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The complete task prompt/instructions to inject into the app chat for the agent to execute.")
+                        })
+                    })
+                    put("required", JSONArray().put("prompt"))
+                })
+            })
+
             // 1. open_app
             put(JSONObject().apply {
                 put("name", "open_app")

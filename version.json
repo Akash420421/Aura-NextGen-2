@@ -1,13 +1,14 @@
 {
-  "version_code": 236,
-  "version_name": "2.3.6",
+  "version_code": 237,
+  "version_name": "2.3.7",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.6 — Live Model Selection & Auto-Detect (Part 7 Parity)",
-    "Added Live Model selector chips for Google Gemini in Voice Output (Gemini 3.8 Live, Gemini 3.1 Flash, Gemini 3.1 Flash Agent)",
-    "Added Auto-Detect Models button to query Google AI Studio and fetch active models for the user's API key",
-    "Switched Gemini Speech to WebSocket Live Audio Synthesis for full compatibility with AI Studio keys",
-    "Automated cleanup of stale 1.5 model references and Deepgram key sanitization to prevent 401/404"
+    "Aura AI v2.3.7 — Hybrid Gemini Live Voice Mode & In-App Task Delegation (Part 7 Parity)",
+    "Real-time duplex live voice mode powered directly by Google Gemini Live API",
+    "Hybrid task delegation: Normal conversations answered instantly in voice; complex tasks (apps, websites, local server hosting, terminal workflows) injected into app chat",
+    "Natural first-person spoken read-back: Jarvis speaks completed task results in conversational Hindi/Hinglish as its own",
+    "Screen sharing parity with Part 7: Real-time 768px MediaProjection streaming directly to Gemini Live",
+    "Fixed Gemini Live TTS handshake protocol to eliminate speech synthesis timeouts"
   ],
   "is_critical": false
 }

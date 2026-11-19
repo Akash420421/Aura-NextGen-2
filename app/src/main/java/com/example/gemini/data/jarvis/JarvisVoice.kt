@@ -408,16 +408,16 @@ object JarvisVoice {
         var ws: WebSocket? = null
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: okhttp3.Response) {
-                // 1. Send BidiSetup
+                // 1. Send BidiSetup with snake_case specification
                 val setup = JSONObject().apply {
                     put("setup", JSONObject().apply {
                         put("model", cleanModel)
-                        put("generationConfig", JSONObject().apply {
-                            put("responseModalities", JSONArray().put("AUDIO"))
-                            put("speechConfig", JSONObject().apply {
-                                put("voiceConfig", JSONObject().apply {
-                                    put("prebuiltVoiceConfig", JSONObject().apply {
-                                        put("voiceName", cleanVoice)
+                        put("generation_config", JSONObject().apply {
+                            put("response_modalities", JSONArray().put("AUDIO"))
+                            put("speech_config", JSONObject().apply {
+                                put("voice_config", JSONObject().apply {
+                                    put("prebuilt_voice_config", JSONObject().apply {
+                                        put("voice_name", cleanVoice)
                                     })
                                 })
                             })
@@ -425,32 +425,37 @@ object JarvisVoice {
                     })
                 }
                 webSocket.send(setup.toString())
-
-                // 2. Send client text to be read out loud
-                val content = JSONObject().apply {
-                    put("clientContent", JSONObject().apply {
-                        put("turns", JSONArray().put(JSONObject().apply {
-                            put("role", "user")
-                            put("parts", JSONArray().put(JSONObject().apply {
-                                put("text", "Read this aloud clearly, naturally and expressively:\n\n$text")
-                            }))
-                        }))
-                        put("turnComplete", true)
-                    })
-                }
-                webSocket.send(content.toString())
             }
 
             override fun onMessage(webSocket: WebSocket, textMsg: String) {
                 try {
                     val root = JSONObject(textMsg)
-                    val serverContent = root.optJSONObject("serverContent")
+
+                    // Send text to read aloud only AFTER setup handshake is completed
+                    if (root.has("setupComplete") || root.has("setup_complete")) {
+                        val content = JSONObject().apply {
+                            put("client_content", JSONObject().apply {
+                                put("turns", JSONArray().put(JSONObject().apply {
+                                    put("role", "user")
+                                    put("parts", JSONArray().put(JSONObject().apply {
+                                        put("text", "Read this aloud clearly and expressively:\n\n$text")
+                                    }))
+                                }))
+                                put("turn_complete", true)
+                            })
+                        }
+                        webSocket.send(content.toString())
+                        return
+                    }
+
+                    val serverContent = root.optJSONObject("serverContent") ?: root.optJSONObject("server_content")
                     if (serverContent != null) {
-                        val modelTurn = serverContent.optJSONObject("modelTurn")
+                        val modelTurn = serverContent.optJSONObject("modelTurn") ?: serverContent.optJSONObject("model_turn")
                         val parts = modelTurn?.optJSONArray("parts")
                         if (parts != null) {
                             for (i in 0 until parts.length()) {
-                                val inlineData = parts.getJSONObject(i).optJSONObject("inlineData")
+                                val pObj = parts.getJSONObject(i)
+                                val inlineData = pObj.optJSONObject("inlineData") ?: pObj.optJSONObject("inline_data")
                                 val base64Data = inlineData?.optString("data")
                                 if (!base64Data.isNullOrBlank()) {
                                     val bytes = Base64.decode(base64Data, Base64.DEFAULT)
@@ -458,7 +463,9 @@ object JarvisVoice {
                                 }
                             }
                         }
-                        if (serverContent.optBoolean("turnComplete", false)) {
+                        val turnDone = serverContent.optBoolean("turnComplete", false) ||
+                                       serverContent.optBoolean("turn_complete", false)
+                        if (turnDone) {
                             webSocket.close(1000, "Done")
                             val raw = synchronized(pcmOut) { pcmOut.toByteArray() }
                             deferred.complete(if (raw.isNotEmpty()) wrapPcmToWav(raw, 24000, 1) else null)

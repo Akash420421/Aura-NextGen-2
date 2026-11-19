@@ -5,9 +5,12 @@ import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.Conversation
 import com.example.gemini.domain.model.MessageRole
 import com.example.gemini.ui.chat.ChatViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -78,6 +81,61 @@ object ChatContextBridge {
             "New chat session created on screen."
         } catch (e: Exception) {
             "Failed to start new chat: ${e.message}"
+        }
+    }
+
+    /**
+     * Executes a complex user task by injecting it directly into the app's active chat session
+     * (triggering Antigravity / Claude / Codex agent with all native tools and bash capabilities).
+     * Waits for the agent to finish execution, then returns the assistant's final response text.
+     */
+    suspend fun executeTaskInChat(prompt: String, timeoutMs: Long = 120_000L): String = withContext(Dispatchers.Main) {
+        val vm = viewModel ?: return@withContext "Error: App chat is not connected. Open the chat screen first."
+        if (prompt.isBlank()) return@withContext "Error: Prompt cannot be empty."
+
+        try {
+            ensureConversationExists(vm)
+            val initialMsgCount = vm.messages.value.size
+            Log.i(TAG, "Injecting task into app chat (initialMsgCount=$initialMsgCount): $prompt")
+
+            // Send the prompt into the active chat (this triggers Antigravity/Claude agent)
+            vm.sendMessage(prompt)
+
+            // 1. Wait for streaming to start (or message count to increase)
+            val startWait = System.currentTimeMillis()
+            while (System.currentTimeMillis() - startWait < 5000L) {
+                if (vm.isStreaming.value || vm.messages.value.size > initialMsgCount) {
+                    break
+                }
+                delay(150L)
+            }
+
+            // 2. Wait for completion (isStreaming becomes false AND we have an assistant message)
+            val execWait = System.currentTimeMillis()
+            var latestAssistantContent = ""
+            while (System.currentTimeMillis() - execWait < timeoutMs) {
+                val currentMsgs = vm.messages.value
+                val lastMsg = currentMsgs.lastOrNull()
+                if (lastMsg != null && lastMsg.role == MessageRole.ASSISTANT && lastMsg.content.isNotBlank()) {
+                    latestAssistantContent = lastMsg.content
+                }
+
+                if (!vm.isStreaming.value && latestAssistantContent.isNotBlank() && currentMsgs.size > initialMsgCount) {
+                    delay(400L) // Settle final tokens
+                    val finalMsg = vm.messages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content ?: latestAssistantContent
+                    Log.i(TAG, "Task completed in chat: ${finalMsg.take(120)}...")
+                    return@withContext finalMsg
+                }
+                delay(300L)
+            }
+
+            if (latestAssistantContent.isNotBlank()) {
+                return@withContext latestAssistantContent
+            }
+            return@withContext "Task initiated in chat. The agent is working on it."
+        } catch (e: Exception) {
+            Log.e(TAG, "Error executing task in chat: ${e.message}", e)
+            return@withContext "Error executing task: ${e.message}"
         }
     }
 
