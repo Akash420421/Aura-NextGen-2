@@ -15,8 +15,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.annotation.RequiresApi
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.*
 import java.util.Locale
 import kotlin.coroutines.resume
 
@@ -306,10 +305,16 @@ class AutomationAccessibilityService : AccessibilityService() {
 
             // Step 3: ADB keyevent 66 fallback if available
             if (!sent) {
-                val adbDev = com.example.gemini.data.adb.AdbConnectManager.ensureConnected()
-                if (adbDev != null) {
-                    com.example.gemini.data.adb.AdbConnectManager.deviceShell(adbDev, "input keyevent 66")
-                    Log.i(TAG, "Dispatched ADB keyevent 66 (ENTER) for WhatsApp send.")
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val adbDev = com.example.gemini.data.adb.AdbConnectManager.ensureConnected()
+                        if (adbDev != null) {
+                            com.example.gemini.data.adb.AdbConnectManager.deviceShell(adbDev, "input keyevent 66")
+                            Log.i(TAG, "Dispatched ADB keyevent 66 (ENTER) for WhatsApp send.")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "ADB send fallback failed", e)
+                    }
                 }
             }
             // Finished. NO BLIND RETRIES so mic recording button is never triggered.
