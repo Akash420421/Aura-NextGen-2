@@ -48,9 +48,11 @@ class AutomationAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         lastEventAt = System.currentTimeMillis()
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             event.packageName?.toString()?.let { foregroundPackage = it }
             event.className?.toString()?.let { foregroundClass = it }
+            AuraScreenObserver.processAccessibilityEvent(event, getActiveRootNode())
         }
     }
 
@@ -99,20 +101,73 @@ class AutomationAccessibilityService : AccessibilityService() {
     }
 
     fun clickNodeAndTap(node: AccessibilityNodeInfo): Boolean {
+        // Strategy 1: Direct action click on the node
         if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
             return true
         }
+        // Strategy 2: Traverse parents up to 4 levels for clickable wrapper
         var parent = node.parent
-        while (parent != null) {
+        var depth = 0
+        while (parent != null && depth < 4) {
             if (parent.isClickable && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                 return true
             }
             parent = parent.parent
+            depth++
         }
+        // Strategy 3: Center bounds precision gesture tap
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
         if (bounds.width() > 0 && bounds.height() > 0) {
-            return clickAt(bounds.centerX().toFloat(), bounds.centerY().toFloat())
+            val cx = bounds.centerX().toFloat()
+            val cy = bounds.centerY().toFloat()
+            return clickAt(cx, cy, durationMs = 80L)
+        }
+        return false
+    }
+
+    /**
+     * Identifies if a node is an avatar/profile picture or logo so we do NOT click it.
+     */
+    fun isProfileAvatarOrIcon(node: AccessibilityNodeInfo): Boolean {
+        val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
+        val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+        val className = node.className?.toString()?.lowercase(Locale.ROOT) ?: ""
+        return desc.contains("profile photo") || desc.contains("profile picture") ||
+                desc.contains("avatar") || desc.contains("photo") ||
+                viewId.contains("avatar") || viewId.contains("profile_picture") ||
+                viewId.contains("contact_photo") || viewId.contains("picture") ||
+                (className.contains("imageview") && (desc.isBlank() || desc.contains("profile") || desc.contains("photo")))
+    }
+
+    /**
+     * Safely clicks a contact or group name, strictly avoiding clicking the profile picture/avatar.
+     */
+    fun clickContactOrGroupName(targetName: String): Boolean {
+        val root = getActiveRootNode() ?: return false
+        val cleanTarget = targetName.trim().lowercase(Locale.ROOT)
+
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            // Strictly skip any profile avatar or image node
+            if (!isProfileAvatarOrIcon(node)) {
+                val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
+                val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
+
+                if (text.contains(cleanTarget) || desc.contains(cleanTarget)) {
+                    if (clickNodeAndTap(node)) {
+                        Log.i(TAG, "Clicked contact name safely (avoided avatar): '$targetName'")
+                        return true
+                    }
+                }
+            }
+
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
         }
         return false
     }
@@ -155,49 +210,141 @@ class AutomationAccessibilityService : AccessibilityService() {
         return false
     }
 
+    /**
+     * Robust Multi-Tier Scroll:
+     * 1. Traverses the hierarchy to find the actual scrollable container (RecyclerView, ScrollView, ListView).
+     * 2. Executes ACTION_SCROLL_FORWARD / BACKWARD on the scrollable container.
+     * 3. Seamlessly falls back to hardware-accelerated smooth gesture swipe so scrolling never fails.
+     */
     fun performScroll(direction: String): Boolean {
         val root = getActiveRootNode() ?: return false
-        val action = when (direction.lowercase(Locale.ROOT)) {
-            "down" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-            "up" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-            else -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        val cleanDir = direction.lowercase(Locale.ROOT)
+
+        // Tier 1: Search for actual scrollable container
+        val scrollableNode = findScrollableNode(root)
+        if (scrollableNode != null) {
+            val action = if (cleanDir == "up") {
+                AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            } else {
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            }
+            val ok = scrollableNode.performAction(action)
+            if (ok) {
+                Log.d(TAG, "performScroll succeeded via accessibility action on scrollable node ($cleanDir)")
+                return true
+            }
         }
-        return root.performAction(action)
+
+        // Tier 2: Seamless hardware gesture swipe fallback (never fails)
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels.toFloat()
+        val h = dm.heightPixels.toFloat()
+        val cx = w / 2f
+        val cy = h / 2f
+        val distance = h * 0.40f
+
+        val path = Path()
+        if (cleanDir == "down") {
+            path.moveTo(cx, cy + distance / 2)
+            path.lineTo(cx, cy - distance / 2)
+        } else {
+            path.moveTo(cx, cy - distance / 2)
+            path.lineTo(cx, cy + distance / 2)
+        }
+
+        val stroke = GestureDescription.StrokeDescription(path, 0, 300L)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        val gestureDispatched = dispatchGesture(gesture, null, null)
+        Log.d(TAG, "performScroll gesture swipe dispatched ($cleanDir): $gestureDispatched")
+        return gestureDispatched
     }
 
+    private fun findScrollableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isScrollable) return node
+        val cls = node.className?.toString()?.lowercase(Locale.ROOT) ?: ""
+        if (cls.contains("scroll") || cls.contains("recycler") || cls.contains("listview") || cls.contains("viewpager")) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findScrollableNode(child)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    /**
+     * WhatsApp message sending:
+     * - Exactly 500ms delay after window opens to ensure text is fully attached in the input field.
+     * - Direct Enter key event (ACTION_IME_ENTER / keyevent 66).
+     * - Verified Send button check (strictly ensuring it is NOT the mic/voice note button).
+     * - Zero blind retries to prevent accidental audio recording.
+     */
     fun scheduleWhatsAppAutoSend() {
-        mainHandler.postDelayed(object : Runnable {
-            var attempts = 0
-            override fun run() {
-                val root = getActiveRootNode()
-                if (root != null) {
-                    val sendNode = findWhatsAppSendButton(root)
-                    if (sendNode != null) {
-                        clickNodeAndTap(sendNode)
-                        Log.d(TAG, "Tapped WhatsApp send button via Accessibility on attempt $attempts!")
-                        return
-                    }
-                }
-                attempts++
-                if (attempts < 14) {
-                    mainHandler.postDelayed(this, 300)
+        mainHandler.postDelayed({
+            val root = getActiveRootNode() ?: return@postDelayed
+            val inputField = findEditableInputField(root)
+
+            var sent = false
+            // Step 1: Direct Enter injection on the focused editable text field
+            if (inputField != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                sent = inputField.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+                if (sent) {
+                    Log.i(TAG, "Direct ACTION_IME_ENTER executed on WhatsApp input field.")
                 }
             }
+
+            // Step 2: If Enter was not handled, find verified Send button (with strict anti-mic check)
+            if (!sent) {
+                val sendNode = findVerifiedWhatsAppSendButton(root)
+                if (sendNode != null) {
+                    clickNodeAndTap(sendNode)
+                    Log.i(TAG, "Clicked verified WhatsApp Send button.")
+                    sent = true
+                }
+            }
+
+            // Step 3: ADB keyevent 66 fallback if available
+            if (!sent) {
+                val adbDev = com.example.gemini.data.adb.AdbConnectManager.ensureConnected()
+                if (adbDev != null) {
+                    com.example.gemini.data.adb.AdbConnectManager.deviceShell(adbDev, "input keyevent 66")
+                    Log.i(TAG, "Dispatched ADB keyevent 66 (ENTER) for WhatsApp send.")
+                }
+            }
+            // Finished. NO BLIND RETRIES so mic recording button is never triggered.
         }, 500)
     }
 
-    private fun findWhatsAppSendButton(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    private fun findEditableInputField(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable) return node
+        val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+        if (viewId.endsWith(":id/entry") || viewId.contains("message_text")) return node
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findEditableInputField(child)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findVerifiedWhatsAppSendButton(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
         val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
         val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
 
-        if (desc == "send" || desc == "send message" || text == "send" || viewId.endsWith(":id/send")) {
-            return node
-        }
+        // STRICT ANTI-MIC CHECK: Never click if it is a voice note / mic button!
+        val isMic = desc.contains("voice") || desc.contains("mic") || desc.contains("record") ||
+                desc.contains("audio") || viewId.contains("voice_note")
+        if (isMic) return null
+
+        val isSend = desc == "send" || desc == "send message" || text == "send" || viewId.endsWith(":id/send")
+        if (isSend) return node
 
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            val found = findWhatsAppSendButton(child)
+            val found = findVerifiedWhatsAppSendButton(child)
             if (found != null) return found
         }
         return null

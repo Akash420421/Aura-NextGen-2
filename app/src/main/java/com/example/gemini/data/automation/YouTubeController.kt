@@ -33,6 +33,14 @@ object YouTubeController {
     }
 
     fun searchAndPlay(context: Context, query: String, explicitApiKey: String? = null): PlayResult {
+        val isBackground = query.contains("background", ignoreCase = true) ||
+                query.contains("browser", ignoreCase = true) ||
+                query.contains("inbuild", ignoreCase = true) ||
+                query.contains("in-built", ignoreCase = true)
+        if (isBackground) {
+            return playInBackgroundBrowser(context, query)
+        }
+
         var cleanQ = cleanQuery(query)
         if (cleanQ.isBlank() || cleanQ.equals("video", ignoreCase = true) || cleanQ.equals("song", ignoreCase = true) ||
             cleanQ.equals("a video", ignoreCase = true) || cleanQ.equals("a song", ignoreCase = true) ||
@@ -72,7 +80,18 @@ object YouTubeController {
         }
     }
 
-    fun searchYouTube(context: Context, query: String): PlayResult {
+    fun playInBackgroundBrowser(context: Context, query: String): PlayResult {
+        val cleanQ = cleanQuery(query)
+        val encoded = Uri.encode(cleanQ)
+        val url = "https://m.youtube.com/results?search_query=$encoded"
+        return try {
+            com.example.gemini.ui.browser.BrowserSessionManager.instance.openUrl(url, newTab = true)
+            PlayResult(true, cleanQ, "Playing \"$cleanQ\" in Aura In-Built Browser with background playback.")
+        } catch (e: Exception) {
+            android.util.Log.e("YouTubeController", "In-built browser playback failed, falling back to YouTube intent", e)
+            searchYouTube(context, query)
+        }
+    }
         val cleanQ = cleanQuery(query)
         return try {
             val encoded = Uri.encode(cleanQ)

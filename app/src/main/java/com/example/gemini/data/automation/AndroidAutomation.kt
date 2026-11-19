@@ -546,16 +546,19 @@ object AndroidAutomation {
 
         for (root in roots) {
             val systemMatches = root.findAccessibilityNodeInfosByText(target)
-            val visibleDirect = systemMatches.firstOrNull { it.isVisibleToUser }
+            val visibleDirect = systemMatches.firstOrNull { it.isVisibleToUser && !svc.isProfileAvatarOrIcon(it) }
             if (visibleDirect != null) return visibleDirect
 
-            val found = searchNodeRecursively(root, lowerTarget)
+            val found = searchNodeRecursively(svc, root, lowerTarget)
             if (found != null) return found
         }
         return null
     }
 
-    private fun searchNodeRecursively(node: AccessibilityNodeInfo, target: String): AccessibilityNodeInfo? {
+    private fun searchNodeRecursively(svc: AutomationAccessibilityService, node: AccessibilityNodeInfo, target: String): AccessibilityNodeInfo? {
+        // Strictly avoid profile pictures, avatars, and logos when selecting contacts or groups
+        if (svc.isProfileAvatarOrIcon(node)) return null
+
         val nodeText = node.text?.toString()?.lowercase() ?: ""
         val nodeDesc = node.contentDescription?.toString()?.lowercase() ?: ""
         if ((nodeText.contains(target) || nodeDesc.contains(target)) && node.isVisibleToUser) {
@@ -563,7 +566,7 @@ object AndroidAutomation {
         }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            val found = searchNodeRecursively(child, target)
+            val found = searchNodeRecursively(svc, child, target)
             if (found != null) return found
         }
         return null
@@ -585,6 +588,11 @@ object AndroidAutomation {
         val desc = node.contentDescription?.toString()?.lowercase() ?: ""
         val text = node.text?.toString()?.lowercase() ?: ""
         val id = node.viewIdResourceName?.lowercase() ?: ""
+
+        // Anti-Mic Guard: never treat voice recording / mic button as Send!
+        val isMic = desc.contains("voice") || desc.contains("mic") || desc.contains("record") || id.contains("voice_note")
+        if (isMic) return null
+
         if ((desc == "send" || desc == "send message" || text == "send" || id.endsWith(":id/send")) && node.isVisibleToUser) {
             return node
         }
@@ -651,6 +659,7 @@ object AndroidAutomation {
         if (!ok) return error("The field didn't accept text. Try tapping it first, or android_adb_shell with `input text`.")
         var note = ""
         if (args.optBoolean("submit")) {
+            delay(500) // Ensure text is completely attached before submitting
             val submitted = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 target.performAction(AccessibilityAction.ACTION_IME_ENTER.id)
             if (!submitted) {
@@ -664,7 +673,7 @@ object AndroidAutomation {
                     note = " Text entered."
                 }
             } else {
-                note = " Submitted."
+                note = " Submitted via Enter."
             }
         }
         svc.awaitIdle()
@@ -677,17 +686,36 @@ object AndroidAutomation {
         if (id != null) {
             node ?: return staleElement(id)
             val scrollable = generateSequence(node) { it.parent }.firstOrNull { it.isScrollable }
-                ?: return error("$id isn't inside anything scrollable. Omit element_id to swipe instead.")
-            val specific = when (direction) {
-                "up" -> AccessibilityAction.ACTION_SCROLL_UP
-                "down" -> AccessibilityAction.ACTION_SCROLL_DOWN
-                "left" -> AccessibilityAction.ACTION_SCROLL_LEFT
-                else -> AccessibilityAction.ACTION_SCROLL_RIGHT
+            if (scrollable != null) {
+                val specific = when (direction) {
+                    "up" -> AccessibilityAction.ACTION_SCROLL_UP
+                    "down" -> AccessibilityAction.ACTION_SCROLL_DOWN
+                    "left" -> AccessibilityAction.ACTION_SCROLL_LEFT
+                    else -> AccessibilityAction.ACTION_SCROLL_RIGHT
+                }
+                val generic = if (direction == "down" || direction == "right") AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                val ok = scrollable.performAction(specific.id) || scrollable.performAction(generic)
+                if (ok) {
+                    svc.awaitIdle()
+                    return text("Scrolled $direction.")
+                }
             }
-            val generic = if (direction == "down" || direction == "right") AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-            val ok = scrollable.performAction(specific.id) || scrollable.performAction(generic)
-            svc.awaitIdle()
-            return if (ok) text("Scrolled $direction.") else error("It can't scroll $direction any further.")
+            // Fallback: swipe over the node bounds if direct action didn't scroll
+            val r = Rect().also { node.getBoundsInScreen(it) }
+            val ncx = r.exactCenterX()
+            val ncy = r.exactCenterY()
+            val span = (r.height() * 0.4f).coerceAtLeast(150f)
+            val (ndx, ndy) = when (direction) {
+                "down" -> 0f to -span
+                "up" -> 0f to span
+                "right" -> -span to 0f
+                else -> span to 0f
+            }
+            val nodePath = Path().apply { moveTo(ncx - ndx, ncy - ndy); lineTo(ncx + ndx, ncy + ndy) }
+            if (svc.gesture(nodePath, 350)) {
+                svc.awaitIdle()
+                return text("Scrolled $direction.")
+            }
         }
         val (w, h) = screenSize(context)
         val d = args.optDouble("distance", 0.5).coerceIn(0.1, 0.9).toFloat()
