@@ -92,6 +92,8 @@ object YouTubeController {
             searchYouTube(context, query)
         }
     }
+
+    fun searchYouTube(context: Context, query: String): PlayResult {
         val cleanQ = cleanQuery(query)
         return try {
             val encoded = Uri.encode(cleanQ)
