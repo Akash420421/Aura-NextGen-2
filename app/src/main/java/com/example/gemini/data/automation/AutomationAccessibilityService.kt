@@ -19,6 +19,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 import kotlin.coroutines.resume
 
@@ -46,8 +49,8 @@ class AutomationAccessibilityService : AccessibilityService() {
         }
 
         data class UiChangeSnapshot(val revision: Long = 0L, val timestamp: Long = 0L)
-        private val _uiChanges = kotlinx.coroutines.flow.MutableStateFlow(UiChangeSnapshot())
-        val uiChanges: kotlinx.coroutines.flow.StateFlow<UiChangeSnapshot> = _uiChanges.kotlinx.coroutines.flow.asStateFlow()
+        private val _uiChanges = MutableStateFlow(UiChangeSnapshot())
+        val uiChanges: StateFlow<UiChangeSnapshot> = _uiChanges.asStateFlow()
 
         fun recordUiEvent() {
             _uiChanges.value = UiChangeSnapshot(_uiChanges.value.revision + 1, System.currentTimeMillis())

@@ -450,7 +450,7 @@ class VisualTaskOrchestrator(
 
     private suspend fun dispatchImmediateScreenFrame() {
         try {
-            val snapshot = AutomationAccessibilityService.captureScreenJpeg(75)
+            val snapshot = screenCaptureManager.getLatestJpegBytes()
                 ?: screenCaptureManager.captureSnapshotJpeg(70)
             if (snapshot != null) {
                 AuraLiveVoiceManager.sendImmediateVideoFrame(snapshot)
