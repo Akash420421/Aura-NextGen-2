@@ -1,15 +1,15 @@
 {
-  "version_code": 239,
-  "version_name": "2.3.9",
+  "version_code": 240,
+  "version_name": "2.4.0",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.3.9 — Smooth Typewriter Voice, Mute Lifecycles, Voice Drawer Category & Draggable Jarvis Bot",
-    "Typewriter Full-Line Subtitles: Assistant spoken responses reveal character-by-character as a smooth readable line above the orb",
-    "Silent Background Execution & Capability Protection: AI explains capabilities naturally without bragging about new chats, and never accidentally triggers tasks without explicit command",
-    "Voice Category in Drawer: New 'Voice' filter chip in navigation drawer displays all ongoing and past voice conversations",
-    "Voice Chat Navigation Tools: Open active voice chat ('hamari chat kholo') or previous voice chat ('pichhli chat kholo') directly on screen",
-    "5 Clear Voice States & Mute Control: Connecting, Listening, Working, Speaking, Muted. Single tap toggles Mute/Unmute while keeping session alive; Double tap stops session",
-    "Draggable Mini Jarvis Bot: The floating robot badge above the composer can now be freely dragged anywhere on screen"
+    "Aura AI v2.4.0 — Part 7 Closed-Loop Visual Vision & Automation Engine + Google ARTEMIS Integration",
+    "Part 7 UiGroundingEngine: High-depth screen hierarchy extraction with spatial tagging, visual card ranking, and element IDs [#1], [#2]",
+    "Visual Ordinal Grounding: Speak naturally ('dusri wali video chalao', 'second post', 'pehla item') to directly click ordered items and cards on screen",
+    "Closed-Loop VisualTaskOrchestrator: Strict sequential mutation, coordinate gesture fallback, and pre/post screen signature verification",
+    "Smart Multi-Tier Scroll: Safe drag starting below media players with zero fling momentum and end-of-screen detection",
+    "Verified Text Typing: Idempotent text entry with live read-back verification and auto-submit support",
+    "Google ARTEMIS MCP Server: Native mobile automation diagnostic and task execution tools integrated into developer environment"
   ],
   "is_critical": false
 }

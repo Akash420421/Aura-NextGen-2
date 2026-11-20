@@ -230,6 +230,8 @@ class ScreenCaptureManager private constructor() {
         }
     }
 
+    fun getLatestJpegBytes(): ByteArray? = captureSnapshotJpeg(70)
+
     private fun compressBitmapToJpeg(bitmap: Bitmap, quality: Int): ByteArray {
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)

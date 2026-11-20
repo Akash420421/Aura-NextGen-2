@@ -19,6 +19,7 @@ import com.example.gemini.data.jarvis.JarvisPreferences
 import com.example.gemini.data.local.LocalEnvironmentManager
 import com.example.gemini.data.local.LocalTerminalBridge
 import com.example.gemini.data.vision.ScreenCaptureManager
+import com.example.gemini.data.vision.VisualTaskOrchestrator
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -252,6 +253,10 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         webSocket?.sendMediaChunk(jpegBytes)
     }
 
+    fun sendImmediateVideoFrame(jpegBytes: ByteArray) {
+        sendScreenFrame(jpegBytes)
+    }
+
     private fun buildSystemPrompt(): String {
         val sb = StringBuilder()
         sb.append("You are Jarvis / Aura, an ultra-advanced real-time AI companion living inside the Aura AI Android app.\n")
@@ -302,15 +307,19 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- When asked to open an app -> ALWAYS call open_app(app_name).\n")
         sb.append("- When asked to open a website -> ALWAYS call open_website(urls=[\"...\"]).\n")
         sb.append("- When asked to play a song/video on YouTube -> ALWAYS call search_and_play_youtube(query=\"...\"). Never just open search without playing.\n")
-        sb.append("- When asked to send a WhatsApp message -> ALWAYS call send_whatsapp_message(recipient_name=\"...\", message=\"...\").\n")
+        sb.append("- When asked to send a WhatsApp message to a contact -> ALWAYS call send_whatsapp_message(recipient_name=\"...\", message=\"...\").\n")
         sb.append("- When asked to call someone on phone -> ALWAYS call call_contact(contact_name=\"...\").\n")
         sb.append("- When asked to call someone on WhatsApp -> ALWAYS call whatsapp_call(recipient_name=\"...\", call_type=\"voice\" or \"video\").\n")
         sb.append("- When asked to adjust volume, brightness, or flashlight -> ALWAYS call set_volume, set_brightness, or set_flashlight.\n")
+        sb.append("- When asked to scroll (e.g. 'scroll karo', 'neeche scroll karo', 'upar karo') -> ALWAYS call scroll_screen(direction=\"down\" or \"up\").\n")
+        sb.append("- When asked to tap/click an item, video, link, or card by ordinal (e.g. 'dusri wali video chalao', 'second video', 'pehli wali', 'third item') -> ALWAYS call click_ui_element(target_name=\"dusri video\"). You can also call inspect_screen() first to see numbered items [#1], [#2] and click the exact card or title.\n")
+        sb.append("- When asked to go back or home -> ALWAYS call press_key(key=\"back\" or \"home\").\n")
+        sb.append("- When asked to type on the active screen -> ALWAYS call type_text(text=\"...\", submit=true).\n")
         sb.append("- When asked to create a website, calculator, or code project:\n")
         sb.append("  1. Call write_project_file to save the HTML/CSS/JS file.\n")
         sb.append("  2. Call execute_terminal_command to test or launch python3 -m http.server 8080.\n")
         sb.append("  3. Call open_website to preview it for the user.\n")
-        sb.append("- When asked to look at screen or share screen -> call inspect_screen or request_screen_share.\n\n")
+        sb.append("- When asked to look at screen or what is on screen -> ALWAYS call inspect_screen().\n\n")
 
         sb.append(AuraMemoryManager.getSystemPromptContext())
         sb.append(ChatContextBridge.getActiveChatPromptContext())
@@ -711,77 +720,95 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
                 "click_ui_element" -> {
                     val target = args.optString("target_name", "").ifBlank { args.optString("text", "") }.trim()
+                    val elementId = if (args.has("element_id")) args.optInt("element_id") else null
                     val x = if (args.has("x")) args.optInt("x") else null
                     val y = if (args.has("y")) args.optInt("y") else null
+                    val isToggle = args.optBoolean("is_toggle", false)
+                    val description = args.optString("description", "").ifBlank { null }
+                    val goal = args.optString("goal", "").ifBlank { target }
 
-                    val a11y = AutomationAccessibilityService.instance
-                    val clicked = if (a11y != null) {
-                        if (x != null && y != null) {
-                            val dm = context.resources.displayMetrics
-                            val realX = (x / 1000f) * dm.widthPixels
-                            val realY = (y / 1000f) * dm.heightPixels
-                            a11y.clickAt(realX, realY)
-                        } else {
-                            a11y.clickNodeWithText(target)
+                    val res = VisualTaskOrchestrator.getInstance().handleClick(
+                        targetName = target,
+                        elementId = elementId,
+                        description = description,
+                        isToggle = isToggle,
+                        x = x,
+                        y = y,
+                        taskGoal = goal
+                    )
+
+                    JSONObject().put("status", if (res.success) "success" else "error")
+                        .put("message", res.message)
+                        .put("verified", res.verified ?: false)
+                        .put("requires_confirmation", res.requiresUserConfirmation)
+                        .apply {
+                            if (res.currentStateSummary.isNotBlank()) {
+                                put("current_state", res.currentStateSummary)
+                            }
                         }
-                    } else false
-
-                    JSONObject().put("status", if (clicked) "success" else "error")
-                        .put("message", if (clicked) "Tapped '$target'." else "Could not tap '$target'. Ensure Accessibility Service is enabled.")
                 }
 
                 "type_text" -> {
                     val text = args.optString("text", "")
-                    val a11y = AutomationAccessibilityService.instance
-                    val typed = a11y?.typeText(text) ?: false
-                    JSONObject().put("status", if (typed) "success" else "error")
-                        .put("message", if (typed) "Typed \"$text\"." else "Could not type. No active input focus.")
+                    val targetInput = args.optString("target_input_name", "").ifBlank { null }
+                    val submit = args.optBoolean("submit", false)
+                    val x = if (args.has("x")) args.optInt("x") else null
+                    val y = if (args.has("y")) args.optInt("y") else null
+
+                    val res = VisualTaskOrchestrator.getInstance().handleType(
+                        text = text,
+                        targetInputName = targetInput,
+                        submit = submit,
+                        x = x,
+                        y = y
+                    )
+
+                    JSONObject().put("status", if (res.success) "success" else "error")
+                        .put("message", res.message)
+                        .put("verified", res.verified ?: false)
+                        .apply {
+                            if (res.currentStateSummary.isNotBlank()) {
+                                put("current_state", res.currentStateSummary)
+                            }
+                        }
                 }
 
                 "scroll_screen" -> {
                     val dir = args.optString("direction", "down")
-                    val a11y = AutomationAccessibilityService.instance
-                    val scrolled = a11y?.performScroll(dir) ?: false
-                    JSONObject().put("status", if (scrolled) "success" else "error")
-                        .put("message", if (scrolled) "Scrolled $dir." else "Scroll failed.")
+                    val dist = args.optString("distance", "small")
+                    val res = VisualTaskOrchestrator.getInstance().handleScroll(direction = dir, distance = dist)
+
+                    JSONObject().put("status", if (res.success) "success" else "error")
+                        .put("message", res.message)
+                        .put("verified", res.verified ?: false)
+                        .apply {
+                            if (res.currentStateSummary.isNotBlank()) {
+                                put("current_state", res.currentStateSummary)
+                            }
+                        }
                 }
 
                 "press_key" -> {
                     val key = args.optString("key", "home")
-                    val a11y = AutomationAccessibilityService.instance
-                    val actionCode = when (key.lowercase()) {
-                        "back" -> AccessibilityService.GLOBAL_ACTION_BACK
-                        "recents" -> AccessibilityService.GLOBAL_ACTION_RECENTS
-                        else -> AccessibilityService.GLOBAL_ACTION_HOME
-                    }
-                    val ok = a11y?.performGlobalAction(actionCode) ?: false
-                    JSONObject().put("status", if (ok) "success" else "error")
-                        .put("message", "Pressed $key.")
+                    val res = VisualTaskOrchestrator.getInstance().handleKey(key)
+
+                    JSONObject().put("status", if (res.success) "success" else "error")
+                        .put("message", res.message)
+                        .apply {
+                            if (res.currentStateSummary.isNotBlank()) {
+                                put("current_state", res.currentStateSummary)
+                            }
+                        }
                 }
 
                 "inspect_screen" -> {
+                    val orchestrator = VisualTaskOrchestrator.getInstance()
+                    val inspection = orchestrator.inspectScreen(waitForContent = true)
                     val a11y = AutomationAccessibilityService.instance
-                    val root = a11y?.getActiveRootNode()
-                    val pkg = a11y?.foregroundPackage ?: root?.packageName?.toString() ?: "unknown"
-                    val elements = mutableListOf<String>()
-
-                    fun walk(node: AccessibilityNodeInfo, depth: Int) {
-                        if (depth > 6 || elements.size > 25) return
-                        val text = node.text?.toString()?.trim()
-                        val desc = node.contentDescription?.toString()?.trim()
-                        val label = text?.takeIf { it.isNotBlank() } ?: desc?.takeIf { it.isNotBlank() }
-                        if (label != null && label.length > 1 && !elements.contains(label)) {
-                            elements.add(label)
-                        }
-                        for (i in 0 until node.childCount) {
-                            node.getChild(i)?.let { walk(it, depth + 1) }
-                        }
-                    }
-
-                    if (root != null) walk(root, 0)
+                    val pkg = a11y?.foregroundPackage ?: a11y?.getActiveRootNode()?.packageName?.toString() ?: "unknown"
                     JSONObject().put("status", "success")
                         .put("foreground_app", pkg)
-                        .put("visible_elements", JSONArray(elements))
+                        .put("screen_summary", inspection)
                         .put("screen_sharing_active", ScreenCaptureManager.getInstance().isSharing.value)
                 }
 

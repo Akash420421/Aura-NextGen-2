@@ -573,13 +573,21 @@ class GeminiLiveWebSocket(
             // 14. click_ui_element
             put(JSONObject().apply {
                 put("name", "click_ui_element")
-                put("description", "Clicks or taps a specific UI button, link, icon, or text on the current screen by label or coordinates.")
+                put("description", "Clicks or taps a specific UI button, card, video, link, icon, or text on the current screen by label, ordinal ('dusri video', 'second item', 'pehli'), element_id from inspect_screen, or coordinates.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("target_name", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Text, label, or description of the UI element to click.")
+                            put("description", "Text, title, label, ordinal ('dusri video', 'second post', '1st item'), or element ID like '[#2]' to click.")
+                        })
+                        put("element_id", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional integer ID of the element from inspect_screen (e.g. 1, 2, 3).")
+                        })
+                        put("is_toggle", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Whether the target is a toggle switch or checkbox.")
                         })
                         put("x", JSONObject().apply {
                             put("type", "INTEGER")
@@ -605,9 +613,13 @@ class GeminiLiveWebSocket(
                             put("type", "STRING")
                             put("description", "The text to type.")
                         })
+                        put("target_input_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional label or placeholder of the target input field (e.g. 'Search', 'Message').")
+                        })
                         put("submit", JSONObject().apply {
                             put("type", "BOOLEAN")
-                            put("description", "Whether to submit or press enter.")
+                            put("description", "Whether to submit or press enter after typing.")
                         })
                     })
                     put("required", JSONArray().put("text"))
@@ -624,6 +636,10 @@ class GeminiLiveWebSocket(
                         put("direction", JSONObject().apply {
                             put("type", "STRING")
                             put("description", "Direction to scroll: 'down', 'up', 'left', or 'right'.")
+                        })
+                        put("distance", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Scroll distance: 'small', 'medium', or 'large'. Defaults to 'small'.")
                         })
                     })
                     put("required", JSONArray().put("direction"))

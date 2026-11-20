@@ -2,6 +2,9 @@ package com.example.gemini.data.automation
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
@@ -29,6 +32,26 @@ class AutomationAccessibilityService : AccessibilityService() {
 
         @Volatile var instance: AutomationAccessibilityService? = null
             private set
+
+        data class ExtractedOtp(val code: String, val timestamp: Long, val senderPkg: String)
+        @Volatile
+        var latestExtractedOtp: ExtractedOtp? = null
+
+        fun getRecentOtp(): String? {
+            val otp = latestExtractedOtp ?: return null
+            if (System.currentTimeMillis() - otp.timestamp < 120_000L) { // valid for 2 minutes
+                return otp.code
+            }
+            return null
+        }
+
+        data class UiChangeSnapshot(val revision: Long = 0L, val timestamp: Long = 0L)
+        private val _uiChanges = kotlinx.coroutines.flow.MutableStateFlow(UiChangeSnapshot())
+        val uiChanges: kotlinx.coroutines.flow.StateFlow<UiChangeSnapshot> = _uiChanges.kotlinx.coroutines.flow.asStateFlow()
+
+        fun recordUiEvent() {
+            _uiChanges.value = UiChangeSnapshot(_uiChanges.value.revision + 1, System.currentTimeMillis())
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -38,6 +61,7 @@ class AutomationAccessibilityService : AccessibilityService() {
         private set
     @Volatile var foregroundClass: String? = null
         private set
+    @Volatile var lastTypeVerified: Boolean = false
 
     override fun onServiceConnected() {
         instance = this
@@ -47,11 +71,28 @@ class AutomationAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         lastEventAt = System.currentTimeMillis()
+        recordUiEvent()
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             event.packageName?.toString()?.let { foregroundPackage = it }
             event.className?.toString()?.let { foregroundClass = it }
             AuraScreenObserver.processAccessibilityEvent(event, getActiveRootNode())
+        } else if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+            try {
+                val text = event.text?.joinToString(" ") ?: ""
+                val pkg = event.packageName?.toString() ?: ""
+                val lower = text.lowercase(Locale.ROOT)
+                if (lower.contains("otp") || lower.contains("code") || lower.contains("verification") || lower.contains("pin")) {
+                    val matcher = java.util.regex.Pattern.compile("\\b(\\d{4,8})\\b").matcher(text)
+                    if (matcher.find()) {
+                        val code = matcher.group(1)
+                        if (code != null) {
+                            latestExtractedOtp = ExtractedOtp(code, System.currentTimeMillis(), pkg)
+                            Log.i(TAG, "Captured OTP from notification ($pkg): $code")
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
         }
     }
 
@@ -215,6 +256,249 @@ class AutomationAccessibilityService : AccessibilityService() {
      * 2. Executes ACTION_SCROLL_FORWARD / BACKWARD on the scrollable container.
      * 3. Seamlessly falls back to hardware-accelerated smooth gesture swipe so scrolling never fails.
      */
+    fun getAppRootNode(): AccessibilityNodeInfo? {
+        return getActiveRootNode()
+    }
+
+    fun isKeyboardVisible(): Boolean {
+        return try {
+            windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun performClickAtRect(rect: Rect): Boolean {
+        if (rect.width() <= 0 || rect.height() <= 0) return false
+        val cx = rect.exactCenterX()
+        val cy = rect.exactCenterY()
+        val root = getActiveRootNode()
+        if (root?.packageName?.toString() == "com.android.chrome" && clickAt(cx, cy)) return true
+        var node = root?.let { findNodeCoveringRect(it, rect) }
+        while (node != null) {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (node.isVisibleToUser && node.isClickable && bounds.contains(cx.toInt(), cy.toInt())) {
+                if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                break
+            }
+            node = node.parent
+        }
+        Log.i(TAG, "Using coordinate fallback at ($cx, $cy) [bounds: $rect]")
+        return clickAt(cx, cy)
+    }
+
+    fun findNodeCoveringRect(root: AccessibilityNodeInfo, targetRect: Rect): AccessibilityNodeInfo? {
+        val temp = Rect()
+        fun search(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            node.getBoundsInScreen(temp)
+            if (Rect.intersects(temp, targetRect)) {
+                for (i in (node.childCount - 1) downTo 0) {
+                    val child = node.getChild(i) ?: continue
+                    val deep = search(child)
+                    if (deep != null) return deep
+                }
+                return node
+            }
+            return null
+        }
+        return search(root)
+    }
+
+    fun findNodeWithInputFocus(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isFocused) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val res = findNodeWithInputFocus(child)
+            if (res != null) return res
+        }
+        return null
+    }
+
+    private fun findFirstEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findFirstEditableNode(child)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun isUrlBarNode(node: AccessibilityNodeInfo?): Boolean {
+        if (node == null) return false
+        val vid = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+        return vid.contains("url_bar") || vid.contains("omnibox") ||
+               vid.contains("location_bar") || vid.contains("search_box_text")
+    }
+
+    fun performSmartScroll(direction: String, distance: String = "small"): Boolean {
+        val dm = resources.displayMetrics
+        val width = dm.widthPixels.toFloat()
+        val height = dm.heightPixels.toFloat()
+
+        val deltaY = when (distance.lowercase()) {
+            "small" -> height * 0.18f
+            "large" -> height * 0.45f
+            else -> height * 0.28f
+        }
+        val durationMs = when (distance.lowercase()) {
+            "small" -> 600L
+            "large" -> 400L
+            else -> 550L
+        }
+
+        val (startX, startY, endX, endY) = when (direction.lowercase()) {
+            "down" -> listOf(width * 0.5f, height * 0.58f, width * 0.5f, height * 0.58f - deltaY)
+            "up" -> listOf(width * 0.5f, height * 0.42f, width * 0.5f, height * 0.42f + deltaY)
+            "left" -> listOf(width * 0.75f, height * 0.5f, width * 0.25f, height * 0.5f)
+            "right" -> listOf(width * 0.25f, height * 0.5f, width * 0.75f, height * 0.5f)
+            else -> listOf(width * 0.5f, height * 0.58f, width * 0.5f, height * 0.58f - deltaY)
+        }
+
+        try {
+            val path = Path().apply {
+                moveTo(startX, startY)
+                lineTo(endX, endY)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                .build()
+            val dispatched = dispatchGesture(gesture, null, null)
+            Log.i(TAG, "Dispatched smart scroll $direction gesture (distance=$distance, duration=${durationMs}ms): $dispatched")
+            return dispatched
+        } catch (e: Exception) {
+            Log.e(TAG, "Scroll gesture failed: ${e.message}")
+        }
+        return false
+    }
+
+    fun smartTypeText(textToType: String, targetRect: Rect? = null, submit: Boolean = false): Boolean {
+        lastTypeVerified = false
+        if (textToType.isBlank()) {
+            Log.w(TAG, "smartTypeText refused blank input")
+            return false
+        }
+        Log.i(TAG, "smartTypeText starting (length=${textToType.length}, targeted=${targetRect != null}, submit=$submit)")
+
+        if (targetRect != null && targetRect.width() > 0 && targetRect.height() > 0) {
+            if (!performClickAtRect(targetRect)) return false
+            try { Thread.sleep(100) } catch (_: Exception) {}
+        }
+
+        val appRoot = getAppRootNode() ?: getActiveRootNode() ?: return false
+
+        fun editableAt(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            if (targetRect != null && targetRect.width() > 0) {
+                var node = findNodeCoveringRect(root, targetRect)
+                while (node != null) {
+                    if (node.isEditable || node.className?.toString()?.contains("EditText", true) == true) return node
+                    node = node.parent
+                }
+                return null
+            }
+            return root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: findNodeWithInputFocus(root)
+                ?: findFirstEditableNode(root)
+        }
+
+        var target = editableAt(appRoot)
+        if (target != null && isUrlBarNode(target)) {
+            Log.w(TAG, "smartTypeText refused browser URL/address bar")
+            return false
+        }
+        if (target == null) {
+            Log.w(TAG, "smartTypeText found no verified editable target")
+            return false
+        }
+
+        fun currentTarget(): AccessibilityNodeInfo? {
+            val freshRoot = getActiveRootNode() ?: getAppRootNode() ?: return null
+            return editableAt(freshRoot)
+        }
+        fun textEqualsExpected(node: AccessibilityNodeInfo?): Boolean {
+            val current = node?.text?.toString()?.replace("\r\n", "\n")?.trim().orEmpty()
+            val expected = textToType.replace("\r\n", "\n").trim()
+            return current == expected
+        }
+        fun setValue(node: AccessibilityNodeInfo, value: String): Boolean {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+            }
+            return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        }
+
+        if (textEqualsExpected(target)) {
+            lastTypeVerified = true
+            Log.i(TAG, "smartTypeText skipped duplicate request: exact text is already present")
+        } else {
+            var setAccepted = false
+            try {
+                setAccepted = setValue(target, textToType)
+            } catch (e: Exception) {
+                Log.w(TAG, "ACTION_SET_TEXT failed: ${e.message}")
+            }
+
+            if (setAccepted) {
+                try { Thread.sleep(180) } catch (_: Exception) {}
+                target = currentTarget()
+                lastTypeVerified = textEqualsExpected(target)
+                if (!lastTypeVerified) {
+                    Log.w(TAG, "Text set was not read back exactly; refusing append-style fallback")
+                    return false
+                }
+            } else {
+                val fresh = currentTarget() ?: target
+                val currentText = fresh.text?.toString().orEmpty()
+                if (currentText.isNotBlank()) {
+                    val cleared = try { setValue(fresh, "") } catch (_: Exception) { false }
+                    try { Thread.sleep(120) } catch (_: Exception) {}
+                    target = currentTarget()
+                    if (!cleared || !target?.text?.toString().isNullOrBlank()) {
+                        Log.w(TAG, "Existing input could not be safely cleared")
+                        return false
+                    }
+                } else {
+                    target = fresh
+                }
+
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                try {
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("AuraInput", textToType))
+                    val pasteTarget = currentTarget() ?: target ?: return false
+                    if (isUrlBarNode(pasteTarget)) return false
+                    val pasted = pasteTarget.performAction(AccessibilityNodeInfo.ACTION_PASTE) ||
+                        pasteTarget.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_PASTE.id)
+                    if (!pasted) {
+                        Log.w(TAG, "Safe paste unavailable")
+                        return false
+                    }
+                    try { Thread.sleep(180) } catch (_: Exception) {}
+                    lastTypeVerified = textEqualsExpected(currentTarget())
+                    if (!lastTypeVerified) {
+                        Log.w(TAG, "Pasted text could not be verified exactly")
+                        return false
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Safe paste failed: ${e.message}")
+                    return false
+                }
+            }
+        }
+
+        return lastTypeVerified
+    }
+
+    fun performSystemGesture(gesture: String): Boolean {
+        return when (gesture.lowercase(Locale.ROOT)) {
+            "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
+            "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
+            "recents" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+            "notifications" -> performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+            else -> false
+        }
+    }
+
     fun performScroll(direction: String): Boolean {
         val root = getActiveRootNode() ?: return false
         val cleanDir = direction.lowercase(Locale.ROOT)
