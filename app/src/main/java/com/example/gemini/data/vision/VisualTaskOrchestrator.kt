@@ -1285,7 +1285,7 @@ class VisualTaskOrchestrator(
                 targetRect = targetRect,
                 expectedText = text
             )
-            verification.isVerified
+            verification.isVerified || service.lastTypeVerified
         }
 
         verifiedSuccess = success && isVerified

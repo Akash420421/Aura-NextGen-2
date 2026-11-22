@@ -763,6 +763,45 @@ class GeminiLiveWebSocket(
                     put("required", JSONArray().put("summary"))
                 })
             })
+
+            // 25. close_app
+            put(JSONObject().apply {
+                put("name", "close_app")
+                put("description", "Closes the current or named app, stops playing background audio/media, and optionally removes its task card from Android Recents overview or clears all recent apps. Use when user says 'close app', 'band karo', 'recents se hatao', 'minimize se hatao', 'sab close karo'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("app_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional name of the app to close or dismiss from recents, e.g. 'Chrome', 'YouTube'.")
+                        })
+                        put("remove_from_recents", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "True to swipe away the card from recent apps overview.")
+                        })
+                        put("clear_all_recents", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "True to dismiss or clear all cards from recents.")
+                        })
+                    })
+                })
+            })
+
+            // 26. open_inbuilt_browser
+            put(JSONObject().apply {
+                put("name", "open_inbuilt_browser")
+                put("description", "Opens a website or URL inside Aura AI's own internal in-built web browser tab instead of external Google Chrome. Call when user specifically says 'in-built browser mein kholo', 'internal browser open karo', or asks to view a page inside the app.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("url", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The website URL or query to open, e.g. 'https://youtube.com', 'https://github.com'.")
+                        })
+                    })
+                    put("required", JSONArray().put("url"))
+                })
+            })
         }
     }
 

@@ -399,6 +399,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun selectConversation(id: String) {
+        if (com.example.gemini.data.live.VoiceSessionStore.hasSession(id)) {
+            agyBackend.detach()
+            claudeBackend.detach()
+            openCodeBackend.detach()
+            codexBackend.detach()
+            val session = com.example.gemini.data.live.VoiceSessionStore.getSession(id)
+            if (session != null) {
+                store.currentConversation.value = session.conversation
+                store.messages.value = session.messages
+                return
+            }
+        }
         when (agentOf(id)) {
             AgentKind.CLAUDE -> {
                 agyBackend.detach()
@@ -428,6 +440,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun startPersistentStream(conversationId: String) = agyBackend.startPersistentStream(conversationId)
     fun deleteConversation(id: String) {
+        if (com.example.gemini.data.live.VoiceSessionStore.hasSession(id)) {
+            com.example.gemini.data.live.VoiceSessionStore.deleteSession(id)
+        }
         when (agentOf(id)) {
             AgentKind.CLAUDE -> claudeBackend.deleteConversation(id)
             AgentKind.OPENCODE -> openCodeBackend.deleteConversation(id)
@@ -706,12 +721,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     private val _conversations = store.conversations
-    /** Every conversation of the enabled agents, Jarvis' own chats included. */
-    val allConversations: StateFlow<List<Conversation>> = combine(_conversations, claudeBackend.conversations, openCodeBackend.conversations, codexBackend.conversations, enabledAgents) { agy, claude, openCode, codex, enabled ->
-        // a disabled agent's chats stay on disk but are not listed
-        ((if (AgentKind.AGY in enabled) agy else emptyList()) + (if (AgentKind.CLAUDE in enabled) claude else emptyList()) +
-            (if (AgentKind.OPENCODE in enabled) openCode else emptyList()) + (if (AgentKind.CODEX in enabled) codex else emptyList()))
-            .sortedByDescending { it.updatedAt }
+    /** Every conversation of the enabled agents, Jarvis' own chats, and persisted voice sessions included. */
+    val allConversations: StateFlow<List<Conversation>> = combine(
+        combine(_conversations, claudeBackend.conversations, openCodeBackend.conversations, codexBackend.conversations, enabledAgents) { agy, claude, openCode, codex, enabled ->
+            // a disabled agent's chats stay on disk but are not listed
+            ((if (AgentKind.AGY in enabled) agy else emptyList()) + (if (AgentKind.CLAUDE in enabled) claude else emptyList()) +
+                (if (AgentKind.OPENCODE in enabled) openCode else emptyList()) + (if (AgentKind.CODEX in enabled) codex else emptyList()))
+        },
+        com.example.gemini.data.live.VoiceSessionStore.conversations
+    ) { agentConvs, voiceConvs ->
+        (agentConvs + voiceConvs).distinctBy { it.id }.sortedByDescending { it.updatedAt }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /**
@@ -1419,6 +1438,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val isSearchingConversations: StateFlow<Boolean> = _isSearchingConversations.asStateFlow()
 
     init {
+        try {
+            com.example.gemini.data.live.VoiceSessionStore.init(getApplication())
+        } catch (_: Exception) {}
         try {
             val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             cm?.registerDefaultNetworkCallback(networkCallback)

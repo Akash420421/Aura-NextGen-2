@@ -99,6 +99,16 @@ object AppLauncher {
     }
 
     private val SPOKEN_ALIASES: Map<String, List<String>> = mapOf(
+        "phone" to listOf("phone", "dialer", "calls", "google phone", "phone by google", "telephone"),
+        "dialer" to listOf("phone", "dialer", "calls", "google phone", "phone by google"),
+        "calling app" to listOf("phone", "dialer", "calls"),
+        "phone dialer" to listOf("phone", "dialer", "calls"),
+        "call app" to listOf("phone", "dialer", "calls"),
+        "call" to listOf("phone", "dialer", "calls"),
+        "camera" to listOf("camera", "google camera"),
+        "calculator" to listOf("calculator", "calc"),
+        "settings" to listOf("settings"),
+        "gallery" to listOf("gallery", "photos", "google photos"),
         "google pay" to listOf("gpay", "google pay"),
         "gpay" to listOf("gpay", "google pay"),
         "phone pay" to listOf("phonepe"),
@@ -133,7 +143,15 @@ object AppLauncher {
             .trim()
             .ifEmpty { rawQuery }
 
-        val apps = getLaunchableApps(context)
+        val isPhoneQuery = cleanQuery in listOf("phone", "dialer", "calling app", "phone dialer", "call app", "call", "calling")
+
+        val allApps = getLaunchableApps(context)
+        val apps = if (isPhoneQuery) {
+            // Strictly exclude PhonePe when the user specifically requests Phone / Calling / Dialer
+            allApps.filter { !it.label.lowercase().startsWith("phonepe") && !it.packageName.lowercase().contains("phonepe") }
+        } else {
+            allApps
+        }
 
         SPOKEN_ALIASES[cleanQuery]?.let { candidates ->
             for (candidate in candidates) {
@@ -200,7 +218,44 @@ object AppLauncher {
 
     fun openAppResult(context: Context, spokenName: String, appNumber: Int? = null): OpenAppResult {
         val matches = findMatchingApps(context, spokenName)
-        if (matches.isEmpty()) return OpenAppResult.NotFound(spokenName)
+        if (matches.isEmpty()) {
+            val lower = spokenName.lowercase().trim()
+            val pm = context.packageManager
+
+            // Check if spokenName is a direct package name
+            if (spokenName.contains(".") && !spokenName.contains(" ")) {
+                val directIntent = pm.getLaunchIntentForPackage(spokenName.trim())
+                if (directIntent != null) {
+                    directIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    val ok = ActivityLauncherHelper.startActivitySafely(context, directIntent)
+                    if (ok) return OpenAppResult.Success(InstalledApp(label = spokenName, packageName = spokenName))
+                }
+            }
+
+            // System intent fallbacks
+            if (lower in listOf("phone", "dialer", "calling app", "phone dialer", "call app", "call", "com.android.dialer", "com.google.android.dialer")) {
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                val ok = ActivityLauncherHelper.startActivitySafely(context, dialIntent)
+                if (ok) return OpenAppResult.Success(InstalledApp(label = "Phone", packageName = "com.android.dialer"))
+            }
+
+            if (lower in listOf("camera", "take photo", "camera app")) {
+                val camIntent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                val ok = ActivityLauncherHelper.startActivitySafely(context, camIntent)
+                if (ok) return OpenAppResult.Success(InstalledApp(label = "Camera", packageName = "com.android.camera"))
+            }
+
+            if (lower in listOf("calculator", "calc")) {
+                val calcIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_APP_CALCULATOR)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val ok = ActivityLauncherHelper.startActivitySafely(context, calcIntent)
+                if (ok) return OpenAppResult.Success(InstalledApp(label = "Calculator", packageName = "com.android.calculator2"))
+            }
+
+            return OpenAppResult.NotFound(spokenName)
+        }
 
         var targetIndex: Int? = appNumber?.let { it - 1 }
         if (targetIndex == null) {

@@ -52,8 +52,13 @@ class AutomationAccessibilityService : AccessibilityService() {
         private val _uiChanges = MutableStateFlow(UiChangeSnapshot())
         val uiChanges: StateFlow<UiChangeSnapshot> = _uiChanges.asStateFlow()
 
+        private var lastUiEventTimestamp = 0L
         fun recordUiEvent() {
-            _uiChanges.value = UiChangeSnapshot(_uiChanges.value.revision + 1, System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            if (now - lastUiEventTimestamp >= 300L) {
+                lastUiEventTimestamp = now
+                _uiChanges.value = UiChangeSnapshot(_uiChanges.value.revision + 1, now)
+            }
         }
     }
 
@@ -75,11 +80,13 @@ class AutomationAccessibilityService : AccessibilityService() {
         event ?: return
         lastEventAt = System.currentTimeMillis()
         recordUiEvent()
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             event.packageName?.toString()?.let { foregroundPackage = it }
             event.className?.toString()?.let { foregroundClass = it }
             AuraScreenObserver.processAccessibilityEvent(event, getActiveRootNode())
+        } else if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            event.packageName?.toString()?.let { foregroundPackage = it }
+            AuraScreenObserver.scheduleContentCheck(event.packageName?.toString())
         } else if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
             try {
                 val text = event.text?.joinToString(" ") ?: ""
@@ -500,6 +507,105 @@ class AutomationAccessibilityService : AccessibilityService() {
             "notifications" -> performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
             else -> false
         }
+    }
+
+    fun pauseMediaPlayback() {
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            val down = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+            val up = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+            audioManager?.dispatchMediaKeyEvent(down)
+            audioManager?.dispatchMediaKeyEvent(up)
+            Log.i(TAG, "pauseMediaPlayback: dispatched KEYCODE_MEDIA_PAUSE")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to pause media playback: ${e.message}")
+        }
+    }
+
+    suspend fun dismissAppFromRecents(appName: String? = null, clearAll: Boolean = false): Boolean {
+        // Step 1: Open Recents overview
+        val recentsOpened = performGlobalAction(GLOBAL_ACTION_RECENTS)
+        if (!recentsOpened) return false
+        delay(500)
+
+        val root = getActiveRootNode()
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels.toFloat()
+        val h = dm.heightPixels.toFloat()
+        val cx = w / 2f
+        val cy = h * 0.55f
+
+        if (clearAll) {
+            val clearButton = findClearAllButton(root)
+            if (clearButton != null) {
+                val clicked = clearButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (clicked) {
+                    delay(300)
+                    return true
+                }
+            }
+        }
+
+        var startX = cx
+        var startY = cy
+        if (!appName.isNullOrBlank() && root != null) {
+            val matchingNode = findNodeMatchingText(root, appName)
+            if (matchingNode != null) {
+                val rect = Rect()
+                matchingNode.getBoundsInScreen(rect)
+                if (rect.width() > 0 && rect.height() > 0) {
+                    startX = rect.centerX().toFloat()
+                    startY = rect.centerY().toFloat().coerceIn(h * 0.3f, h * 0.7f)
+                }
+            }
+        }
+
+        // Gesture: swipe card upwards off the screen to dismiss
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(startX, h * 0.08f)
+        }
+        val dismissed = gesture(path, 250L)
+        delay(350)
+        return dismissed
+    }
+
+    private fun findClearAllButton(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        node ?: return null
+        val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
+        val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
+        val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+
+        val isClearAll = text.contains("clear all") || text.contains("close all") || text == "clear" ||
+                desc.contains("clear all") || desc.contains("close all") ||
+                viewId.contains("clear_all") || viewId.contains("dismiss_task") || viewId.contains("button_clear_all")
+
+        if (isClearAll && (node.isClickable || node.parent?.isClickable == true)) {
+            return if (node.isClickable) node else node.parent
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findClearAllButton(child)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findNodeMatchingText(node: AccessibilityNodeInfo?, query: String): AccessibilityNodeInfo? {
+        node ?: return null
+        val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
+        val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
+        val clean = query.lowercase(Locale.ROOT).trim()
+
+        if (text.contains(clean) || desc.contains(clean)) return node
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findNodeMatchingText(child, query)
+            if (found != null) return found
+        }
+        return null
     }
 
     fun performScroll(direction: String): Boolean {

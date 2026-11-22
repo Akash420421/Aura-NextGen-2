@@ -1,15 +1,17 @@
 {
-  "version_code": 240,
-  "version_name": "2.4.0",
+  "version_code": 241,
+  "version_name": "2.4.1",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.0 — Part 7 Closed-Loop Visual Vision & Automation Engine + Google ARTEMIS Integration",
-    "Part 7 UiGroundingEngine: High-depth screen hierarchy extraction with spatial tagging, visual card ranking, and element IDs [#1], [#2]",
-    "Visual Ordinal Grounding: Speak naturally ('dusri wali video chalao', 'second post', 'pehla item') to directly click ordered items and cards on screen",
-    "Closed-Loop VisualTaskOrchestrator: Strict sequential mutation, coordinate gesture fallback, and pre/post screen signature verification",
-    "Smart Multi-Tier Scroll: Safe drag starting below media players with zero fling momentum and end-of-screen detection",
-    "Verified Text Typing: Idempotent text entry with live read-back verification and auto-submit support",
-    "Google ARTEMIS MCP Server: Native mobile automation diagnostic and task execution tools integrated into developer environment"
+    "Aura AI v2.4.1 — Smoothness & Performance, Real Recents Management, In-Built Browser, & Voice Persistence",
+    "App Smoothness & Zero-Lag Fix: Throttled accessibility micro-events, eliminated main-thread tree crawling, restored fluid 60-120 FPS scrolling",
+    "Recents Dismissal & Background Media Silence: New close_app tool pauses playing media and dismisses app cards or clears all recents via hardware gesture",
+    "Native Text Injection: Strict directive prohibiting screen-share prompts for typing/clicking; injects text directly into active focus fields",
+    "Complete Voice Lifecycle & Orb States: Connecting -> Idle (Ask anything) -> Listening -> Thinking -> Working -> Speaking; eliminated idle orb vibration",
+    "Persistent Voice Sessions in Drawer: Persisted locally via VoiceSessionStore; review complete voice chats with tool calls from Drawer -> Voice",
+    "In-Built Web Browser Support: open_inbuilt_browser routes web pages directly into Aura's internal browser tab instead of external Chrome",
+    "System App & Dialer Intent Routing: Fixed 'phone dialer' URL error, prevented PhonePe collisions on 'phone' queries, and added system dialer intent fallbacks",
+    "Always-Visible New Chat Suggestions: Adjusted height constraints so suggestion chips remain visible on all mobile screen heights"
   ],
   "is_critical": false
 }

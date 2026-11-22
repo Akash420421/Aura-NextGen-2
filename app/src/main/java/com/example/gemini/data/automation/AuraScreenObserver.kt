@@ -63,14 +63,59 @@ object AuraScreenObserver {
         Log.i(TAG, "Stopped guidance session.")
     }
 
+    private val observerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+    private var pendingDebounceJob: kotlinx.coroutines.Job? = null
+    private var lastContentCheckTime = 0L
+
     /**
-     * Called by AutomationAccessibilityService whenever an onAccessibilityEvent occurs.
+     * Debounced content change checker: off the main UI thread, avoiding micro-event lag.
+     */
+    fun scheduleContentCheck(pkg: String?) {
+        if (!isContinuousMonitoringEnabled || activeGuidanceSteps.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if (now - lastContentCheckTime < 400L) {
+            pendingDebounceJob?.cancel()
+            pendingDebounceJob = observerScope.launch {
+                kotlinx.coroutines.delay(400L)
+                val service = AutomationAccessibilityService.instance ?: return@launch
+                val root = service.getActiveRootNode()
+                processInternal(pkg ?: _currentScreen.value.packageName, _currentScreen.value.className, root)
+            }
+            return
+        }
+        lastContentCheckTime = now
+        val service = AutomationAccessibilityService.instance ?: return
+        observerScope.launch {
+            val root = service.getActiveRootNode()
+            processInternal(pkg ?: _currentScreen.value.packageName, _currentScreen.value.className, root)
+        }
+    }
+
+    /**
+     * Called by AutomationAccessibilityService on window state changes.
      */
     fun processAccessibilityEvent(event: AccessibilityEvent, rootNode: AccessibilityNodeInfo?) {
         if (!isContinuousMonitoringEnabled) return
-
         val pkg = event.packageName?.toString() ?: _currentScreen.value.packageName
         val cls = event.className?.toString() ?: _currentScreen.value.className
+        processInternal(pkg, cls, rootNode)
+    }
+
+    private fun processInternal(pkg: String, cls: String, rootNode: AccessibilityNodeInfo?) {
+        // Fast path: if no guidance is running, don't perform expensive deep hierarchy crawls
+        if (activeGuidanceSteps.isEmpty()) {
+            val previous = _currentScreen.value
+            if (pkg != previous.packageName || cls != previous.className) {
+                _currentScreen.value = ScreenState(
+                    packageName = pkg,
+                    className = cls,
+                    screenTitle = previous.screenTitle,
+                    visibleHeaders = previous.visibleHeaders,
+                    lastUpdated = System.currentTimeMillis()
+                )
+            }
+            return
+        }
 
         // Extract visible title / headers from the active root
         val headers = mutableListOf<String>()

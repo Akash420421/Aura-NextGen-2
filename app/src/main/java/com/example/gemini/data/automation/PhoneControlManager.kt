@@ -141,7 +141,20 @@ class PhoneControlManager(private val context: Context) {
     fun parseTargetUrl(query: String): String? {
         val trimmed = query.trim().lowercase(Locale.ROOT)
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
-        if (trimmed.contains(".") && !trimmed.contains(" ")) return "https://$trimmed"
+
+        // Exclude Android package names so they are never opened as broken web URLs in Chrome
+        if (trimmed.startsWith("com.") || trimmed.startsWith("org.") || trimmed.startsWith("net.") ||
+            trimmed.endsWith(".dialer") || trimmed.endsWith(".android") || trimmed.contains(".android.")) {
+            return null
+        }
+
+        val validTlds = listOf("com", "org", "net", "io", "dev", "ai", "app", "in", "co", "gov", "edu", "me", "xyz", "online", "tech", "site")
+        if (trimmed.contains(".") && !trimmed.contains(" ") && !trimmed.contains("@")) {
+            val tld = trimmed.substringAfterLast('.').lowercase(Locale.ROOT)
+            if (validTlds.contains(tld)) {
+                return "https://$trimmed"
+            }
+        }
         return null
     }
 

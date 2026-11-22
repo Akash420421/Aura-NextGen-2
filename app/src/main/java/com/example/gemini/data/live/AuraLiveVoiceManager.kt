@@ -45,7 +45,7 @@ import java.util.concurrent.atomic.AtomicLong
 object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private const val TAG = "AuraLiveVoiceManager"
 
-    enum class Phase { IDLE, CONNECTING, LISTENING, THINKING, SPEAKING, MUTED }
+    enum class Phase { IDLE, CONNECTING, LISTENING, THINKING, SPEAKING, WORKING, MUTED }
 
     private val _phase = MutableStateFlow(Phase.IDLE)
     val phase: StateFlow<Phase> = _phase.asStateFlow()
@@ -76,10 +76,12 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     // Acoustic Echo Decay Protection (AEDP): suppresses mic chunks for 150ms post-speaker silence
     private val lastSpeakerActiveTimestamp = AtomicLong(0L)
     private const val AEDP_POST_SPEAKER_WINDOW_MS = 150L
+    private val lastUserSpeechTimestamp = AtomicLong(0L)
 
     fun init(context: Context) {
         appContext = context.applicationContext
         AuraMemoryManager.init(context)
+        VoiceSessionStore.init(context)
         phoneControlManager = PhoneControlManager(context.applicationContext)
     }
 
@@ -104,8 +106,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     fun unmute() {
         if (_phase.value == Phase.MUTED) {
-            _phase.value = Phase.LISTENING
-            _statusText.value = "Listening..."
+            _phase.value = Phase.IDLE
+            _statusText.value = "Ask anything..."
         }
     }
 
@@ -171,8 +173,9 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     lastSpeakerActiveTimestamp.set(System.currentTimeMillis())
                 } else if (_phase.value == Phase.SPEAKING) {
                     lastSpeakerActiveTimestamp.set(System.currentTimeMillis())
-                    _phase.value = Phase.LISTENING
-                    _statusText.value = "Listening..."
+                    _phase.value = Phase.IDLE
+                    _statusText.value = "Ask anything..."
+                    _amplitude.value = 0f
                 }
             },
             onPlaybackAmplitude = { amp ->
@@ -190,8 +193,22 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             val isAssistantSpeaking = _phase.value == Phase.SPEAKING
             val isMuted = _phase.value == Phase.MUTED
 
-            if (_phase.value == Phase.LISTENING) {
-                _amplitude.value = amp
+            val isVoiceDetected = amp > 0.08f
+            if (!isMuted && !isAssistantSpeaking && !isAedpActive) {
+                if (isVoiceDetected) {
+                    lastUserSpeechTimestamp.set(now)
+                    if (_phase.value != Phase.LISTENING && _phase.value != Phase.WORKING) {
+                        _phase.value = Phase.LISTENING
+                        _statusText.value = "Listening..."
+                    }
+                    _amplitude.value = amp
+                } else if (_phase.value == Phase.LISTENING && (now - lastUserSpeechTimestamp.get() > 650L)) {
+                    _phase.value = Phase.THINKING
+                    _statusText.value = "Thinking..."
+                    _amplitude.value = 0f
+                } else if (_phase.value == Phase.IDLE) {
+                    _amplitude.value = 0f
+                }
             } else if (isMuted) {
                 _amplitude.value = 0f
             }
@@ -267,6 +284,25 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- Speak warmly, confidently, and keep your replies brief and direct (1-2 crisp sentences).\n")
         sb.append("- Ignore ambient background noise or unrelated room chatter completely.\n\n")
 
+        sb.append("### CRITICAL AUTOMATION & TYPING DIRECTIVE (ZERO SCREEN SHARE NEEDED):\n")
+        sb.append("- NEVER ask the user for screen share to type text, click elements, open apps, scroll, or execute phone tasks!\n")
+        sb.append("- The phone accessibility engine has complete real-time accessibility tree and native text typing injection.\n")
+        sb.append("- When the user asks you to write, inject, or type text in any app (WhatsApp, Telegram, Notes, Chrome, etc.): IMMEDIATELY call `type_text(text=\"...\", submit=true)`! DO NOT ask permissions! DO NOT ask for screen share!\n")
+        sb.append("- When the user asks to click, open, or scroll: ALWAYS call `click_ui_element`, `open_app`, or `scroll_screen` directly without asking for screen share!\n")
+        sb.append("- ONLY call `request_screen_share` if the user EXPLICITLY commands 'screen share karo' or 'start screen share'.\n\n")
+
+        sb.append("### CLOSING APPS & RECENTS:\n")
+        sb.append("- When asked to close an app, stop background music/audio, or dismiss from recents (e.g. 'Chrome close karo', 'app band karo', 'recents se hatao', 'minimize se hatao'): ALWAYS call `close_app(app_name=\"...\", remove_from_recents=true)`.\n")
+        sb.append("- When asked to clear all recents / remove all apps from recents (e.g. 'sab apps hata do', 'recents clear all karo'): ALWAYS call `close_app(clear_all_recents=true)`.\n\n")
+
+        sb.append("### IN-BUILT BROWSER VS EXTERNAL CHROME:\n")
+        sb.append("- When asked to open a website in the in-built / internal browser (e.g. 'inbuilt browser mein kholo', 'internal browser open karo', 'app ke browser mein YouTube chalao'): ALWAYS call `open_inbuilt_browser(url=\"...\")`.\n")
+        sb.append("- When asked to open a website in general or in Chrome: call `open_website(urls=[\"...\"])`.\n\n")
+
+        sb.append("### OPENING SYSTEM APPS & DIALER:\n")
+        sb.append("- When asked to open phone dialer, phone app, or calling app (e.g. 'phone dialer kholo', 'calling app open karo', 'phone open karo'): ALWAYS call `open_app(app_name=\"phone\")` or `call_contact(contact_name=\"...\")`! DO NOT open PhonePe! DO NOT open Chrome!\n")
+        sb.append("- When asked to open calculator, camera, settings, or gallery: call `open_app(app_name=\"...\")`.\n\n")
+
         sb.append("### HYBRID VOICE & AGENT ARCHITECTURE:\n")
         sb.append("1. NORMAL CONVERSATIONS & CAPABILITY QUESTIONS (ANSWER DIRECTLY IN VOICE):\n")
         sb.append("   - Casual talk, greetings, general questions, explanations, discussions, advice, and asking what you can do:\n")
@@ -333,8 +369,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         Log.d(TAG, "Live status: $status")
         when (status) {
             "LIVE" -> {
-                _phase.value = Phase.LISTENING
-                _statusText.value = "Listening..."
+                _phase.value = Phase.IDLE
+                _statusText.value = "Ask anything..."
                 scope?.let { audioRecorder?.start(it) }
             }
             "CONFIGURING...", "CONNECTING..." -> {
@@ -390,9 +426,10 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     override fun onTurnCompleted() {
         audioPlayer?.notifyTurnComplete()
-        if (_phase.value != Phase.SPEAKING && _phase.value != Phase.MUTED) {
-            _phase.value = Phase.LISTENING
-            _statusText.value = "Listening..."
+        if (_phase.value != Phase.SPEAKING && _phase.value != Phase.MUTED && _phase.value != Phase.WORKING) {
+            _phase.value = Phase.IDLE
+            _statusText.value = "Ask anything..."
+            _amplitude.value = 0f
         }
     }
 
@@ -405,8 +442,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     override fun onToolCall(callId: String, name: String, args: JSONObject) {
-        _phase.value = Phase.THINKING
-        _statusText.value = "Executing $name..."
+        _phase.value = Phase.WORKING
+        _statusText.value = "Working on $name..."
 
         scope?.launch(Dispatchers.IO) {
             val result = executeTool(name, args)
@@ -517,19 +554,67 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         bringAuraToForeground(context)
                         JSONObject().put("status", "success").put("message", "Opened Aura AI and brought to foreground")
                     } else {
-                        val directWebUrl = phoneControl.parseTargetUrl(appName)
-                        if (directWebUrl != null) {
-                            phoneControl.openUrlsInChromeTabs(listOf(directWebUrl))
-                            JSONObject().put("status", "success").put("message", "Opened $directWebUrl in Chrome")
+                        val launched = AppLauncher.launchApp(context, appName, appNumber)
+                        if (launched) {
+                            JSONObject().put("status", "success").put("message", "Opened $appName app.")
                         } else {
-                            val launched = AppLauncher.launchApp(context, appName, appNumber)
-                            JSONObject().put("status", if (launched) "success" else "error")
-                                .put("message", if (launched) "Opened $appName app." else "Could not find $appName.")
+                            val directWebUrl = phoneControl.parseTargetUrl(appName)
+                            if (directWebUrl != null) {
+                                phoneControl.openUrlsInChromeTabs(listOf(directWebUrl))
+                                JSONObject().put("status", "success").put("message", "Opened $directWebUrl in Chrome")
+                            } else {
+                                JSONObject().put("status", "error").put("message", "Could not find $appName.")
+                            }
                         }
                     }
                 }
 
+                "close_app" -> {
+                    val appName = args.optString("app_name", "").ifBlank { null }
+                    val removeFromRecents = args.optBoolean("remove_from_recents", false)
+                    val clearAllRecents = args.optBoolean("clear_all_recents", false)
+
+                    val svc = AutomationAccessibilityService.instance
+                    svc?.pauseMediaPlayback()
+
+                    val success: Boolean
+                    val msg: String
+                    if (clearAllRecents || removeFromRecents || appName != null) {
+                        success = svc?.dismissAppFromRecents(appName, clearAll = clearAllRecents) ?: false
+                        msg = if (clearAllRecents) "Cleared all recent apps." else "Closed ${appName ?: "app"} and removed from recents."
+                    } else {
+                        val ok = svc?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) ?: false
+                        success = ok
+                        msg = "Closed app and returned home."
+                    }
+                    JSONObject().put("status", if (success) "success" else "error").put("message", msg)
+                }
+
+                "open_inbuilt_browser" -> {
+                    val rawUrl = args.optString("url", "").ifBlank { args.optString("query", "") }.trim()
+                    val fullUrl = if (rawUrl.startsWith("http://", true) || rawUrl.startsWith("https://", true)) {
+                        rawUrl
+                    } else if (rawUrl.contains(".") && !rawUrl.contains(" ")) {
+                        "https://$rawUrl"
+                    } else {
+                        "https://www.google.com/search?q=${Uri.encode(rawUrl)}"
+                    }
+                    withContext(Dispatchers.Main) {
+                        val browserSession = com.example.gemini.ui.browser.BrowserSessionManager.getInstance(context)
+                        browserSession.openUrl(fullUrl, newTab = true)
+                        ChatContextBridge.viewModel?.requestViewMode("BROWSER")
+                        bringAuraToForeground(context)
+                    }
+                    JSONObject().put("status", "success").put("message", "Opened $fullUrl in the in-built browser.")
+                }
+
                 "open_website" -> {
+                    val query = args.optString("query", "").trim()
+                    val isInternalReq = query.contains("inbuilt", true) || query.contains("in-built", true) || query.contains("internal", true) || query.contains("app ke", true)
+                    if (isInternalReq) {
+                        return executeTool("open_inbuilt_browser", args)
+                    }
+
                     val targetUrls = mutableListOf<String>()
                     val jsonUrls = args.optJSONArray("urls")
                     if (jsonUrls != null) {

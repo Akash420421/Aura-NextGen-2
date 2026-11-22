@@ -36,37 +36,36 @@ object ChatContextBridge {
 
     fun attach(vm: ChatViewModel) {
         viewModel = vm
+        try {
+            VoiceSessionStore.init(vm.getApplication())
+        } catch (_: Exception) {}
         Log.i(TAG, "Attached ChatViewModel to ChatContextBridge")
     }
 
     fun startVoiceSessionConversation(): String {
-        val vm = viewModel ?: return ""
-        val timeStr = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
-        val convId = UUID.randomUUID().toString()
-        activeVoiceConvId = convId
-        val conv = Conversation(
-            id = convId,
-            title = "Voice Session • $timeStr"
-        )
-        try {
-            val prop = vm.javaClass.getDeclaredField("store")
-            prop.isAccessible = true
-            val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore
-            store?.let {
-                it.conversations.value = listOf(conv) + it.conversations.value.filter { c -> c.id != convId }
+        val vm = viewModel
+        val conv = VoiceSessionStore.createSession()
+        activeVoiceConvId = conv.id
+        if (vm != null) {
+            try {
+                val prop = vm.javaClass.getDeclaredField("store")
+                prop.isAccessible = true
+                val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore
+                store?.let {
+                    it.conversations.value = listOf(conv) + it.conversations.value.filter { c -> c.id != conv.id }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update memory store for voice session: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to create voice session conversation: ${e.message}")
         }
-        return convId
+        return conv.id
     }
 
     fun endVoiceSessionConversation() {
-        // Keep active conversation reference in drawer list
+        // Voice session is permanently retained in VoiceSessionStore
     }
 
     fun recordVoiceUserTurn(text: String) {
-        val vm = viewModel ?: return
         val convId = activeVoiceConvId ?: return
         val msg = ChatMessage(
             conversationId = convId,
@@ -74,12 +73,14 @@ object ChatContextBridge {
             content = text,
             viaVoice = true
         )
-        appendVoiceMessage(vm, convId, msg)
+        VoiceSessionStore.appendMessage(convId, msg)
+        viewModel?.let { appendVoiceMessage(it, convId, msg) }
     }
 
     fun recordVoiceAssistantTurn(textChunk: String) {
-        val vm = viewModel ?: return
         val convId = activeVoiceConvId ?: return
+        VoiceSessionStore.appendAssistantText(convId, textChunk)
+        val vm = viewModel ?: return
         try {
             val prop = vm.javaClass.getDeclaredField("store")
             prop.isAccessible = true
@@ -478,12 +479,22 @@ object ChatContextBridge {
     }
 
     fun recordToolExecution(toolName: String, summary: String) {
+        val convId = activeVoiceConvId ?: viewModel?.currentConversation?.value?.id
+        if (convId != null) {
+            val msg = ChatMessage(
+                conversationId = convId,
+                role = MessageRole.TOOL,
+                content = "⚡ [$toolName]: $summary",
+                viaVoice = true
+            )
+            VoiceSessionStore.appendMessage(convId, msg)
+        }
         val vm = viewModel ?: return
         try {
             ensureConversationExists(vm)
-            val convId = vm.currentConversation.value?.id ?: UUID.randomUUID().toString()
+            val currentId = vm.currentConversation.value?.id ?: convId ?: UUID.randomUUID().toString()
             val msg = ChatMessage(
-                conversationId = convId,
+                conversationId = currentId,
                 role = MessageRole.TOOL,
                 content = "⚡ [$toolName]: $summary",
                 viaVoice = true
