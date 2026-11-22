@@ -81,6 +81,7 @@ class AuraLiveVoiceService : Service() {
                     AuraLiveVoiceManager.Phase.CONNECTING -> "Connecting to Gemini Live..."
                     AuraLiveVoiceManager.Phase.LISTENING -> "Jarvis listening..."
                     AuraLiveVoiceManager.Phase.THINKING -> "Jarvis thinking..."
+                    AuraLiveVoiceManager.Phase.WORKING -> "Jarvis working..."
                     AuraLiveVoiceManager.Phase.SPEAKING -> "Jarvis speaking..."
                     AuraLiveVoiceManager.Phase.MUTED -> "Jarvis muted"
                     AuraLiveVoiceManager.Phase.IDLE -> "Idle"

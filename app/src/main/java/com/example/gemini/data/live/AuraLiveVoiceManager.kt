@@ -600,9 +600,9 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         "https://www.google.com/search?q=${Uri.encode(rawUrl)}"
                     }
                     withContext(Dispatchers.Main) {
-                        val browserSession = com.example.gemini.ui.browser.BrowserSessionManager.getInstance(context)
+                        val browserSession = com.example.gemini.ui.browser.BrowserSessionManager.instance
                         browserSession.openUrl(fullUrl, newTab = true)
-                        ChatContextBridge.viewModel?.requestViewMode("BROWSER")
+                        ChatContextBridge.requestViewMode("BROWSER")
                         bringAuraToForeground(context)
                     }
                     JSONObject().put("status", "success").put("message", "Opened $fullUrl in the in-built browser.")
@@ -623,7 +623,6 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                             if (u.isNotEmpty()) targetUrls.add(u)
                         }
                     }
-                    val query = args.optString("query", "").trim()
                     if (query.isNotEmpty()) {
                         val extracted = phoneControl.extractUrlsFromText(query)
                         for (u in extracted) {

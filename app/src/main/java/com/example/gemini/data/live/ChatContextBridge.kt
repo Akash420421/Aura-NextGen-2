@@ -26,7 +26,11 @@ object ChatContextBridge {
     private const val TAG = "ChatContextBridge"
     private const val MAX_MESSAGES_IN_CONTEXT = 15
 
-    private var viewModel: ChatViewModel? = null
+    var viewModel: ChatViewModel? = null
+
+    fun requestViewMode(mode: String) {
+        viewModel?.requestViewMode(mode)
+    }
 
     private val _lastActiveChatTitle = MutableStateFlow("")
     val lastActiveChatTitle: StateFlow<String> = _lastActiveChatTitle.asStateFlow()
