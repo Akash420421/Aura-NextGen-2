@@ -433,12 +433,14 @@ class AutomationAccessibilityService : AccessibilityService() {
         Log.i(TAG, "directInjectText starting: len=${textToType.length}, targetRect=${targetRect != null}, targetInput='$targetInputName', submit=$submit, clearExisting=$clearExisting")
 
         fun getAppRoots(): List<AccessibilityNodeInfo> {
+            val myPackage = packageName
             val appWindows = try {
-                windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.packageName != packageName }
+                windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
                     .mapNotNull { runCatching { it.root }.getOrNull() }
+                    .filter { it.packageName?.toString() != myPackage }
             } catch (_: Exception) { emptyList() }
             if (appWindows.isNotEmpty()) return appWindows
-            val all = getAllRootNodes().filter { it.packageName != packageName }
+            val all = getAllRootNodes().filter { it.packageName?.toString() != myPackage }
             if (all.isNotEmpty()) return all
             return listOfNotNull(getActiveRootNode())
         }
