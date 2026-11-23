@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import com.example.gemini.data.preferences.AuthPreferences
+import com.example.gemini.data.remote.AntigravityBridgeUiState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -154,8 +155,10 @@ fun ChatScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.onAppForegrounded()
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> viewModel.onAppForegrounded()
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> viewModel.onAppBackgrounded()
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -254,6 +257,7 @@ fun ChatScreen(
     val isServerOnline by viewModel.isServerOnline.collectAsState()
     val isReconnecting by viewModel.isReconnecting.collectAsState()
     val isBridgeOnline by viewModel.isBridgeOnline.collectAsState()
+    val bridgeUiState by viewModel.bridgeUiState.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val conversationError by viewModel.conversationError.collectAsState()
     val activeInstances by viewModel.activeInstances.collectAsState()
@@ -304,11 +308,24 @@ fun ChatScreen(
     val hubStatus by viewModel.hubStatus.collectAsState()
     val systemConnectionState by viewModel.systemConnectionState.collectAsState()
     var auraHomeVoice by rememberSaveable { mutableStateOf(false) }
+    var isBridgeBannerDismissed by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(bridgeUiState) {
+        if (bridgeUiState is AntigravityBridgeUiState.Connected) {
+            isBridgeBannerDismissed = false
+        }
+    }
 
     val requestSwitchToChat by com.example.gemini.data.live.ChatContextBridge.requestSwitchToChatTab.collectAsState()
     LaunchedEffect(requestSwitchToChat) {
         if (requestSwitchToChat) {
             auraHomeVoice = false
+            if (!com.example.gemini.data.live.ChatContextBridge.isNewChatDraft && currentConv?.title != "New Chat") {
+                val activeId = com.example.gemini.data.live.ChatContextBridge.activeVoiceConvId
+                if (activeId != null && currentConv?.id != activeId) {
+                    viewModel.selectConversation(activeId)
+                }
+            }
             com.example.gemini.data.live.ChatContextBridge.requestSwitchToChatTab.value = false
         }
     }
@@ -1415,6 +1432,9 @@ fun ChatScreen(
                 isOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open,
                 onSelectConversation = { id ->
                     Log.d("CHAT_OPEN_DEBUG", "🎯 [ChatScreen] User selected conversation: id=$id")
+                    keyboardController?.hide()
+                    com.example.gemini.data.live.ChatContextBridge.isNewChatDraft = false
+                    focusManager.clearFocus(force = true)
                     val currentId = currentConv?.id
                     if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
                         ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
@@ -1425,6 +1445,9 @@ fun ChatScreen(
                     scope.launch { drawerState.close() }
                 },
                 onNewChat = {
+                    com.example.gemini.data.live.ChatContextBridge.isNewChatDraft = true
+                    keyboardController?.hide()
+                    focusManager.clearFocus(force = true)
                     val currentId = currentConv?.id
                     if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
                         ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
@@ -1725,6 +1748,17 @@ fun ChatScreen(
                                 com.example.gemini.ui.components.AuraModeToggle(
                                     currentMode = if (auraHomeVoice) "voice" else "chat",
                                     onModeSelected = { mode ->
+                                        if (mode == "voice") {
+                                            keyboardController?.hide()
+                                            focusManager.clearFocus(force = true)
+                                        } else {
+                                            if (!com.example.gemini.data.live.ChatContextBridge.isNewChatDraft && currentConv?.title != "New Chat") {
+                                                val activeId = com.example.gemini.data.live.ChatContextBridge.activeVoiceConvId
+                                                if (activeId != null && currentConv?.id != activeId) {
+                                                    viewModel.selectConversation(activeId)
+                                                }
+                                            }
+                                        }
                                         auraHomeVoice = (mode == "voice")
                                     }
                                 )
@@ -1980,7 +2014,11 @@ fun ChatScreen(
                     navigationIcon = {
                         if (isAuraHome) {
                             IconButton(
-                                onClick = { scope.launch { drawerState.open() } },
+                                onClick = {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus(force = true)
+                                    scope.launch { drawerState.open() }
+                                },
                                 modifier = Modifier.size(48.dp)
                             ) {
                                 com.example.gemini.ui.components.StaggeredMenuIcon(tint = MaterialTheme.colorScheme.onSurface)
@@ -2007,6 +2045,9 @@ fun ChatScreen(
                         if (isAuraHome) {
                             IconButton(
                                 onClick = {
+                                    com.example.gemini.data.live.ChatContextBridge.isNewChatDraft = true
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus(force = true)
                                     val currentId = currentConv?.id
                                     if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
                                         ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)
@@ -2065,53 +2106,112 @@ fun ChatScreen(
                     val isServerStopped = sysStatus == com.example.gemini.data.remote.SystemStatus.OFFLINE && !isInitialGracePeriod
                     // Jarvis' chats are not in `conversations` (they are hidden and listed apart, under Jarvis), but they are
                     // existing chats too: while one loads, show the loading skeleton like for any other chat
+                    val visibleMessages = remember(messages) {
+                        messages.filter { it.content.isNotBlank() && it.role != MessageRole.SYSTEM }
+                    }
                     val isExistingConversation = currentConv != null && currentConv?.title != "New Chat" &&
                         (conversations.any { it.id == currentConv?.id } || jarvisConversations.any { it.id == currentConv?.id })
-                    val isExistingChat = messages.isEmpty() && isExistingConversation && isLoadingConversation
-                    Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, error=$conversationError, isServerStopped=$isServerStopped")
+                    val isExistingChat = visibleMessages.isEmpty() && isExistingConversation && isLoadingConversation
+                    Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, visibleCount=${visibleMessages.size}, error=$conversationError, isServerStopped=$isServerStopped")
 
-                    if (auraHomeVoice) {
-                        com.example.gemini.ui.home.AuraVoiceWelcome(
-                            userName = agyAuthInfo.displayName,
-                            onActionTap = onActionTapAuraJarvis,
-                            onActionDoubleTap = onActionDoubleTapAuraJarvis
-                        )
-                    } else if (messages.isEmpty()) {
-                        com.example.gemini.ui.home.AuraChatWelcome(
-                            onPromptSelected = { prompt ->
-                                inputState.setTextAndPlaceCursorAtEnd(prompt)
-                            }
-                        )
-                    } else if (isAgyChat && isServerStopped && messages.isEmpty()) {
-                        BoxWithConstraints(
-                            modifier = Modifier.fillMaxSize()
+                    val isVoiceActive = isAuraHome && auraHomeVoice
+                    val isDrawerActive = drawerState.isOpen || drawerState.isAnimationRunning
+                    val isVoicePaused = !isVoiceActive || isDrawerActive
+
+                    if (isAuraHome) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    val isVisible = auraHomeVoice
+                                    alpha = if (isVisible) 1f else 0f
+                                    translationX = if (isVisible) 0f else 20000f
+                                }
                         ) {
-                            val minHeight = maxHeight
+                            com.example.gemini.ui.home.AuraVoiceWelcome(
+                                userName = agyAuthInfo.displayName,
+                                isPaused = isVoicePaused,
+                                onActionTap = onActionTapAuraJarvis,
+                                onActionDoubleTap = onActionDoubleTapAuraJarvis
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(
+                                if (isAuraHome) {
+                                    Modifier.graphicsLayer {
+                                        val isVisible = !auraHomeVoice
+                                        alpha = if (isVisible) 1f else 0f
+                                        translationX = if (isVisible) 0f else -20000f
+                                    }
+                                } else Modifier
+                            )
+                    ) {
+                        if (!isAuraHome && auraHomeVoice) {
+                            com.example.gemini.ui.home.AuraVoiceWelcome(
+                                userName = agyAuthInfo.displayName,
+                                isPaused = isVoicePaused,
+                                onActionTap = onActionTapAuraJarvis,
+                                onActionDoubleTap = onActionDoubleTapAuraJarvis
+                            )
+                        } else if (isExistingChat) {
+                            com.example.gemini.ui.components.ConversationLoadingSkeleton()
+                        } else if (!conversationError.isNullOrBlank() && visibleMessages.isEmpty() && (isExistingConversation || currentConv != null)) {
                             Column(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .verticalScroll(emptyScrollState)
-                                    .heightIn(min = minHeight)
-                                    .padding(horizontal = 24.dp, vertical = 24.dp),
+                                    .fillMaxSize()
+                                    .padding(24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center
                             ) {
-                                if (isFreshNewChat) {
-                                    com.example.gemini.ui.components.AgentPicker(
-                                        selected = currentConv?.agent ?: newChatAgent,
-                                        onSelect = pickAgent,
-                                        modifier = Modifier.padding(bottom = 20.dp),
-                                        agents = enabledAgents,
-                                        statusColors = agentEntries.associate { it.agent to it.color }
+                                Icon(
+                                    imageVector = Icons.Default.CloudOff,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "Unable to Load Chat",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                SelectionContainer {
+                                    Text(
+                                        text = conversationError ?: "Failed to load conversation messages.",
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.9f),
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(horizontal = 16.dp)
                                     )
                                 }
-                                com.example.gemini.ui.components.ServerStoppedPromptCard()
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(
+                                    onClick = {
+                                        val convId = currentConv?.id
+                                        if (!convId.isNullOrBlank()) {
+                                            viewModel.selectConversation(convId)
+                                        } else {
+                                            viewModel.retryConnections()
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Retry", fontSize = 13.5.sp)
+                                }
                             }
-                        }
-                    } else if (isAgyChat && isServerInitializing && messages.isEmpty()) {
-                        if (isFreshNewChat && enabledAgents.size > 1) {
-                            // a new chat keeps its agent picker while Antigravity starts (Claude can be picked and used
-                            // meanwhile); before, the whole view was replaced and the picker vanished until the hub was up
+                        } else if (isAgyChat && isServerStopped && visibleMessages.isEmpty()) {
                             BoxWithConstraints(
                                 modifier = Modifier.fillMaxSize()
                             ) {
@@ -2125,77 +2225,59 @@ fun ChatScreen(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Center
                                 ) {
-                                    com.example.gemini.ui.components.AgentPicker(
-                                        selected = currentConv?.agent ?: newChatAgent,
-                                        onSelect = pickAgent,
-                                        modifier = Modifier.padding(bottom = 20.dp),
-                                        agents = enabledAgents,
-                                        statusColors = agentEntries.associate { it.agent to it.color }
-                                    )
-                                    com.example.gemini.ui.components.EngineWarmingUpView()
+                                    if (isFreshNewChat) {
+                                        com.example.gemini.ui.components.AgentPicker(
+                                            selected = currentConv?.agent ?: newChatAgent,
+                                            onSelect = pickAgent,
+                                            modifier = Modifier.padding(bottom = 20.dp),
+                                            agents = enabledAgents,
+                                            statusColors = agentEntries.associate { it.agent to it.color }
+                                        )
+                                    }
+                                    com.example.gemini.ui.components.ServerStoppedPromptCard()
                                 }
                             }
-                        } else {
-                            com.example.gemini.ui.components.EngineWarmingUpView()
-                        }
-                    } else if (!conversationError.isNullOrBlank() && messages.isEmpty() && (isExistingConversation || currentConv != null)) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CloudOff,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Unable to Load Chat",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            SelectionContainer {
-                                Text(
-                                    text = conversationError ?: "Failed to load conversation messages.",
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.9f),
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(horizontal = 16.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = {
-                                    val convId = currentConv?.id
-                                    if (!convId.isNullOrBlank()) {
-                                        viewModel.selectConversation(convId)
-                                    } else {
-                                        viewModel.retryConnections()
+                        } else if (isAgyChat && isServerInitializing && visibleMessages.isEmpty()) {
+                            if (isFreshNewChat && enabledAgents.size > 1) {
+                                // a new chat keeps its agent picker while Antigravity starts (Claude can be picked and used
+                                // meanwhile); before, the whole view was replaced and the picker vanished until the hub was up
+                                BoxWithConstraints(
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    val minHeight = maxHeight
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .verticalScroll(emptyScrollState)
+                                            .heightIn(min = minHeight)
+                                            .padding(horizontal = 24.dp, vertical = 24.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        com.example.gemini.ui.components.AgentPicker(
+                                            selected = currentConv?.agent ?: newChatAgent,
+                                            onSelect = pickAgent,
+                                            modifier = Modifier.padding(bottom = 20.dp),
+                                            agents = enabledAgents,
+                                            statusColors = agentEntries.associate { it.agent to it.color }
+                                        )
+                                        com.example.gemini.ui.components.EngineWarmingUpView()
                                     }
-                                },
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Retry", fontSize = 13.5.sp)
+                                }
+                            } else {
+                                com.example.gemini.ui.components.EngineWarmingUpView()
                             }
-                        }
-                    } else if (isExistingChat) {
-                        com.example.gemini.ui.components.ConversationLoadingSkeleton()
-                    } else if (messages.isEmpty()) {
-                        BoxWithConstraints(
-                            modifier = Modifier.fillMaxSize()
-                        ) {
+                        } else if (visibleMessages.isEmpty()) {
+                            if (isAuraHome) {
+                                com.example.gemini.ui.home.AuraChatWelcome(
+                                    onPromptSelected = { prompt ->
+                                        inputState.setTextAndPlaceCursorAtEnd(prompt)
+                                    }
+                                )
+                            } else {
+                                BoxWithConstraints(
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
                             val minHeight = maxHeight
                             Column(
                                 modifier = Modifier
@@ -2283,6 +2365,33 @@ fun ChatScreen(
                                         com.example.gemini.ui.jarvis.JarvisChatWelcome { example ->
                                             inputState.setTextAndPlaceCursorAtEnd(example)
                                         }
+                                    } else if (currentConv?.title?.startsWith("Voice Session", ignoreCase = true) == true ||
+                                        currentConv?.id == com.example.gemini.data.live.ChatContextBridge.activeVoiceConvId ||
+                                        com.example.gemini.data.live.VoiceSessionStore.hasSession(currentConv?.id ?: "")) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Mic,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(44.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(14.dp))
+                                        Text(
+                                            text = currentConv?.title ?: "Voice Session",
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = if (currentConv?.id == com.example.gemini.data.live.ChatContextBridge.activeVoiceConvId)
+                                                "Voice session active — speak anytime, your conversation will appear here live."
+                                            else
+                                                "Voice session saved. Everything spoken in this session is preserved.",
+                                            fontSize = 14.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                            textAlign = TextAlign.Center
+                                        )
                                     } else {
                                         Text(
                                             text = "How can I help you today?",
@@ -2302,6 +2411,7 @@ fun ChatScreen(
                                 }
                             }
                         }
+                    }
                     } else {
                         val currentDensity = androidx.compose.ui.platform.LocalDensity.current
                         val customDensity = remember(currentDensity, chatFontScale) {
@@ -2630,6 +2740,7 @@ fun ChatScreen(
                     }
                 }
             }
+        }
 
             val chatBottomSection = @Composable {
                 Column(
@@ -2714,12 +2825,16 @@ fun ChatScreen(
                     }
                 }
 
-                // Disconnection / Reconnecting Inline Banner (Compact, non-intrusive with Reconnect action)
+                // Disconnection / Reconnecting Inline Banner (Compact, non-intrusive with Reconnect & Dismiss actions)
+                val shouldShowBanner = isAgyChat && !auraHomeVoice && !isBridgeBannerDismissed &&
+                    (bridgeUiState is AntigravityBridgeUiState.Error || isReconnecting)
+
                 AnimatedVisibility(
-                    visible = isAgyChat && (isServerOnline == false || isReconnecting) && messages.isNotEmpty(),
+                    visible = shouldShowBanner,
                     enter = expandVertically() + fadeIn(),
                     exit = shrinkVertically() + fadeOut()
                 ) {
+                    val currentError = bridgeUiState as? AntigravityBridgeUiState.Error
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2754,7 +2869,7 @@ fun ChatScreen(
                                 }
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (isReconnecting) "Connecting to Antigravity..." else "Antigravity Disconnected",
+                                    text = if (isReconnecting) "Connecting to Antigravity..." else (currentError?.reason ?: "Antigravity Disconnected"),
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Medium,
                                     color = if (isReconnecting) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onErrorContainer,
@@ -2762,24 +2877,44 @@ fun ChatScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            if (!isReconnecting) {
-                                TextButton(
-                                    onClick = { viewModel.retryConnections() },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(13.dp),
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "Reconnect",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.error
-                                    )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (!isReconnecting) {
+                                    TextButton(
+                                        onClick = {
+                                            isBridgeBannerDismissed = false
+                                            viewModel.retryConnections()
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp),
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Reconnect",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                                if (currentError?.canDismiss != false) {
+                                    IconButton(
+                                        onClick = { isBridgeBannerDismissed = true },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Dismiss",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = if (isReconnecting) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2917,122 +3052,152 @@ fun ChatScreen(
                     agentWorking = isActivelyRunning && currentConv?.id == voiceCall.conversationId
                 )
 
-                if (isAuraHome && auraHomeVoice) {
-                    com.example.gemini.ui.home.AuraVoiceActions(
-                        autoSend = auraAutoSend,
-                        onActionTap = onActionTapAuraJarvis,
-                        onActionDoubleTap = onActionDoubleTapAuraJarvis,
-                        onScreen = {
-                            val scm = com.example.gemini.data.vision.ScreenCaptureManager.getInstance()
-                            if (scm.isSharing.value) {
-                                scm.stopCapture()
-                                Toast.makeText(context, "Screen sharing stopped", Toast.LENGTH_SHORT).show()
-                            } else {
-                                val projectionManager = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
-                                if (projectionManager != null) {
-                                    screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
-                                } else {
-                                    Toast.makeText(context, "Screen sharing not supported on this device", Toast.LENGTH_SHORT).show()
-                                }
-                            }
+                val chatInputBarComposable = @Composable {
+                    ChatInputBar(
+                        isOnline = if (isCodexChat) codexState != com.example.gemini.data.agent.codex.CodexState.OFFLINE && codexState != com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED && codexState != com.example.gemini.data.agent.codex.CodexState.DISABLED && codexState != com.example.gemini.data.agent.codex.CodexState.OUTDATED
+                            else if (isOpenCodeChat) !openCodeState.isBlocking else if (isClaudeChat) !claudeState.isBlocking else systemConnectionState.canSend,
+                        isAuth = if (isCodexChat) codexState != com.example.gemini.data.agent.codex.CodexState.SIGNED_OUT else if (isOpenCodeChat) true else if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else systemConnectionState.isAuth,
+                        offlineMessage = if (isCodexChat) when (codexState) {
+                            com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED -> "Codex is not installed on the server. See Settings → Codex."
+                            com.example.gemini.data.agent.codex.CodexState.DISABLED, com.example.gemini.data.agent.codex.CodexState.OUTDATED -> "Restart the server to use Codex."
+                            else -> "The server is offline. Start it to send messages."
+                        } else if (isOpenCodeChat) when (openCodeState) {
+                            com.example.gemini.data.agent.opencode.OpenCodeState.NOT_INSTALLED -> "OpenCode is not installed on the server. See Settings → OpenCode."
+                            com.example.gemini.data.agent.opencode.OpenCodeState.DISABLED, com.example.gemini.data.agent.opencode.OpenCodeState.OUTDATED -> "Restart the server to use OpenCode."
+                            else -> "The server is offline. Start it to send messages."
+                        } else if (isClaudeChat) when (claudeState) {
+                            com.example.gemini.data.agent.claude.ClaudeStatus.NOT_INSTALLED -> "Claude Code is not installed. Set it up in Settings."
+                            com.example.gemini.data.agent.claude.ClaudeStatus.BRIDGE_OUTDATED -> "Restart the local server to use Claude Code."
+                            else -> "The local server is offline. Start it to send messages."
+                        } else "Server is offline. Start the server to send messages.",
+                        selectedModel = currentModel,
+                        quota = currentQuota,
+                        thinkingPreference = thinkingPref,
+                        textFieldState = inputState,
+                        onOpenModelSelector = {
+                            focusManager.clearFocus(force = true)
+                            keyboardController?.hide()
+                            showModelSelector = true
                         },
-                        onToggleAuto = { com.example.gemini.data.jarvis.JarvisPreferences.autoSend.set(!auraAutoSend) }
-                    )
-                } else {
-                // Chat Input Bar with Bottom Model & Thinking Selector Pills (Claude Android Style)
-                ChatInputBar(
-                    isOnline = if (isCodexChat) codexState != com.example.gemini.data.agent.codex.CodexState.OFFLINE && codexState != com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED && codexState != com.example.gemini.data.agent.codex.CodexState.DISABLED && codexState != com.example.gemini.data.agent.codex.CodexState.OUTDATED
-                        else if (isOpenCodeChat) !openCodeState.isBlocking else if (isClaudeChat) !claudeState.isBlocking else systemConnectionState.canSend,
-                    isAuth = if (isCodexChat) codexState != com.example.gemini.data.agent.codex.CodexState.SIGNED_OUT else if (isOpenCodeChat) true else if (isClaudeChat) claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNED_OUT && claudeChatState != com.example.gemini.data.agent.claude.ClaudeStatus.SIGNING_IN else systemConnectionState.isAuth,
-                    offlineMessage = if (isCodexChat) when (codexState) {
-                        com.example.gemini.data.agent.codex.CodexState.NOT_INSTALLED -> "Codex is not installed on the server. See Settings → Codex."
-                        com.example.gemini.data.agent.codex.CodexState.DISABLED, com.example.gemini.data.agent.codex.CodexState.OUTDATED -> "Restart the server to use Codex."
-                        else -> "The server is offline. Start it to send messages."
-                    } else if (isOpenCodeChat) when (openCodeState) {
-                        com.example.gemini.data.agent.opencode.OpenCodeState.NOT_INSTALLED -> "OpenCode is not installed on the server. See Settings → OpenCode."
-                        com.example.gemini.data.agent.opencode.OpenCodeState.DISABLED, com.example.gemini.data.agent.opencode.OpenCodeState.OUTDATED -> "Restart the server to use OpenCode."
-                        else -> "The server is offline. Start it to send messages."
-                    } else if (isClaudeChat) when (claudeState) {
-                        com.example.gemini.data.agent.claude.ClaudeStatus.NOT_INSTALLED -> "Claude Code is not installed. Set it up in Settings."
-                        com.example.gemini.data.agent.claude.ClaudeStatus.BRIDGE_OUTDATED -> "Restart the local server to use Claude Code."
-                        else -> "The local server is offline. Start it to send messages."
-                    } else "Server is offline. Start the server to send messages.",
-                    selectedModel = currentModel,
-                    quota = currentQuota,
-                    thinkingPreference = thinkingPref,
-                    textFieldState = inputState,
-                    onOpenModelSelector = {
-                        focusManager.clearFocus(force = true)
-                        keyboardController?.hide()
-                        showModelSelector = true
-                    },
-                    onOpenThinkingSelector = {
-                        focusManager.clearFocus(force = true)
-                        keyboardController?.hide()
-                        showThinkingSelector = true
-                    },
-                    isStreaming = isActivelyRunning || hasActiveImageGen,
-                    isBackgroundActive = isBackgroundActive,
-                    onSendMessage = { text ->
-                        val appCmd = if (isClaudeChat && attachments.isEmpty()) claudeBackend.appCommand(text) else null
-                        val codexCmd = if (isCodexChat && attachments.isEmpty()) codexBackend.appCommand(text) else null
-                        if (codexCmd != null) {
-                            handleCodexCommand(codexCmd)
+                        onOpenThinkingSelector = {
+                            focusManager.clearFocus(force = true)
+                            keyboardController?.hide()
+                            showThinkingSelector = true
+                        },
+                        isStreaming = isActivelyRunning || hasActiveImageGen,
+                        isBackgroundActive = isBackgroundActive,
+                        onSendMessage = { text ->
+                            val appCmd = if (isClaudeChat && attachments.isEmpty()) claudeBackend.appCommand(text) else null
+                            val codexCmd = if (isCodexChat && attachments.isEmpty()) codexBackend.appCommand(text) else null
+                            if (codexCmd != null) {
+                                handleCodexCommand(codexCmd)
+                                viewModel.clearDraft(activeConversationKey)
+                                inputState.clearText()
+                                return@ChatInputBar
+                            }
+                            val unreadable = if (isClaudeChat) attachments.filter { a ->
+                                a.isAudio || a.mimeType?.startsWith("audio/") == true || a.mimeType?.startsWith("video/") == true
+                            } else emptyList()
+                            if (unreadable.isNotEmpty()) {
+                                // Claude models cannot read audio or video: say so instead of sending a file it would reject
+                                com.example.gemini.ui.components.AppToastHelper.showToast(
+                                    "Claude can't read audio or video files. Remove them, or tap the mic to dictate instead.",
+                                    com.example.gemini.ui.components.ChatToastType.ERROR
+                                )
+                                return@ChatInputBar
+                            }
+                            if (appCmd != null) {
+                                handleClaudeCommand(appCmd)
+                            } else {
+                                com.example.gemini.data.live.ChatContextBridge.isNewChatDraft = false
+                                viewModel.sendMessage(text)
+                                userSentMessageTrigger++
+                            }
                             viewModel.clearDraft(activeConversationKey)
                             inputState.clearText()
-                            return@ChatInputBar
-                        }
-                        val unreadable = if (isClaudeChat) attachments.filter { a ->
-                            a.isAudio || a.mimeType?.startsWith("audio/") == true || a.mimeType?.startsWith("video/") == true
-                        } else emptyList()
-                        if (unreadable.isNotEmpty()) {
-                            // Claude models cannot read audio or video: say so instead of sending a file it would reject
-                            com.example.gemini.ui.components.AppToastHelper.showToast(
-                                "Claude can't read audio or video files. Remove them, or tap the mic to dictate instead.",
-                                com.example.gemini.ui.components.ChatToastType.ERROR
-                            )
-                            return@ChatInputBar
-                        }
-                        if (appCmd != null) {
-                            handleClaudeCommand(appCmd)
-                        } else {
-                            viewModel.sendMessage(text)
-                            userSentMessageTrigger++
-                        }
-                        viewModel.clearDraft(activeConversationKey)
-                        inputState.clearText()
-                    },
-                    onStopStreaming = {
-                        if (isAuraHome) {
-                            viewModel.stopStreaming()
-                        } else {
-                            showStopConfirmDialog = true
-                        }
-                    },
-                    attachments = attachments,
-                    isUploadingAttachment = isUploadingAttachment,
-                    attachmentProgress = attachmentProgress,
-                    onRemoveAttachment = { viewModel.removeAttachment(it) },
-                    onAddAttachment = { viewModel.addAttachment(it) },
-                    onAttachClick = { showAttachmentSelector = true },
-                    onTranscribeAudioFile = { file, onDone, onError ->
-                        viewModel.transcribeAudioFile(file, onDone, onError)
-                    },
-                    isTranscribingAudio = isTranscribingAudio,
-                    speechManager = if (isClaudeChat) viewModel.claudeVoice else if (isCodexChat) viewModel.codexVoice else viewModel.speechManager,
-                    // Claude and Codex cannot take audio: a voice note becomes text
-                    voiceNotesAsText = isClaudeChat || isCodexChat,
-                    voiceEnabled = !isOpenCodeChat,
-                    cascadeId = activeConversationKey,
-                    focusRequester = chatInputFocusRequester,
-                    queuedMessages = queuedMessages,
-                    onSendQueuedNow = { viewModel.sendQueuedNow(it) },
-                    onDeleteQueued = { viewModel.deleteQueued(it) },
-                    onStartVoiceCall = null,
-                    onStartVoiceMode = { auraHomeVoice = true },
-                    voiceCallActive = voiceCall.active,
-                    auraHomeStyle = isAuraHome
-                )
+                        },
+                        onStopStreaming = {
+                            if (isAuraHome) {
+                                viewModel.stopStreaming()
+                            } else {
+                                showStopConfirmDialog = true
+                            }
+                        },
+                        attachments = attachments,
+                        isUploadingAttachment = isUploadingAttachment,
+                        attachmentProgress = attachmentProgress,
+                        onRemoveAttachment = { viewModel.removeAttachment(it) },
+                        onAddAttachment = { viewModel.addAttachment(it) },
+                        onAttachClick = { showAttachmentSelector = true },
+                        onTranscribeAudioFile = { file, onDone, onError ->
+                            viewModel.transcribeAudioFile(file, onDone, onError)
+                        },
+                        isTranscribingAudio = isTranscribingAudio,
+                        speechManager = if (isClaudeChat) viewModel.claudeVoice else if (isCodexChat) viewModel.codexVoice else viewModel.speechManager,
+                        // Claude and Codex cannot take audio: a voice note becomes text
+                        voiceNotesAsText = isClaudeChat || isCodexChat,
+                        voiceEnabled = !isOpenCodeChat,
+                        cascadeId = activeConversationKey,
+                        focusRequester = chatInputFocusRequester,
+                        queuedMessages = queuedMessages,
+                        onSendQueuedNow = { viewModel.sendQueuedNow(it) },
+                        onDeleteQueued = { viewModel.deleteQueued(it) },
+                        onStartVoiceCall = null,
+                        onStartVoiceMode = {
+                            keyboardController?.hide()
+                            focusManager.clearFocus(force = true)
+                            auraHomeVoice = true
+                        },
+                        voiceCallActive = voiceCall.active,
+                        auraHomeStyle = isAuraHome
+                    )
+                }
+
+                if (isAuraHome) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                val isVisible = auraHomeVoice
+                                alpha = if (isVisible) 1f else 0f
+                                translationY = if (isVisible) 0f else 600f
+                            }
+                    ) {
+                        com.example.gemini.ui.home.AuraVoiceActions(
+                            autoSend = auraAutoSend,
+                            onActionTap = onActionTapAuraJarvis,
+                            onActionDoubleTap = onActionDoubleTapAuraJarvis,
+                            onScreen = {
+                                val scm = com.example.gemini.data.vision.ScreenCaptureManager.getInstance()
+                                if (scm.isSharing.value) {
+                                    scm.stopCapture()
+                                    Toast.makeText(context, "Screen sharing stopped", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val projectionManager = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as? android.media.projection.MediaProjectionManager
+                                    if (projectionManager != null) {
+                                        screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
+                                    } else {
+                                        Toast.makeText(context, "Screen sharing not supported on this device", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            onToggleAuto = { com.example.gemini.data.jarvis.JarvisPreferences.autoSend.set(!auraAutoSend) }
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                val isVisible = !auraHomeVoice
+                                alpha = if (isVisible) 1f else 0f
+                                translationY = if (isVisible) 0f else 600f
+                            }
+                    ) {
+                        chatInputBarComposable()
+                    }
+                } else {
+                    chatInputBarComposable()
                 }
             }
             }
@@ -3072,7 +3237,11 @@ fun ChatScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
-                                onClick = { scope.launch { drawerState.open() } },
+                                onClick = {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus(force = true)
+                                    scope.launch { drawerState.open() }
+                                },
                                 modifier = Modifier.size(48.dp)
                             ) {
                                 Icon(
@@ -3087,6 +3256,17 @@ fun ChatScreen(
                             com.example.gemini.ui.components.AuraModeToggle(
                                 currentMode = if (auraHomeVoice) "voice" else "chat",
                                 onModeSelected = { mode ->
+                                    if (mode == "voice") {
+                                        keyboardController?.hide()
+                                        focusManager.clearFocus(force = true)
+                                    } else {
+                                        if (!com.example.gemini.data.live.ChatContextBridge.isNewChatDraft && currentConv?.title != "New Chat") {
+                                            val activeId = com.example.gemini.data.live.ChatContextBridge.activeVoiceConvId
+                                            if (activeId != null && currentConv?.id != activeId) {
+                                                viewModel.selectConversation(activeId)
+                                            }
+                                        }
+                                    }
                                     auraHomeVoice = (mode == "voice")
                                 }
                             )
@@ -3095,6 +3275,9 @@ fun ChatScreen(
 
                             IconButton(
                                 onClick = {
+                                    com.example.gemini.data.live.ChatContextBridge.isNewChatDraft = true
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus(force = true)
                                     val currentId = currentConv?.id
                                     if (!currentId.isNullOrBlank() && feedItems.isNotEmpty()) {
                                         ConversationScrollCache.save(currentId, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isAtBottom)

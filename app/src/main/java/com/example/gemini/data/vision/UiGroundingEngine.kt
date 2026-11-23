@@ -121,8 +121,8 @@ class UiGroundingEngine {
             val isEditable = node.isEditable || cls.contains("EditText", ignoreCase = true) || hasSetTextAction
             val isScrollable = node.isScrollable
 
-            // If a clickable row/card has no direct text, extract combined text from its descendants
-            if (text.isBlank() && desc.isBlank() && node.childCount > 0 && isClickable) {
+            // If a row/card has no direct text, extract combined text from its descendants (vital for chat apps like Telegram/WhatsApp)
+            if (text.isBlank() && desc.isBlank() && node.childCount > 0) {
                 val childTexts = collectNodeText(node)
                 if (childTexts.isNotEmpty()) {
                     text = childTexts.joinToString(" • ")
@@ -487,7 +487,7 @@ class UiGroundingEngine {
     }
 
     private fun collectNodeText(node: AccessibilityNodeInfo, depth: Int = 0): List<String> {
-        if (depth > 3) return emptyList()
+        if (depth > 6) return emptyList()
         val list = mutableListOf<String>()
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
@@ -550,10 +550,12 @@ class UiGroundingEngine {
         }
 
         for (el in meaningful.take(75)) {
-            val label = if (el.isImageOrThumbnail && (el.primaryLabel.isBlank() || el.primaryLabel.contains("ImageView", ignoreCase = true))) {
-                "Image Thumbnail"
-            } else {
-                el.primaryLabel
+            val label = when {
+                el.text.isNotBlank() && el.contentDescription.isNotBlank() && !el.contentDescription.equals(el.text, true) ->
+                    "${el.text} [desc: ${el.contentDescription}]"
+                el.isImageOrThumbnail && (el.primaryLabel.isBlank() || el.primaryLabel.contains("ImageView", ignoreCase = true)) ->
+                    "Image Thumbnail"
+                else -> el.primaryLabel
             }
 
             if (isWebSearchPage && el.isEditable) {

@@ -86,6 +86,7 @@ object YouTubeController {
         val url = "https://m.youtube.com/results?search_query=$encoded"
         return try {
             com.example.gemini.ui.browser.BrowserSessionManager.instance.openUrl(url, newTab = true)
+            com.example.gemini.data.live.ChatContextBridge.requestViewMode("BROWSER")
             PlayResult(true, cleanQ, "Playing \"$cleanQ\" in Aura In-Built Browser with background playback.")
         } catch (e: Exception) {
             android.util.Log.e("YouTubeController", "In-built browser playback failed, falling back to YouTube intent", e)

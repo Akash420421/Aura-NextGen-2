@@ -37,6 +37,7 @@ object ChatContextBridge {
 
     var activeVoiceConvId: String? = null
     val requestSwitchToChatTab = MutableStateFlow(false)
+    var isNewChatDraft: Boolean = false
 
     fun attach(vm: ChatViewModel) {
         viewModel = vm
@@ -47,8 +48,9 @@ object ChatContextBridge {
     }
 
     fun startVoiceSessionConversation(): String {
+        isNewChatDraft = false
         val vm = viewModel
-        val conv = VoiceSessionStore.createSession()
+        val conv = VoiceSessionStore.createSession(reuseActiveId = activeVoiceConvId)
         activeVoiceConvId = conv.id
         if (vm != null) {
             try {
@@ -57,16 +59,26 @@ object ChatContextBridge {
                 val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore
                 store?.let {
                     it.conversations.value = listOf(conv) + it.conversations.value.filter { c -> c.id != conv.id }
+                    it.currentConversation.value = conv
+                    val existing = VoiceSessionStore.getSession(conv.id)?.messages ?: emptyList()
+                    it.messages.value = existing
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update memory store for voice session: ${e.message}")
+            }
+            try {
+                vm.selectConversation(conv.id)
+            } catch (e: Exception) {
+                Log.e(TAG, "selectConversation error: ${e.message}")
             }
         }
         return conv.id
     }
 
     fun endVoiceSessionConversation() {
-        // Voice session is permanently retained in VoiceSessionStore
+        // Voice session is permanently retained in VoiceSessionStore and ChatDatabase
+        activeVoiceConvId = null
+        isNewChatDraft = false
     }
 
     fun recordVoiceUserTurn(text: String) {
@@ -121,13 +133,17 @@ object ChatContextBridge {
         } catch (_: Exception) {}
     }
 
+    fun openLiveChat(): String = openCurrentVoiceChat()
+
     fun openCurrentVoiceChat(): String {
         val vm = viewModel ?: return "Chat system is not available."
         val convId = activeVoiceConvId
         return if (convId != null) {
+            isNewChatDraft = false
             vm.selectConversation(convId)
+            requestViewMode("CHAT")
             requestSwitchToChatTab.value = true
-            "Switched to current voice chat on screen."
+            "Switched to current live voice chat on screen."
         } else {
             "No active voice chat found."
         }
@@ -144,7 +160,9 @@ object ChatContextBridge {
         }.sortedByDescending { it.updatedAt }.firstOrNull()
 
         return if (prev != null) {
+            isNewChatDraft = false
             vm.selectConversation(prev.id)
+            requestViewMode("CHAT")
             requestSwitchToChatTab.value = true
             "Opened previous voice conversation '${prev.title}' on screen."
         } else {
@@ -189,12 +207,17 @@ object ChatContextBridge {
         return sb.toString()
     }
 
+    fun createNewChat(): String = startNewChat()
+
     fun startNewChat(): String {
         val vm = viewModel ?: return "Could not access chat system."
         return try {
+            isNewChatDraft = true
             vm.startNewChat()
             _lastActiveChatTitle.value = "New Chat"
-            "New chat session created on screen."
+            requestViewMode("CHAT")
+            requestSwitchToChatTab.value = true
+            "A fresh new chat has been created on screen with welcome suggestion cards."
         } catch (e: Exception) {
             "Failed to start new chat: ${e.message}"
         }
@@ -484,25 +507,19 @@ object ChatContextBridge {
 
     fun recordToolExecution(toolName: String, summary: String) {
         val convId = activeVoiceConvId ?: viewModel?.currentConversation?.value?.id
+        val targetId = convId ?: UUID.randomUUID().toString()
+        val msg = ChatMessage(
+            conversationId = targetId,
+            role = MessageRole.TOOL,
+            content = "⚡ [$toolName]: $summary",
+            viaVoice = true
+        )
         if (convId != null) {
-            val msg = ChatMessage(
-                conversationId = convId,
-                role = MessageRole.TOOL,
-                content = "⚡ [$toolName]: $summary",
-                viaVoice = true
-            )
             VoiceSessionStore.appendMessage(convId, msg)
         }
         val vm = viewModel ?: return
         try {
             ensureConversationExists(vm)
-            val currentId = vm.currentConversation.value?.id ?: convId ?: UUID.randomUUID().toString()
-            val msg = ChatMessage(
-                conversationId = currentId,
-                role = MessageRole.TOOL,
-                content = "⚡ [$toolName]: $summary",
-                viaVoice = true
-            )
             appendMessageToStore(vm, msg)
         } catch (e: Exception) {
             Log.e(TAG, "Error recording tool execution in chat: ${e.message}")
@@ -534,7 +551,9 @@ object ChatContextBridge {
             prop.isAccessible = true
             val store = prop.get(vm) as? com.example.gemini.data.agent.ChatSessionStore
             store?.let {
-                it.messages.value = it.messages.value + msg
+                if (it.currentConversation.value?.id == msg.conversationId) {
+                    it.messages.value = it.messages.value + msg
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "appendMessageToStore failed: ${e.message}")

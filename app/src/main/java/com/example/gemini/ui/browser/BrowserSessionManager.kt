@@ -375,10 +375,21 @@ class BrowserSessionManager private constructor() {
 
         /**
          * Formats raw user/agent input into a valid HTTP/HTTPS/File URL or search query.
+         * Normalizes YouTube shortcuts to https://m.youtube.com and bare domains to https://
          */
         fun formatUrl(input: String): String {
             val trimmed = input.trim()
             if (trimmed.isBlank()) return ""
+
+            // Normalize YouTube shortcuts
+            val lower = trimmed.lowercase()
+            if (lower == "youtube" || lower == "youtube.com" || lower == "www.youtube.com" || lower == "m.youtube.com" || lower == "yt") {
+                return "https://m.youtube.com"
+            }
+            if (lower.startsWith("youtube.com/") || lower.startsWith("www.youtube.com/") || lower.startsWith("m.youtube.com/")) {
+                return "https://$trimmed"
+            }
+
             if (trimmed.startsWith("http://", ignoreCase = true) ||
                 trimmed.startsWith("https://", ignoreCase = true) ||
                 trimmed.startsWith("file://", ignoreCase = true) ||
@@ -390,10 +401,16 @@ class BrowserSessionManager private constructor() {
             if (trimmed.startsWith("localhost", ignoreCase = true) ||
                 trimmed.startsWith("127.0.0.1") ||
                 trimmed.startsWith("192.168.") ||
-                trimmed.startsWith("10.0.") ||
-                trimmed.matches(Regex("^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(/.*)?$")) ||
-                (trimmed.contains(":") && trimmed.substringBefore(":").all { it.isLetterOrDigit() || it == '.' })
+                trimmed.startsWith("10.0.")
             ) {
+                return "http://$trimmed"
+            }
+            // Bare domain names default to https://
+            if (trimmed.matches(Regex("^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(/.*)?$"))) {
+                return "https://$trimmed"
+            }
+            // Host with port e.g. myserver:3000
+            if (trimmed.contains(":") && trimmed.substringBefore(":").all { it.isLetterOrDigit() || it == '.' }) {
                 return "http://$trimmed"
             }
             val encoded = try { URLEncoder.encode(trimmed, "UTF-8") } catch (_: Exception) { trimmed }
@@ -568,6 +585,19 @@ class BrowserSessionManager private constructor() {
     }
 
     var activeTabId by mutableStateOf<String?>(tabs.firstOrNull()?.id)
+
+    var customView by mutableStateOf<View?>(null)
+        private set
+    var customViewCallback: WebChromeClient.CustomViewCallback? = null
+        private set
+
+    fun hideCustomView() {
+        try {
+            customViewCallback?.onCustomViewHidden()
+        } catch (_: Exception) {}
+        customView = null
+        customViewCallback = null
+    }
 
     /**
      * Headless offscreen container to keep WebViews measured and layout-computed
@@ -963,6 +993,7 @@ class BrowserSessionManager private constructor() {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
+                databaseEnabled = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 allowFileAccess = true
                 allowContentAccess = true
@@ -1190,6 +1221,35 @@ class BrowserSessionManager private constructor() {
                         }
                         return false
                     }
+                    // Intercept intent:// or vnd.youtube: deep links so YouTube or websites stay inside Aura
+                    val uriString = uri.toString()
+                    if (scheme == "intent" || scheme == "vnd.youtube" || uriString.startsWith("intent:", ignoreCase = true)) {
+                        try {
+                            val parsedIntent = android.content.Intent.parseUri(uriString, android.content.Intent.URI_INTENT_SCHEME)
+                            val fallbackUrl = parsedIntent.getStringExtra("browser_fallback_url")
+                            if (!fallbackUrl.isNullOrBlank()) {
+                                val decodedFallback = if (fallbackUrl.startsWith("http://") || fallbackUrl.startsWith("https://")) {
+                                    fallbackUrl
+                                } else {
+                                    Uri.decode(fallbackUrl)
+                                }
+                                tab.url = decodedFallback
+                                view?.loadUrl(decodedFallback)
+                                return true
+                            }
+                        } catch (_: Exception) {}
+                        if (scheme == "vnd.youtube" || uriString.contains("com.google.android.youtube")) {
+                            val path = uri.path ?: ""
+                            val query = uri.query?.let { "?$it" } ?: ""
+                            val ytUrl = "https://m.youtube.com/$path$query".replace("//", "/")
+                            tab.url = ytUrl
+                            view?.loadUrl(ytUrl)
+                            return true
+                        }
+                        // Prevent opening external apps/Chrome
+                        return true
+                    }
+
                     return try {
                         val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
                         intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1202,6 +1262,17 @@ class BrowserSessionManager private constructor() {
             }
 
             webChromeClient = object : WebChromeClient() {
+                override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                    if (view == null) return
+                    customViewCallback?.onCustomViewHidden()
+                    customView = view
+                    customViewCallback = callback
+                }
+
+                override fun onHideCustomView() {
+                    hideCustomView()
+                }
+
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                     tab.progress = newProgress
                     tab.isLoading = newProgress < 100

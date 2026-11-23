@@ -152,6 +152,7 @@ sealed class MarkdownBlock {
     @androidx.compose.runtime.Immutable
     data class Image(val alt: String, val url: String) : MarkdownBlock()
 
+    @androidx.compose.runtime.Immutable
     data class Video(val alt: String, val url: String) : MarkdownBlock()
     @androidx.compose.runtime.Immutable
     data class YouTubeVideo(

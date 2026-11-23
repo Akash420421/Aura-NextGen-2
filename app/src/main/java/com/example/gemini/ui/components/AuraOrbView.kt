@@ -30,19 +30,57 @@ class AuraOrbBridge(
 fun AuraOrbView(
     modifier: Modifier = Modifier,
     phase: Phase = Phase.IDLE,
+    livePhase: com.example.gemini.data.live.AuraLiveVoiceManager.Phase? = null,
+    isPaused: Boolean = false,
     onOrbTapped: () -> Unit = {}
 ) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
-    // Sync phase to WebGL orb
-    LaunchedEffect(phase, webViewRef) {
-        val wv = webViewRef ?: return@LaunchedEffect
-        val mode = when (phase) {
-            Phase.LISTENING -> "listening"
-            Phase.THINKING -> "thinking"
-            Phase.SPEAKING -> "speaking"
-            else -> "idle"
+    fun resolveMode(): String {
+        return if (livePhase != null) {
+            when (livePhase) {
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> "listening"
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> "thinking"
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.WORKING -> "working"
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> "speaking"
+                else -> "idle"
+            }
+        } else {
+            when (phase) {
+                Phase.LISTENING -> "listening"
+                Phase.THINKING -> "thinking"
+                Phase.SPEAKING -> "speaking"
+                else -> "idle"
+            }
         }
+    }
+
+    // Sync active/pause state to WebGL orb to eliminate GPU overdraw & battery drain when not visible
+    LaunchedEffect(isPaused, webViewRef) {
+        val wv = webViewRef ?: return@LaunchedEffect
+        if (isPaused) {
+            wv.evaluateJavascript("if (window.pauseOrb) window.pauseOrb();", null)
+            wv.onPause()
+            wv.pauseTimers()
+        } else {
+            wv.onResume()
+            wv.resumeTimers()
+            wv.evaluateJavascript("if (window.resumeOrb) window.resumeOrb();", null)
+        }
+    }
+
+    DisposableEffect(webViewRef) {
+        onDispose {
+            webViewRef?.evaluateJavascript("if (window.pauseOrb) window.pauseOrb();", null)
+            webViewRef?.onPause()
+            webViewRef?.pauseTimers()
+        }
+    }
+
+    // Sync phase to WebGL orb
+    LaunchedEffect(phase, livePhase, webViewRef) {
+        val wv = webViewRef ?: return@LaunchedEffect
+        val mode = resolveMode()
         wv.evaluateJavascript(
             "if (window.setAuraMode) { window.setAuraMode('$mode'); } else if (window.JarvisOrb && window.JarvisOrb.setState) { window.JarvisOrb.setState('$mode'); }",
             null
@@ -85,12 +123,7 @@ fun AuraOrbView(
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
-                            val mode = when (phase) {
-                                Phase.LISTENING -> "listening"
-                                Phase.THINKING -> "thinking"
-                                Phase.SPEAKING -> "speaking"
-                                else -> "idle"
-                            }
+                            val mode = resolveMode()
                             view?.evaluateJavascript(
                                 "if (window.setAuraMode) { window.setAuraMode('$mode'); } else if (window.JarvisOrb && window.JarvisOrb.setState) { window.JarvisOrb.setState('$mode'); }",
                                 null

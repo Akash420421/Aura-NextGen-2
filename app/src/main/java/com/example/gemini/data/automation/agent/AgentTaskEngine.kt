@@ -134,18 +134,22 @@ object AgentTaskEngine {
             val expectedBeforePause = context.currentScreenSignature
             val service = com.example.gemini.data.automation.AutomationAccessibilityService.instance
             val root = service?.getActiveRootNode()
-            if (root == null) return false
-            val freshSignature = ScreenSignatureCalculator.computeSignature(root)
-            observe(freshSignature, root.packageName?.toString(), "Fresh accessibility observation after resume")
-            resumeObservationRequired = false
-            if (expectedBeforePause != null && !freshSignature.isEquivalentTo(expectedBeforePause)) {
-                context.lastAction = action
-                context.lastActionResult = "Action rejected because the UI changed while paused; target must be resolved again from the fresh screen"
-                context.lastActionVerified = false
-                context.status = State.REPLANNING
-                context.recoveryCount++
-                publish(context)
-                return false
+            if (root == null && !action.startsWith("navigation:")) return false
+            if (root != null) {
+                val freshSignature = ScreenSignatureCalculator.computeSignature(root)
+                observe(freshSignature, root.packageName?.toString(), "Fresh accessibility observation after resume")
+                resumeObservationRequired = false
+                if (expectedBeforePause != null && !freshSignature.isEquivalentTo(expectedBeforePause)) {
+                    context.lastAction = action
+                    context.lastActionResult = "Action rejected because the UI changed while paused; target must be resolved again from the fresh screen"
+                    context.lastActionVerified = false
+                    context.status = State.REPLANNING
+                    context.recoveryCount++
+                    publish(context)
+                    return false
+                }
+            } else {
+                resumeObservationRequired = false
             }
         }
         context?.let { if (it.status !in setOf(State.COMPLETED, State.FAILED, State.CANCELLED)) it.status = State.ACTING }

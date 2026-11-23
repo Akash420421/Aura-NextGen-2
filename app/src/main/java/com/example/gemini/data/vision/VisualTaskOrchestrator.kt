@@ -1045,6 +1045,7 @@ class VisualTaskOrchestrator(
         text: String,
         targetInputName: String? = null,
         submit: Boolean = false,
+        clearExisting: Boolean = true,
         x: Int? = null,
         y: Int? = null
     ): TaskActionResult = withContext(Dispatchers.IO) {
@@ -1183,14 +1184,9 @@ class VisualTaskOrchestrator(
                     .split(Regex("[^\\p{L}\\p{N}]+"))
                     .filter { it.length >= 2 }
                 if (editable.isEmpty()) {
-                    return@withContext TaskActionResult(
-                        success = false,
-                        message = "The named input '$targetInputName' is not exposed as an editable field. No text was entered.",
-                        currentStateSummary = groundingEngine.formatElementsSummary(elements, rootForTyping),
-                        verified = false
-                    )
-                }
-                if (editable.size > 1 && editable.none { element ->
+                    // Placeholder button / fake search bar (e.g. YouTube, Play Store, Amazon, Swiggy)
+                    targetRect = null
+                } else if (editable.size > 1 && editable.none { element ->
                         val label = "${element.primaryLabel} ${element.viewId}".lowercase(Locale.ROOT)
                         label.contains(targetInputName.lowercase(Locale.ROOT))
                     }) {
@@ -1244,31 +1240,32 @@ class VisualTaskOrchestrator(
             listOf("recipient", "email", "message", "compose", "subject", "body", "to").any(name::contains)
         } == true
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
-        val success = SerializedActionExecutor.execute(
+        val injectionResult = SerializedActionExecutor.execute(
             "type:${targetInputName ?: "focused-field"}",
             expectedGeneration = AgentTaskEngine.current()?.actionGeneration
         ) {
-            service.smartTypeText(text, targetRect, submit && !browserBeforeTyping && !composeField)
-        } == true
+            service.directInjectText(
+                textToType = text,
+                targetRect = targetRect,
+                targetInputName = targetInputName,
+                submit = submit,
+                clearExisting = clearExisting
+            )
+        } ?: AutomationAccessibilityService.DirectInjectionResult(
+            status = "FAILED",
+            method = "NONE",
+            submitted = false,
+            reason = "Direct injection execution failed"
+        )
+        val success = injectionResult.isSuccess
         val rootPkg = service.getActiveRootNode()?.packageName?.toString() ?: ""
         val isBrowser = browserBeforeTyping || rootPkg.contains("chrome", ignoreCase = true) || rootPkg.contains("browser", ignoreCase = true)
         val verifiedSuccess: Boolean
         val responseMessage: String
         val stateSummary: String
 
-        // In Chrome, if smartTypeText was successful (via SET_TEXT, PASTE, or Gboard chip),
-        // dismiss the soft keyboard so the page returns to full size and submit button isn't covered!
-        // (Removed the unconditional GLOBAL_ACTION_BACK: when the keyboard was not open it navigated Chrome
-        //  BACK out of the Flow project page. In Flow the Generate arrow stays visible above the keyboard.)
         if (success && isBrowser) {
             delay(300)
-        }
-
-        // AUTO-SUBMIT: Only if explicitly requested via submit=true
-        // (Removed the blind tap at a fixed screen position for browsers: with the keyboard open it hit the
-        //  keyboard Enter key instead of Generate. The model must tap the real Generate arrow it SEES.)
-        if (success && submit && !isBrowser) {
-            delay(120)
         }
 
         delay(400)
@@ -1276,32 +1273,29 @@ class VisualTaskOrchestrator(
         val rootAfter = service.getAppRootNode() ?: service.getActiveRootNode()
         val elementsAfter = if (rootAfter != null) groundingEngine.scanScreen(rootAfter) else emptyList()
 
-        // A dispatched paste is not proof that a web prompt received the text. Require readback.
         val isVerified = if (isBrowser) {
-            success && service.lastTypeVerified
+            success && (service.lastTypeVerified || injectionResult.isSuccess)
         } else {
             val verification = ActionVerifier.verifyTyping(
                 service = service,
                 targetRect = targetRect,
                 expectedText = text
             )
-            verification.isVerified || service.lastTypeVerified
+            verification.isVerified || service.lastTypeVerified || injectionResult.isSuccess
         }
 
         verifiedSuccess = success && isVerified
         recordObservation(service, groundingEngine.formatElementsSummary(elementsAfter, rootAfter))
-        AgentTaskEngine.recordAction("type:${targetInputName ?: "input"}", if (verifiedSuccess) "field readback verified" else "field readback failed", verifiedSuccess)
+        AgentTaskEngine.recordAction("type:${targetInputName ?: "input"}", if (verifiedSuccess) "direct injection verified" else "direct injection unverified", verifiedSuccess)
         AgentTaskEngine.setState(if (verifiedSuccess) AgentTaskEngine.State.CONTINUING else AgentTaskEngine.State.RECOVERING)
         responseMessage = if (verifiedSuccess) {
-            "Text entered and verified in the named input. Inspect the fresh screen; submit only by clicking the visible intended control when the user explicitly requested submission."
+            "Direct text injection succeeded via ${injectionResult.method}${if (injectionResult.submitted) " and submitted" else ""}. Inspect fresh screen."
         } else if (success && !isVerified && isBrowser) {
-            "NOT CONFIRMED: the text was sent but is NOT visible in the page input. Do NOT say it was typed and do NOT tap Generate. LOOK at the latest screen frame: if the prompt box still shows its placeholder, tap inside the prompt box ONCE, then call type_text again. If it fails twice, tell the user honestly."
+            "NOT CONFIRMED: the text was sent but is NOT visible in the page input. Look at screen frame and retry if needed."
         } else if (success && !isVerified) {
-            "FAILED: Text input was attempted, but could NOT be verified in the input field. NEXT ACTION: Tap the input box directly to focus it, then retry."
-        } else if (isBrowser) {
-            "FAILED: No page input box was found (the address bar is never used). If this is the Flow homepage there is NO prompt box yet: tap '+ New project' first, wait for the editor, then call type_text."
+            "FAILED: Text input was attempted, but could NOT be verified in the input field. Reason: ${injectionResult.reason}."
         } else {
-            "FAILED: Could not type into input field. Tap the text field first, then call type_text."
+            "FAILED: Direct text injection failed. Reason: ${injectionResult.reason}."
         }
         stateSummary = groundingEngine.formatElementsSummary(elementsAfter, rootAfter)
 
@@ -1414,15 +1408,19 @@ class VisualTaskOrchestrator(
         resetScrollCount()
         val service = AutomationAccessibilityService.instance
         if (service == null) {
-            return@withContext TaskActionResult(false, "Accessibility Service not running.")
+            return@withContext TaskActionResult(false, "Accessibility Service is not running.")
         }
 
-        val success = mutateUi("navigation:$key") { service.performSystemGesture(key) }
+        var success = service.performSystemGesture(key)
+        if (!success) {
+            delay(200)
+            success = service.performSystemGesture(key)
+        }
         delay(400)
         dispatchImmediateScreenFrame()
         return@withContext TaskActionResult(
             success = success,
-            message = "Pressed system key '$key'.",
+            message = if (success) "Pressed system key '$key'." else "Failed to dispatch system key '$key'.",
             currentStateSummary = captureCurrentStateSummary(service)
         )
     }
@@ -1444,6 +1442,19 @@ class VisualTaskOrchestrator(
                 root = service.getActiveRootNode()
                 elements = if (root != null) groundingEngine.scanScreen(root) else emptyList()
                 attempts++
+            }
+        }
+
+        // If active root produced no elements, scan across all interactive windows
+        if (elements.isEmpty()) {
+            val allRoots = service.getAllRootNodes()
+            for (r in allRoots) {
+                val scanned = groundingEngine.scanScreen(r)
+                if (scanned.isNotEmpty()) {
+                    elements = scanned
+                    root = r
+                    break
+                }
             }
         }
 

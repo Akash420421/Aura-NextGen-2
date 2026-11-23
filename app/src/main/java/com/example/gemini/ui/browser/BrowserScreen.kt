@@ -90,27 +90,7 @@ import kotlinx.coroutines.launch
  */
 typealias BrowserTab = BrowserTabSession
 
-private fun formatBrowserUrl(input: String): String {
-    val trimmed = input.trim()
-    if (trimmed.isBlank()) return ""
-    if (trimmed.startsWith("http://", ignoreCase = true) ||
-        trimmed.startsWith("https://", ignoreCase = true) ||
-        trimmed.startsWith("file://", ignoreCase = true) ||
-        trimmed.startsWith("about:", ignoreCase = true)) {
-        return trimmed
-    }
-    // Check if it's localhost or an IP/host with optional port
-    if (trimmed.startsWith("localhost", ignoreCase = true) ||
-        trimmed.startsWith("127.0.0.1") ||
-        trimmed.startsWith("192.168.") ||
-        trimmed.startsWith("10.0.") ||
-        trimmed.matches(Regex("^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(/.*)?$")) ||
-        (trimmed.contains(":") && trimmed.substringBefore(":").all { it.isLetterOrDigit() || it == '.' })) {
-        return "http://$trimmed"
-    }
-    val encoded = try { URLEncoder.encode(trimmed, "UTF-8") } catch (_: Exception) { trimmed }
-    return "https://www.google.com/search?q=$encoded"
-}
+private fun formatBrowserUrl(input: String): String = BrowserSessionManager.formatUrl(input)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
@@ -239,11 +219,14 @@ fun BrowserScreen(
     }
 
     // Back button behavior:
+    // If full-screen video is active -> exit full-screen.
     // If address bar is focused -> clear focus.
     // If tab overview is shown -> dismiss overview.
     // If active tab WebView has history -> navigate back in history.
     BackHandler(enabled = isVisible) {
-        if (isAddressFocused) {
+        if (sessionManager.customView != null) {
+            sessionManager.hideCustomView()
+        } else if (isAddressFocused) {
             isAddressFocused = false
             focusManager.clearFocus(force = true)
             keyboardController?.hide()
@@ -343,175 +326,243 @@ fun BrowserScreen(
                     )
                     val showHostOnly = !isAddressFocused && hasActivePage
 
-                    // Address pill: security badge, host (full URL while editing), reload / clear
-                    Surface(
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                            .height(44.dp)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) {
-                                if (!isAddressFocused) {
-                                    shouldSelectAllOnNextValueChange = true
-                                    focusRequester.requestFocus()
-                                }
-                            },
-                        shape = RoundedCornerShape(22.dp),
-                        color = com.example.gemini.theme.AppColors.fill,
-                        border = BorderStroke(1.5.dp, pillBorderColor)
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(start = 6.dp, end = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        // Close Browser Button (X)
+                        IconButton(
+                            onClick = onClose,
+                            modifier = Modifier.size(38.dp)
                         ) {
-                            val badgeTint = when {
-                                isAddressFocused || !hasActivePage -> MaterialTheme.colorScheme.onSurfaceVariant
-                                isHttps -> com.example.gemini.theme.AppColors.success
-                                isLocal -> ClaudeTerracotta
-                                else -> com.example.gemini.theme.AppColors.warning
-                            }
-                            Box(
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Close Browser",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        // Address pill: security badge, host (full URL while editing), reload / clear
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                                .padding(horizontal = 4.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    if (!isAddressFocused) {
+                                        shouldSelectAllOnNextValueChange = true
+                                        focusRequester.requestFocus()
+                                    }
+                                },
+                            shape = RoundedCornerShape(22.dp),
+                            color = com.example.gemini.theme.AppColors.fill,
+                            border = BorderStroke(1.5.dp, pillBorderColor)
+                        ) {
+                            Row(
                                 modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (isAddressFocused || !hasActivePage) Color.Transparent
-                                        else badgeTint.copy(alpha = 0.13f)
-                                    ),
-                                contentAlignment = Alignment.Center
+                                    .fillMaxSize()
+                                    .padding(start = 6.dp, end = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = when {
-                                        isAddressFocused || !hasActivePage -> Icons.Rounded.Search
-                                        isHttps -> Icons.Rounded.Lock
-                                        isLocal -> Icons.Rounded.Computer
-                                        else -> Icons.Rounded.Language
-                                    },
-                                    contentDescription = when {
-                                        !hasActivePage -> null
-                                        isHttps -> "Secure connection"
-                                        isLocal -> "Local server"
-                                        else -> "Not secure"
-                                    },
-                                    modifier = Modifier.size(if (isAddressFocused || !hasActivePage) 19.dp else 15.dp),
-                                    tint = badgeTint
-                                )
-                            }
+                                val badgeTint = when {
+                                    isAddressFocused || !hasActivePage -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    isHttps -> com.example.gemini.theme.AppColors.success
+                                    isLocal -> ClaudeTerracotta
+                                    else -> com.example.gemini.theme.AppColors.warning
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (isAddressFocused || !hasActivePage) Color.Transparent
+                                            else badgeTint.copy(alpha = 0.13f)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = when {
+                                            isAddressFocused || !hasActivePage -> Icons.Rounded.Search
+                                            isHttps -> Icons.Rounded.Lock
+                                            isLocal -> Icons.Rounded.Computer
+                                            else -> Icons.Rounded.Language
+                                        },
+                                        contentDescription = when {
+                                            !hasActivePage -> null
+                                            isHttps -> "Secure connection"
+                                            isLocal -> "Local server"
+                                            else -> "Not secure"
+                                        },
+                                        modifier = Modifier.size(if (isAddressFocused || !hasActivePage) 19.dp else 15.dp),
+                                        tint = badgeTint
+                                    )
+                                }
 
-                            Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
 
-                            BasicTextField(
-                                value = textFieldValue,
-                                onValueChange = { newVal ->
-                                    if (shouldSelectAllOnNextValueChange) {
-                                        shouldSelectAllOnNextValueChange = false
-                                        if (newVal.text == textFieldValue.text && newVal.text.isNotEmpty()) {
-                                            textFieldValue = newVal.copy(selection = TextRange(0, newVal.text.length))
+                                BasicTextField(
+                                    value = textFieldValue,
+                                    onValueChange = { newVal ->
+                                        if (shouldSelectAllOnNextValueChange) {
+                                            shouldSelectAllOnNextValueChange = false
+                                            if (newVal.text == textFieldValue.text && newVal.text.isNotEmpty()) {
+                                                textFieldValue = newVal.copy(selection = TextRange(0, newVal.text.length))
+                                            } else {
+                                                textFieldValue = newVal
+                                            }
                                         } else {
                                             textFieldValue = newVal
                                         }
-                                    } else {
-                                        textFieldValue = newVal
-                                    }
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .focusRequester(focusRequester)
-                                    .onFocusChanged { focusState ->
-                                        val wasFocused = isAddressFocused
-                                        isAddressFocused = focusState.isFocused
-                                        if (focusState.isFocused && !wasFocused) {
-                                            shouldSelectAllOnNextValueChange = true
-                                            if (textFieldValue.text.isNotEmpty()) {
-                                                textFieldValue = textFieldValue.copy(
-                                                    selection = TextRange(0, textFieldValue.text.length)
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .focusRequester(focusRequester)
+                                        .onFocusChanged { focusState ->
+                                            val wasFocused = isAddressFocused
+                                            isAddressFocused = focusState.isFocused
+                                            if (focusState.isFocused && !wasFocused) {
+                                                shouldSelectAllOnNextValueChange = true
+                                                if (textFieldValue.text.isNotEmpty()) {
+                                                    textFieldValue = textFieldValue.copy(
+                                                        selection = TextRange(0, textFieldValue.text.length)
+                                                    )
+                                                }
+                                            } else if (!focusState.isFocused) {
+                                                shouldSelectAllOnNextValueChange = false
+                                            }
+                                        },
+                                    textStyle = TextStyle(
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 14.5.sp,
+                                        fontWeight = FontWeight.Normal
+                                    ),
+                                    singleLine = true,
+                                    cursorBrush = SolidColor(ClaudeTerracotta),
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Uri,
+                                        imeAction = ImeAction.Go
+                                    ),
+                                    keyboardActions = KeyboardActions(
+                                        onGo = { navigateToUrl(textFieldValue.text) }
+                                    ),
+                                    decorationBox = { innerTextField ->
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.CenterStart
+                                        ) {
+                                            if (textFieldValue.text.isEmpty() && !isAddressFocused) {
+                                                Text(
+                                                    text = "Search or type URL",
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                    fontSize = 14.5.sp,
+                                                    maxLines = 1
                                                 )
                                             }
-                                        } else if (!focusState.isFocused) {
-                                            shouldSelectAllOnNextValueChange = false
-                                        }
-                                    },
-                                textStyle = TextStyle(
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 14.5.sp,
-                                    fontWeight = FontWeight.Normal
-                                ),
-                                singleLine = true,
-                                cursorBrush = SolidColor(ClaudeTerracotta),
-                                keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Uri,
-                                    imeAction = ImeAction.Go
-                                ),
-                                keyboardActions = KeyboardActions(
-                                    onGo = { navigateToUrl(textFieldValue.text) }
-                                ),
-                                decorationBox = { innerTextField ->
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        contentAlignment = Alignment.CenterStart
-                                    ) {
-                                        if (textFieldValue.text.isEmpty() && !isAddressFocused) {
-                                            Text(
-                                                text = "Search or type URL",
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                                fontSize = 14.5.sp,
-                                                maxLines = 1
-                                            )
-                                        }
-                                        if (showHostOnly) {
-                                            // Resting state shows just the site, like a modern browser; the full URL appears on tap
-                                            Text(
-                                                text = browserDisplayHost(activeTab?.url.orEmpty()),
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                fontSize = 14.5.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                        Box(modifier = Modifier.graphicsLayer { alpha = if (showHostOnly) 0f else 1f }) {
-                                            innerTextField()
+                                            if (showHostOnly) {
+                                                // Resting state shows just the site, like a modern browser; the full URL appears on tap
+                                                Text(
+                                                    text = browserDisplayHost(activeTab?.url.orEmpty()),
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    fontSize = 14.5.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            Box(modifier = Modifier.graphicsLayer { alpha = if (showHostOnly) 0f else 1f }) {
+                                                innerTextField()
+                                            }
                                         }
                                     }
-                                }
-                            )
+                                )
 
-                            if (isAddressFocused) {
-                                if (textFieldValue.text.isNotEmpty()) {
+                                if (isAddressFocused) {
+                                    if (textFieldValue.text.isNotEmpty()) {
+                                        BrowserBarIconButton(
+                                            icon = Icons.Rounded.Cancel,
+                                            contentDescription = "Clear",
+                                            onClick = {
+                                                textFieldValue = TextFieldValue("")
+                                                focusRequester.requestFocus()
+                                            },
+                                            size = 36.dp,
+                                            iconSize = 18.dp,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                } else if (hasActivePage) {
+                                    val loading = activeTab?.isLoading == true
                                     BrowserBarIconButton(
-                                        icon = Icons.Rounded.Cancel,
-                                        contentDescription = "Clear",
+                                        icon = if (loading) Icons.Rounded.Close else Icons.Rounded.Refresh,
+                                        contentDescription = if (loading) "Stop" else "Reload",
                                         onClick = {
-                                            textFieldValue = TextFieldValue("")
-                                            focusRequester.requestFocus()
+                                            if (activeTab?.isLoading == true) {
+                                                activeTab.stopLoading(sessionManager.getMainHandler())
+                                            } else if (activeTab != null) {
+                                                sessionManager.reloadTab(activeTab.id)
+                                            }
                                         },
                                         size = 36.dp,
-                                        iconSize = 18.dp,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                        iconSize = 20.dp,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                            } else if (hasActivePage) {
-                                val loading = activeTab?.isLoading == true
-                                BrowserBarIconButton(
-                                    icon = if (loading) Icons.Rounded.Close else Icons.Rounded.Refresh,
-                                    contentDescription = if (loading) "Stop" else "Reload",
-                                    onClick = {
-                                        if (activeTab?.isLoading == true) {
-                                            activeTab.stopLoading(sessionManager.getMainHandler())
-                                        } else if (activeTab != null) {
-                                            sessionManager.reloadTab(activeTab.id)
-                                        }
-                                    },
-                                    size = 36.dp,
-                                    iconSize = 20.dp,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
                             }
                         }
+
+                        // Open in Chrome Icon
+                        IconButton(
+                            onClick = {
+                                val currentUrl = activeTab?.url
+                                if (!currentUrl.isNullOrBlank() && currentUrl != "about:blank") {
+                                    try {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(currentUrl)).apply {
+                                            setPackage("com.android.chrome")
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {
+                                        try {
+                                            val fallbackIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(currentUrl)).apply {
+                                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(fallbackIntent)
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+                            },
+                            enabled = hasActivePage,
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                                contentDescription = "Open in Chrome",
+                                tint = if (hasActivePage) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    // Linear loading progress bar pinned right below toolbar
+                    val animatedProgress by animateFloatAsState(
+                        targetValue = if (activeTab?.isLoading == true) (activeTab.progress / 100f).coerceIn(0.06f, 1f) else 0f,
+                        label = "progress"
+                    )
+                    if (activeTab?.isLoading == true && animatedProgress > 0f) {
+                        LinearProgressIndicator(
+                            progress = { animatedProgress },
+                            modifier = Modifier.fillMaxWidth().height(2.5.dp),
+                            color = ClaudeTerracotta,
+                            trackColor = Color.Transparent
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.height(2.5.dp))
                     }
 
                     HorizontalDivider(thickness = 0.5.dp, color = subtleDivider)
@@ -625,6 +676,25 @@ fun BrowserScreen(
                 .navigationBarsPadding()
                 .imePadding()
         ) {
+            // Full-screen custom view for video playback (e.g. YouTube full-screen)
+            val customView = sessionManager.customView
+            if (customView != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .zIndex(9999f)
+                ) {
+                    AndroidView(
+                        factory = {
+                            (customView.parent as? ViewGroup)?.removeView(customView)
+                            customView
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+
             // Persistent WebViews in fixed full-screen overlay architecture
             tabs.forEach { tab ->
                 key(tab.id) {

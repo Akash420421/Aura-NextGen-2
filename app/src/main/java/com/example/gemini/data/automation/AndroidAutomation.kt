@@ -158,6 +158,11 @@ object AndroidAutomation {
             listOf("action"),
             "action" to prop("string", "Action", listOf("back", "home", "recents", "notifications", "quick_settings", "power_dialog", "lock_screen", "split_screen"))
         ))
+        put(tool("android_clear_recent_apps", "Clears all recent/minimized apps from the Android Recents overview with multi-OEM button matching, gesture fallbacks, and real post-action verification."))
+        put(tool("android_close_recent_app", "Closes a specific app from Android Recents overview by finding its card, centering it, and dismissing it with post-action verification.",
+            listOf("app_name"),
+            "app_name" to prop("string", "Name of the app to dismiss from recents, e.g. Chrome, Camera, YouTube")
+        ))
         put(tool("android_list_apps", "List installed apps that can be opened, as label and package name.", emptyList(),
             "filter" to prop("string", "Only apps whose label or package contains this")
         ))
@@ -228,6 +233,19 @@ object AndroidAutomation {
                     text("Swiped. ${foreground(svc)}")
                 }
                 "android_global_action" -> globalAction(svc, args.getString("action"))
+                "android_clear_recent_apps" -> {
+                    val mode = args.optString("mode", "clear_all")
+                    val res = svc.executeRecentsAction(clearAll = true, mode = mode)
+                    if (res.status == "SUCCESS") text("Success: ${res.message}")
+                    else if (res.status == "PARTIAL") text("Partial: ${res.message} (${res.remainingCardsCount} cards remain)")
+                    else error("Failed: ${res.message}")
+                }
+                "android_close_recent_app" -> {
+                    val app = args.getString("app_name")
+                    val res = svc.executeRecentsAction(appName = app, clearAll = false)
+                    if (res.status == "SUCCESS") text("Success: ${res.message}")
+                    else error("Failed: ${res.message}")
+                }
                 "android_list_apps" -> listApps(context, args.optString("filter"))
                 "android_launch_app" -> launchApp(context, svc, args)
                 "android_open_intent" -> openIntent(svc, args)
@@ -644,40 +662,31 @@ object AndroidAutomation {
     private suspend fun typeText(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
         val (id, node) = element(args)
         if (id != null && node == null) return staleElement(id)
-        val roots = svc.windows.mapNotNull { it.root }.ifEmpty { listOfNotNull(svc.rootInActiveWindow) }
-        val target = node
-            ?: svc.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: roots.firstNotNullOfOrNull { findAnyEditableNode(it) }
-            ?: return error("No text field is focused or found on screen. Tap one first, or pass its element_id.")
-        if (!target.isEditable) return error("${id ?: "The element"} is not a text field.")
-        val showingHint = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && target.isShowingHintText
-        val existing = if (args.optBoolean("append") && !showingHint) target.text?.toString().orEmpty() else ""
-        target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        val ok = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, existing + args.getString("text"))
-        })
-        if (!ok) return error("The field didn't accept text. Try tapping it first, or android_adb_shell with `input text`.")
-        var note = ""
-        if (args.optBoolean("submit")) {
-            delay(500) // Ensure text is completely attached before submitting
-            val submitted = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                target.performAction(AccessibilityAction.ACTION_IME_ENTER.id)
-            if (!submitted) {
-                val sendNode = roots.firstNotNullOfOrNull { findSendButton(it) }
-                if (sendNode != null) {
-                    sendNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    note = " Clicked Send."
-                } else if (AdbConnectManager.ensureConnected()?.let { AdbConnectManager.deviceShell(it, "input keyevent 66").exitCode == 0 } == true) {
-                    note = " Pressed enter."
-                } else {
-                    note = " Text entered."
-                }
-            } else {
-                note = " Submitted via Enter."
-            }
+        val text = args.getString("text")
+        val submit = args.optBoolean("submit", false)
+        val append = args.optBoolean("append", false)
+        val clearExisting = !append
+
+        val bounds = android.graphics.Rect()
+        if (node != null) {
+            node.getBoundsInScreen(bounds)
         }
+
+        val res = svc.directInjectText(
+            textToType = text,
+            targetRect = if (bounds.width() > 0 && bounds.height() > 0) bounds else null,
+            targetInputName = id,
+            submit = submit,
+            clearExisting = clearExisting
+        )
+
         svc.awaitIdle()
-        return text("Typed.$note ${foreground(svc)}")
+        return if (res.isSuccess) {
+            val note = if (res.submitted) " (submitted)" else ""
+            text("Direct text injection succeeded via ${res.method}$note. ${foreground(svc)}")
+        } else {
+            error("Direct text injection failed: ${res.reason}. ${foreground(svc)}")
+        }
     }
 
     private suspend fun scroll(context: Context, svc: AutomationAccessibilityService, args: JSONObject): JSONObject {

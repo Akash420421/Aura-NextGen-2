@@ -200,19 +200,31 @@ fun ChatHistoryDrawer(
     val jarvisIds = remember(jarvisConversations) { jarvisConversations.map { it.id }.toSet() }
     // archived chats, sub-agent chats included when a parent up the chain is archived (they move with it)
     val archivedIds = remember(conversations, jarvisConversations) {
-        val byId = (conversations + jarvisConversations).associateBy { it.id }
-        fun isArchived(c: Conversation): Boolean {
+        val all = conversations + jarvisConversations
+        val byId = all.associateBy { it.id }
+        val archivedSet = hashSetOf<String>()
+        for (c in all) {
+            if (c.archived) {
+                archivedSet.add(c.id)
+                continue
+            }
             var cur: Conversation? = c
             var hops = 0
-            while (cur != null && hops++ < 32) {
-                if (cur.archived) return true
+            while (cur != null && hops++ < 16) {
                 val p = cur.parentConversationId
-                if (p == null || p == cur.id) return false
+                if (p == null || p == cur.id) break
+                if (p in archivedSet) {
+                    archivedSet.add(c.id)
+                    break
+                }
                 cur = byId[p]
+                if (cur?.archived == true) {
+                    archivedSet.add(c.id)
+                    break
+                }
             }
-            return false
         }
-        byId.values.filter(::isArchived).map { it.id }.toSet()
+        archivedSet
     }
     val filtered = remember(conversations, jarvisConversations, searchQuery, agentFilter, jarvisFilter) {
         val byAgent = if (jarvisFilter) jarvisConversations
@@ -313,6 +325,9 @@ fun ChatHistoryDrawer(
             }
         }
     }
+    val visibleTree = remember(topLevelChats, subagentsByParent, expandedParentIds) {
+        buildVisibleChatTree(topLevelChats, subagentsByParent, expandedParentIds)
+    }
     var expandedGroups by remember { mutableStateOf(setOf<String>()) }
 
     val listState = rememberLazyListState()
@@ -330,7 +345,7 @@ fun ChatHistoryDrawer(
         }
 
         val targetIndex = if (!groupByWorkspace) {
-            val visibleTree = buildVisibleChatTree(topLevelChats, subagentsByParent, expandedParentIds)
+            visibleTree.indexOfFirst { it.conv.id == currentConversationId }
             visibleTree.indexOfFirst { it.conv.id == currentConversationId }
         } else {
             val targetGroup = grouped.entries.firstOrNull { (_, chats) ->
@@ -1139,9 +1154,11 @@ fun ChatHistoryDrawer(
                             overscrollEffect = chatListBounce.overscrollEffect
                         ) {
                             if (!groupByWorkspace) {
-                                val visibleTree =
-                                    buildVisibleChatTree(topLevelChats, subagentsByParent, expandedParentIds)
-                                items(visibleTree, key = { it.conv.id }) { item ->
+                                items(
+                                    items = visibleTree,
+                                    key = { it.conv.id },
+                                    contentType = { "chat_row" }
+                                ) { item ->
                                     val conv = item.conv
                                     val isSelected = conv.id == currentConversationId
                                     val activeInst = activeInstances.find { it.conversationId == conv.id }

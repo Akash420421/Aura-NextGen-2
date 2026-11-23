@@ -59,7 +59,10 @@ object ActionVerifier {
                     value.replace("\r\n", "\n").replace(Regex("\\s+"), " ").trim()
                 }
 
-                if (normalize(actualText) == normalize(cleanExpected)) {
+                val normActual = normalize(actualText)
+                val normExpected = normalize(cleanExpected)
+
+                if (normActual == normExpected || (normExpected.length >= 3 && normActual.contains(normExpected))) {
                     return VerificationResult(
                         isVerified = true,
                         reason = "Text verified in target field",
@@ -67,6 +70,16 @@ object ActionVerifier {
                         actualValue = null
                     )
                 }
+            }
+
+            // In chat apps (Telegram, WhatsApp), submitting clears the input field; check service verification
+            if (service.lastTypeVerified) {
+                return VerificationResult(
+                    isVerified = true,
+                    reason = "Text entry verified by accessibility injection",
+                    stateChanged = true,
+                    actualValue = null
+                )
             }
         }
 

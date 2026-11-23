@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.gemini.data.preferences.AuthPreferences
 import com.example.gemini.data.remote.AgyHubClient
+import com.example.gemini.data.remote.AntigravityBridgeUiState
 import com.example.gemini.domain.model.AiModel
 import com.example.gemini.domain.model.ChatMessage
 import com.example.gemini.domain.model.ChatAttachment
@@ -205,6 +206,15 @@ class AgyChatBackend(
     private val _isServerOnline = MutableStateFlow<Boolean?>(null)
     val isServerOnline: StateFlow<Boolean?> = _isServerOnline.asStateFlow()
 
+    private val _bridgeUiState = MutableStateFlow<AntigravityBridgeUiState>(AntigravityBridgeUiState.OfflineIdle)
+    val bridgeUiState: StateFlow<AntigravityBridgeUiState> = _bridgeUiState.asStateFlow()
+
+    @Volatile
+    private var hasEverBeenConnected: Boolean = false
+
+    @Volatile
+    var isAppInForeground: Boolean = true
+
     private val _isReconnecting = MutableStateFlow(false)
     val isReconnecting: StateFlow<Boolean> = _isReconnecting.asStateFlow()
 
@@ -248,16 +258,12 @@ class AgyChatBackend(
     private var lastAuthCheckTimeMs = 0L
 
     fun onDrawerOpened() {
-        val isLoggedIn = _agyAuthInfo.value.isLoggedIn
         val now = System.currentTimeMillis()
-        if (!isLoggedIn) {
-            // Not authenticated: check every single time user opens sidebar
+        val isLoggedIn = _agyAuthInfo.value.isLoggedIn
+        val minIntervalMs = if (!isLoggedIn) 60_000L else 120_000L
+        if (now - lastAuthCheckTimeMs >= minIntervalMs) {
+            lastAuthCheckTimeMs = now
             checkAgyAuthStatus(userInitiated = false)
-        } else {
-            // Authenticated: only check after 2 minutes (120,000ms) have passed
-            if (now - lastAuthCheckTimeMs >= 120_000L) {
-                checkAgyAuthStatus(userInitiated = false)
-            }
         }
     }
 
@@ -568,18 +574,29 @@ class AgyChatBackend(
 
     /** Starts hub monitoring, conversation sync and auth checks (formerly ChatViewModel.init). */
     fun start() {
-        // 1. Hub status live monitoring via WebSocket
+        // 1. Hub status live monitoring via WebSocket with backoff and foreground awareness
         backendScope.launch {
+            var consecutiveFailures = 0
+            val backoffDelays = listOf(2000L, 4000L, 8000L, 16000L, 30000L)
+            val maxBackoffFailures = 4
+
             while (currentCoroutineContext().isActive) {
+                if (!isAppInForeground) {
+                    delay(5000L)
+                    continue
+                }
                 try {
                     val wsUrl = AuthPreferences.currentBridgeWsUrl
                     agyBridgeService.monitorHubStatus(wsUrl).collect { status ->
+                        consecutiveFailures = 0
                         // the bridge answers: learn its version (the app warns when it differs from the app's)
                         com.example.gemini.data.remote.BridgeInfo.refreshVersionIfUnknown()
                         when (status.status) {
                             "online" -> {
                                 _isServerOnline.value = true
                                 _isBridgeOnline.value = true
+                                hasEverBeenConnected = true
+                                _bridgeUiState.value = AntigravityBridgeUiState.Connected
                                 _conversationError.value = null
                                 syncAgyConversations(force = true)
                                 val curConv = _currentConversation.value
@@ -595,17 +612,29 @@ class AgyChatBackend(
                             }
                             "starting" -> {
                                 _isBridgeOnline.value = true
+                                _bridgeUiState.value = AntigravityBridgeUiState.Connecting
                                 _conversationError.value = null
                                 _isConversationsLoading.value = true
                             }
                             "error" -> {
                                 _isServerOnline.value = false
                                 _isConversationsLoading.value = false
-                                _conversationError.value = "Antigravity Hub failed to start: ${status.error ?: "Check server logs"}"
+                                val errMsg = status.error ?: "Check server logs"
+                                _conversationError.value = "Antigravity Hub failed to start: $errMsg"
+                                if (hasEverBeenConnected) {
+                                    _bridgeUiState.value = AntigravityBridgeUiState.Error("Antigravity Hub error: $errMsg")
+                                } else {
+                                    _bridgeUiState.value = AntigravityBridgeUiState.OfflineIdle
+                                }
                             }
                             "stopped" -> {
                                 _isServerOnline.value = false
                                 _isBridgeOnline.value = true
+                                if (hasEverBeenConnected) {
+                                    _bridgeUiState.value = AntigravityBridgeUiState.Error("Antigravity Hub stopped.")
+                                } else {
+                                    _bridgeUiState.value = AntigravityBridgeUiState.OfflineIdle
+                                }
                                 if (_conversations.value.any { it.isRunning }) {
                                     _conversations.value = _conversations.value.map { if (it.isRunning) it.copy(isRunning = false) else it }
                                 }
@@ -616,11 +645,25 @@ class AgyChatBackend(
                         }
                     }
                 } catch (e: Exception) {
-                    _isServerOnline.value = false
-                    _isBridgeOnline.value = false
+                    if (e is kotlinx.coroutines.CancellationException) break
+                    consecutiveFailures++
+                    if (_isServerOnline.value != false) _isServerOnline.value = false
+                    if (_isBridgeOnline.value != false) _isBridgeOnline.value = false
                     agyBridgeService.resetState()
                     com.example.gemini.data.remote.BridgeInfo.reset()
-                    delay(1000)
+
+                    if (hasEverBeenConnected) {
+                        _bridgeUiState.value = AntigravityBridgeUiState.Error("Antigravity connection lost. Server unreachable.")
+                    } else {
+                        _bridgeUiState.value = AntigravityBridgeUiState.OfflineIdle
+                    }
+
+                    if (consecutiveFailures >= maxBackoffFailures) {
+                        delay(60_000L)
+                    } else {
+                        val waitMs = backoffDelays.getOrElse(consecutiveFailures - 1) { 30_000L }
+                        delay(waitMs)
+                    }
                 }
             }
         }
@@ -925,27 +968,54 @@ class AgyChatBackend(
         }
     }
 
+    private val isReconnectInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /**
      * Retries all connections: both sidebar conversation list and active chat stream
      */
     override fun retryConnections() {
-        _conversationError.value = null
-        val conv = _currentConversation.value
-        val isExistingConv = conv != null && conv.title != "New Chat" && _conversations.value.any { it.id == conv.id }
-        if (_messages.value.isEmpty() && isExistingConv) {
-            _isLoadingConversation.value = true
+        if (!isReconnectInProgress.compareAndSet(false, true)) {
+            android.util.Log.d("AgyChatBackend", "Reconnect already in progress, ignoring duplicate tap")
+            return
         }
-        _isReconnecting.value = true
-        syncAgyConversations(force = true)
-        val convId = conv?.id
-        if (!convId.isNullOrBlank() && isExistingConv) {
-            startPersistentStream(convId)
-        }
-        refreshQuotas()
-        checkBridgeHealth()
-        checkAgyAuthStatus()
-        backendScope.launch {
-            com.example.gemini.data.daemon.TermuxDaemonManager.checkHealthAndReconnect(isSilent = false)
+
+        backendScope.launch(Dispatchers.IO) {
+            _isReconnecting.value = true
+            _bridgeUiState.value = AntigravityBridgeUiState.Connecting
+            _conversationError.value = null
+            val endpointDisplay = AuthPreferences.currentBridgeWsUrl.replace("ws://", "").replace("/ws", "").ifBlank { "127.0.0.1:1234" }
+
+            try {
+                val bridgeUrl = authPrefs.agyBridgeHttpUrl.firstOrNull() ?: AuthPreferences.currentBridgeHttpUrl
+                val reachable = com.example.gemini.data.remote.AgyBridgeService.instance.checkServerHealth(bridgeUrl)
+                _isBridgeOnline.value = reachable
+                _isServerOnline.value = reachable
+
+                if (reachable) {
+                    hasEverBeenConnected = true
+                    _bridgeUiState.value = AntigravityBridgeUiState.Connected
+                    syncAgyConversations(force = true)
+                    val conv = _currentConversation.value
+                    val isExistingConv = conv != null && conv.title != "New Chat" && _conversations.value.any { it.id == conv.id }
+                    if (_messages.value.isEmpty() && isExistingConv) {
+                        _isLoadingConversation.value = true
+                    }
+                    val convId = conv?.id
+                    if (!convId.isNullOrBlank() && isExistingConv) {
+                        startPersistentStream(convId)
+                    }
+                    refreshQuotas()
+                    checkAgyAuthStatus()
+                    com.example.gemini.data.daemon.TermuxDaemonManager.checkHealthAndReconnect(isSilent = false)
+                } else {
+                    _bridgeUiState.value = AntigravityBridgeUiState.Error("Bridge server not running on $endpointDisplay")
+                }
+            } catch (e: Exception) {
+                _bridgeUiState.value = AntigravityBridgeUiState.Error("Failed to reach $endpointDisplay: ${e.message ?: "Unknown error"}")
+            } finally {
+                _isReconnecting.value = false
+                isReconnectInProgress.set(false)
+            }
         }
     }
 
@@ -954,6 +1024,7 @@ class AgyChatBackend(
      * Checks both RPC streams and reconnects if dropped.
      */
     override fun onAppForegrounded() {
+        isAppInForeground = true
         android.util.Log.d("ChatViewModel", "App foregrounded: inspecting RPC streams...")
         backendScope.launch {
             val conv = _currentConversation.value
@@ -973,6 +1044,11 @@ class AgyChatBackend(
             }
             com.example.gemini.data.daemon.TermuxDaemonManager.checkHealthAndReconnect(isSilent = true)
         }
+    }
+
+    override fun onAppBackgrounded() {
+        isAppInForeground = false
+        android.util.Log.d("AgyChatBackend", "App backgrounded: pausing bridge retry loops")
     }
 
     fun onProjectChanged(projectPath: String) {

@@ -23,4 +23,5 @@ interface AgentChatBackend {
     fun forkConversation(id: String)
     fun retryConnections()
     fun onAppForegrounded()
+    fun onAppBackgrounded() {}
 }

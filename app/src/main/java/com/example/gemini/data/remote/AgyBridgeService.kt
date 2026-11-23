@@ -149,13 +149,12 @@ class AgyBridgeService(
         }
         .build()
 
-    // Dedicated WebSocket client for live bridge monitoring with 1s connect timeout and 1s heartbeat ping
-    // (remote: 10s connect and a 15s heartbeat, so mobile-network hiccups reconnect instead of flapping Offline)
+    // Dedicated WebSocket client for live bridge monitoring with 20s heartbeat ping
     val wsClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(if (AuthPreferences.isRemoteEndpoint()) 10000 else 1000, TimeUnit.MILLISECONDS)
+        .connectTimeout(if (AuthPreferences.isRemoteEndpoint()) 10000 else 3000, TimeUnit.MILLISECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .writeTimeout(if (AuthPreferences.isRemoteEndpoint()) 10 else 3, TimeUnit.SECONDS)
-        .pingInterval(if (AuthPreferences.isRemoteEndpoint()) 15 else 1, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .addInterceptor { chain ->
             val b = chain.request().newBuilder()
@@ -464,7 +463,14 @@ class AgyBridgeService(
             }
         }
 
+    @Volatile
+    private var activeHubWs: WebSocket? = null
+
     fun monitorHubStatus(wsUrl: String = AuthPreferences.currentBridgeWsUrl): Flow<AgyHubStatus> = callbackFlow {
+        try {
+            activeHubWs?.cancel()
+        } catch (_: Exception) {}
+
         val request = Request.Builder().url(wsUrl).build()
         val wsListener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -527,8 +533,14 @@ class AgyBridgeService(
         }
 
         val ws = wsClient.newWebSocket(request, wsListener)
+        activeHubWs = ws
         awaitClose {
-            ws.cancel()
+            try {
+                ws.cancel()
+                if (activeHubWs == ws) {
+                    activeHubWs = null
+                }
+            } catch (_: Exception) {}
             isBridgeConnected = false
             _connectionState.value = BridgeConnectionState.OFFLINE_ERROR
             updateHubStatus(AgyHubStatus(status = "stopped"))

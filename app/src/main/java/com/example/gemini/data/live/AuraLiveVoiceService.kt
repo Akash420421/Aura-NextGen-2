@@ -79,6 +79,7 @@ class AuraLiveVoiceService : Service() {
 
                 val status = when (phase) {
                     AuraLiveVoiceManager.Phase.CONNECTING -> "Connecting to Gemini Live..."
+                    AuraLiveVoiceManager.Phase.IDLE_READY -> "Speak to ask"
                     AuraLiveVoiceManager.Phase.LISTENING -> "Jarvis listening..."
                     AuraLiveVoiceManager.Phase.THINKING -> "Jarvis thinking..."
                     AuraLiveVoiceManager.Phase.WORKING -> "Jarvis working..."

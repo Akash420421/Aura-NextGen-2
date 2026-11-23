@@ -118,22 +118,47 @@ class AutomationAccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
-    fun getActiveRootNode(): AccessibilityNodeInfo? {
+    fun getForegroundAppRootNode(): AccessibilityNodeInfo? {
+        try {
+            val appWindows = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            // 1. Focused non-Aura application window
+            val focusedNonAura = appWindows.firstOrNull { win ->
+                val r = win.root
+                win.isFocused && r != null && r.packageName?.toString() != packageName
+            }
+            if (focusedNonAura?.root != null) return focusedNonAura.root
+
+            // 2. Active non-Aura application window
+            val activeNonAura = appWindows.firstOrNull { win ->
+                val r = win.root
+                win.isActive && r != null && r.packageName?.toString() != packageName
+            }
+            if (activeNonAura?.root != null) return activeNonAura.root
+
+            // 3. Any non-Aura application window with a valid root
+            val anyNonAura = appWindows.firstOrNull { win ->
+                val r = win.root
+                r != null && r.packageName?.toString() != packageName
+            }
+            if (anyNonAura?.root != null) return anyNonAura.root
+        } catch (_: Exception) {}
+
+        // 4. rootInActiveWindow if valid and not Aura (or if Aura is the only foreground app)
         val active = rootInActiveWindow
         if (active != null) return active
 
+        // 5. Any window root
         try {
-            val focusedWin = windows.firstOrNull {
-                it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isFocused
+            for (win in windows) {
+                win.root?.let { return it }
             }
-            if (focusedWin?.root != null) return focusedWin.root
-
-            val activeWin = windows.firstOrNull {
-                it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.isActive
-            }
-            if (activeWin?.root != null) return activeWin.root
         } catch (_: Exception) {}
+
         return null
+    }
+
+    fun getActiveRootNode(): AccessibilityNodeInfo? {
+        return getForegroundAppRootNode()
     }
 
     fun clickAt(x: Float, y: Float, durationMs: Long = 100L): Boolean {
@@ -383,125 +408,421 @@ class AutomationAccessibilityService : AccessibilityService() {
         return false
     }
 
-    fun smartTypeText(textToType: String, targetRect: Rect? = null, submit: Boolean = false): Boolean {
-        lastTypeVerified = false
-        if (textToType.isBlank()) {
-            Log.w(TAG, "smartTypeText refused blank input")
-            return false
-        }
-        Log.i(TAG, "smartTypeText starting (length=${textToType.length}, targeted=${targetRect != null}, submit=$submit)")
-
-        if (targetRect != null && targetRect.width() > 0 && targetRect.height() > 0) {
-            if (!performClickAtRect(targetRect)) return false
-            try { Thread.sleep(100) } catch (_: Exception) {}
-        }
-
-        val appRoot = getAppRootNode() ?: getActiveRootNode() ?: return false
-
-        fun editableAt(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-            if (targetRect != null && targetRect.width() > 0) {
-                var node = findNodeCoveringRect(root, targetRect)
-                while (node != null) {
-                    if (node.isEditable || node.className?.toString()?.contains("EditText", true) == true) return node
-                    node = node.parent
-                }
-                return null
-            }
-            return root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                ?: findNodeWithInputFocus(root)
-                ?: findFirstEditableNode(root)
-        }
-
-        var target = editableAt(appRoot)
-        if (target != null && isUrlBarNode(target)) {
-            Log.w(TAG, "smartTypeText refused browser URL/address bar")
-            return false
-        }
-        if (target == null) {
-            Log.w(TAG, "smartTypeText found no verified editable target")
-            return false
-        }
-
-        fun currentTarget(): AccessibilityNodeInfo? {
-            val freshRoot = getActiveRootNode() ?: getAppRootNode() ?: return null
-            return editableAt(freshRoot)
-        }
-        fun textEqualsExpected(node: AccessibilityNodeInfo?): Boolean {
-            val current = node?.text?.toString()?.replace("\r\n", "\n")?.trim().orEmpty()
-            val expected = textToType.replace("\r\n", "\n").trim()
-            return current == expected
-        }
-        fun setValue(node: AccessibilityNodeInfo, value: String): Boolean {
-            val args = Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
-            }
-            return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        }
-
-        if (textEqualsExpected(target)) {
-            lastTypeVerified = true
-            Log.i(TAG, "smartTypeText skipped duplicate request: exact text is already present")
-        } else {
-            var setAccepted = false
-            try {
-                setAccepted = setValue(target, textToType)
-            } catch (e: Exception) {
-                Log.w(TAG, "ACTION_SET_TEXT failed: ${e.message}")
-            }
-
-            if (setAccepted) {
-                try { Thread.sleep(180) } catch (_: Exception) {}
-                target = currentTarget()
-                lastTypeVerified = textEqualsExpected(target)
-                if (!lastTypeVerified) {
-                    Log.w(TAG, "Text set was not read back exactly; refusing append-style fallback")
-                    return false
-                }
-            } else {
-                val fresh = currentTarget() ?: target
-                val currentText = fresh.text?.toString().orEmpty()
-                if (currentText.isNotBlank()) {
-                    val cleared = try { setValue(fresh, "") } catch (_: Exception) { false }
-                    try { Thread.sleep(120) } catch (_: Exception) {}
-                    target = currentTarget()
-                    if (!cleared || !target?.text?.toString().isNullOrBlank()) {
-                        Log.w(TAG, "Existing input could not be safely cleared")
-                        return false
-                    }
-                } else {
-                    target = fresh
-                }
-
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                try {
-                    clipboard?.setPrimaryClip(ClipData.newPlainText("AuraInput", textToType))
-                    val pasteTarget = currentTarget() ?: target ?: return false
-                    if (isUrlBarNode(pasteTarget)) return false
-                    val pasted = pasteTarget.performAction(AccessibilityNodeInfo.ACTION_PASTE) ||
-                        pasteTarget.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_PASTE.id)
-                    if (!pasted) {
-                        Log.w(TAG, "Safe paste unavailable")
-                        return false
-                    }
-                    try { Thread.sleep(180) } catch (_: Exception) {}
-                    lastTypeVerified = textEqualsExpected(currentTarget())
-                    if (!lastTypeVerified) {
-                        Log.w(TAG, "Pasted text could not be verified exactly")
-                        return false
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Safe paste failed: ${e.message}")
-                    return false
-                }
-            }
-        }
-
-        return lastTypeVerified
+    data class DirectInjectionResult(
+        val status: String,    // "SUCCESS" or "FAILED"
+        val method: String,    // "SET_TEXT" or "CLIPBOARD_PASTE" or "NONE"
+        val submitted: Boolean,
+        val reason: String
+    ) {
+        val isSuccess: Boolean get() = status == "SUCCESS"
     }
 
+    suspend fun directInjectText(
+        textToType: String,
+        targetRect: Rect? = null,
+        targetInputName: String? = null,
+        submit: Boolean = false,
+        clearExisting: Boolean = true
+    ): DirectInjectionResult {
+        lastTypeVerified = false
+        if (textToType.isEmpty()) {
+            Log.w(TAG, "directInjectText: refused empty text")
+            return DirectInjectionResult(status = "FAILED", method = "NONE", submitted = false, reason = "Empty text to inject")
+        }
+
+        Log.i(TAG, "directInjectText starting: len=${textToType.length}, targetRect=${targetRect != null}, targetInput='$targetInputName', submit=$submit, clearExisting=$clearExisting")
+
+        fun getAppRoots(): List<AccessibilityNodeInfo> {
+            val appWindows = try {
+                windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.packageName != packageName }
+                    .mapNotNull { runCatching { it.root }.getOrNull() }
+            } catch (_: Exception) { emptyList() }
+            if (appWindows.isNotEmpty()) return appWindows
+            val all = getAllRootNodes().filter { it.packageName != packageName }
+            if (all.isNotEmpty()) return all
+            return listOfNotNull(getActiveRootNode())
+        }
+
+        // ==========================================
+        // STAGE 1: Smart Target Resolution & Two-Step Focus (Handles Fake Search Bars)
+        // ==========================================
+        var roots = getAppRoots()
+
+        fun findCandidate(): AccessibilityNodeInfo? {
+            // 1. Explicit target rect
+            if (targetRect != null && targetRect.width() > 0) {
+                for (r in roots) {
+                    var node = findNodeCoveringRect(r, targetRect)
+                    while (node != null) {
+                        if (node.isEditable || node.className?.toString()?.contains("EditText", true) == true) return node
+                        node = node.parent
+                    }
+                }
+            }
+            // 2. Explicit target name/hint
+            if (!targetInputName.isNullOrBlank()) {
+                val clean = targetInputName.lowercase(Locale.ROOT).trim()
+                for (r in roots) {
+                    val queue = ArrayDeque<AccessibilityNodeInfo>()
+                    queue.add(r)
+                    while (!queue.isEmpty()) {
+                        val n = queue.removeFirst()
+                        if (n.isEditable || n.className?.toString()?.contains("EditText", true) == true) {
+                            val d = n.contentDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                            val t = n.text?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                            val h = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) n.hintText?.toString()?.lowercase(Locale.ROOT).orEmpty() else ""
+                            val id = n.viewIdResourceName?.lowercase(Locale.ROOT).orEmpty()
+                            if (d.contains(clean) || t.contains(clean) || h.contains(clean) || id.contains(clean)) return n
+                        }
+                        for (i in 0 until n.childCount) n.getChild(i)?.let { queue.add(it) }
+                    }
+                }
+            }
+            // 3. Current input focus
+            for (r in roots) {
+                r.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { if (it.isEditable || it.className?.toString()?.contains("EditText", true) == true) return it }
+                findNodeWithInputFocus(r)?.let { if (it.isEditable || it.className?.toString()?.contains("EditText", true) == true) return it }
+            }
+            // 4. Any visible editable node
+            for (r in roots) {
+                findFirstEditableNode(r)?.let { return it }
+            }
+            return null
+        }
+
+        var candidate = findCandidate()
+
+        // Handle Fake Search Bars (e.g. YouTube, Play Store, Amazon, Swiggy, Chrome New Tab)
+        if (candidate == null) {
+            Log.i(TAG, "No editable field immediately found. Scanning for fake search bar / placeholder container...")
+            val placeholder = findFakeSearchBarPlaceholder(roots, targetInputName)
+            if (placeholder != null) {
+                val b = Rect()
+                placeholder.getBoundsInScreen(b)
+                Log.i(TAG, "Found fake search bar placeholder (${placeholder.text} / ${placeholder.contentDescription} / ${placeholder.viewIdResourceName}). Tapping to activate real input...")
+                val clicked = placeholder.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (!clicked && b.width() > 0) {
+                    clickAt(b.exactCenterX(), b.exactCenterY(), 80L)
+                }
+                delay(300) // Wait for search view / real editor to animate in
+                roots = getAppRoots()
+                candidate = findCandidate()
+            }
+        }
+
+        // If targetRect was provided but no candidate found, tap targetRect center once to focus
+        if (candidate == null && targetRect != null && targetRect.width() > 0) {
+            clickAt(targetRect.exactCenterX(), targetRect.exactCenterY(), 80L)
+            delay(280)
+            roots = getAppRoots()
+            candidate = findCandidate()
+        }
+
+        if (candidate == null) {
+            Log.w(TAG, "directInjectText: FAILED - No editable input target found across any window")
+            return DirectInjectionResult(
+                status = "FAILED",
+                method = "NONE",
+                submitted = false,
+                reason = "No editable input target found on screen"
+            )
+        }
+
+        // Two-step focus activation
+        candidate.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        val clicked = candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (!clicked) {
+            val b = Rect()
+            candidate.getBoundsInScreen(b)
+            if (b.width() > 0 && b.height() > 0) {
+                clickAt(b.exactCenterX(), b.exactCenterY(), 80L)
+            }
+        }
+        delay(250) // Wait for focus & IME to settle
+
+        // Re-query true focused input node (in case tapping wrapper focused inner child)
+        roots = getAppRoots()
+        val focusedNode = roots.firstNotNullOfOrNull { it.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }
+        val targetNode = focusedNode ?: candidate
+
+        // ==========================================
+        // STAGE 2: Clean Existing Text Handling
+        // ==========================================
+        val isHint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            targetNode.isShowingHintText || (targetNode.text != null && targetNode.hintText != null && targetNode.text?.toString() == targetNode.hintText?.toString())
+        } else {
+            false
+        }
+        val realExistingText = if (isHint) "" else targetNode.text?.toString().orEmpty()
+        val existingLength = realExistingText.length
+
+        if (clearExisting && existingLength > 0) {
+            try {
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
+                })
+            } catch (_: Exception) {}
+        }
+
+        val textToSet = if (clearExisting) textToType else (realExistingText + textToType)
+
+        // ==========================================
+        // STAGE 3: Multi-Tier Pure Direct Injection Fallback Chain
+        // ==========================================
+        var injectionMethod = "NONE"
+        var injectionVerified = false
+
+        // Tier 1: ACTION_SET_TEXT
+        try {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, textToSet)
+            }
+            val tier1Ok = targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            if (tier1Ok) {
+                delay(120)
+                targetNode.refresh()
+                val readback = targetNode.text?.toString().orEmpty()
+                if (readback.contains(textToType) || (clearExisting && readback.trim() == textToType.trim())) {
+                    injectionVerified = true
+                    injectionMethod = "SET_TEXT"
+                    Log.i(TAG, "directInjectText: Tier 1 (ACTION_SET_TEXT) succeeded and verified.")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "directInjectText: Tier 1 exception: ${e.message}")
+        }
+
+        // Tier 2: Safe Clipboard-Preserving ACTION_PASTE (Universal Compatibility)
+        if (!injectionVerified) {
+            Log.i(TAG, "directInjectText: Tier 1 unverified, falling back to Tier 2 (Clipboard ACTION_PASTE)")
+            var previousClip: ClipData? = null
+            var clipboard: ClipboardManager? = null
+
+            try {
+                withContext(Dispatchers.Main.immediate) {
+                    clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    previousClip = runCatching { clipboard?.primaryClip }.getOrNull()
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("AuraDirectInjection", textToType))
+                }
+
+                if (clearExisting && existingLength > 0) {
+                    targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, existingLength)
+                    })
+                }
+
+                var pasted = targetNode.performAction(AccessibilityNodeInfo.ACTION_PASTE) ||
+                        targetNode.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_PASTE.id)
+
+                if (!pasted) {
+                    // Tap once to ensure focus and retry paste
+                    val b = Rect()
+                    targetNode.getBoundsInScreen(b)
+                    if (b.width() > 0) clickAt(b.exactCenterX(), b.exactCenterY(), 60L)
+                    delay(120)
+                    pasted = targetNode.performAction(AccessibilityNodeInfo.ACTION_PASTE) ||
+                            targetNode.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_PASTE.id)
+                }
+
+                delay(180)
+                targetNode.refresh()
+                val readback = targetNode.text?.toString().orEmpty()
+                if (pasted || readback.contains(textToType)) {
+                    injectionVerified = true
+                    injectionMethod = "CLIPBOARD_PASTE"
+                    Log.i(TAG, "directInjectText: Tier 2 (ACTION_PASTE) succeeded (readback len=${readback.length}).")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "directInjectText: Tier 2 exception: ${e.message}")
+            } finally {
+                // Restore user's previous clipboard content asynchronously after 800ms
+                CoroutineScope(Dispatchers.Main).launch {
+                    delay(800L)
+                    try {
+                        if (previousClip != null) {
+                            clipboard?.setPrimaryClip(previousClip)
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            clipboard?.clearPrimaryClip()
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        // Tier 3: Child / Descendant Recovery (if wrapper node)
+        if (!injectionVerified && targetNode.childCount > 0) {
+            Log.i(TAG, "directInjectText: Searching child descendants for inner editable...")
+            val inner = findFirstEditableNode(targetNode) ?: targetNode.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (inner != null && inner != targetNode) {
+                try {
+                    val innerOk = inner.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, textToSet)
+                    })
+                    if (innerOk) {
+                        delay(120)
+                        inner.refresh()
+                        if (inner.text?.toString().orEmpty().contains(textToType)) {
+                            injectionVerified = true
+                            injectionMethod = "SET_TEXT"
+                            Log.i(TAG, "directInjectText: Tier 3 inner child SET_TEXT succeeded.")
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        // ==========================================
+        // STAGE 4: Optional Direct Submit (Zero Keyboard Tapping)
+        // ==========================================
+        var submitted = false
+        if (submit && injectionVerified) {
+            delay(200)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                submitted = targetNode.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+            }
+            if (!submitted) {
+                val sendBtn = findSendOrSubmitButtonAcrossRoots()
+                if (sendBtn != null) {
+                    val clickOk = sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    if (!clickOk) {
+                        val b = Rect()
+                        sendBtn.getBoundsInScreen(b)
+                        if (b.width() > 0) clickAt(b.exactCenterX(), b.exactCenterY(), 60L)
+                    }
+                    submitted = true
+                    Log.i(TAG, "directInjectText: Clicked Send / Submit button directly.")
+                }
+            }
+            delay(350)
+        }
+
+        // ==========================================
+        // STAGE 5: Honest Verification & Structured Result
+        // ==========================================
+        lastTypeVerified = injectionVerified
+        val finalStatus = if (injectionVerified) "SUCCESS" else "FAILED"
+        val reason = if (injectionVerified) {
+            if (submitted) "Text injected via $injectionMethod and submitted" else "Text injected via $injectionMethod"
+        } else {
+            "Target input field did not accept direct text injection"
+        }
+
+        Log.i(TAG, "directInjectText result: status=$finalStatus, method=$injectionMethod, submitted=$submitted, reason='$reason'")
+
+        return DirectInjectionResult(
+            status = finalStatus,
+            method = injectionMethod,
+            submitted = submitted,
+            reason = reason
+        )
+    }
+
+    suspend fun smartTypeText(
+        textToType: String,
+        targetRect: Rect? = null,
+        submit: Boolean = false,
+        clearExisting: Boolean = true
+    ): Boolean {
+        val result = directInjectText(
+            textToType = textToType,
+            targetRect = targetRect,
+            targetInputName = null,
+            submit = submit,
+            clearExisting = clearExisting
+        )
+        return result.isSuccess
+    }
+
+    private fun findFakeSearchBarPlaceholder(roots: List<AccessibilityNodeInfo>, hintOrLabel: String?): AccessibilityNodeInfo? {
+        val keywords = listOf("search", "find", "query", "ask", "type", "enter", "search here", "khojo")
+        val cleanHint = hintOrLabel?.lowercase(Locale.ROOT)?.trim().orEmpty()
+
+        for (r in roots) {
+            val queue = ArrayDeque<AccessibilityNodeInfo>()
+            queue.add(r)
+            while (!queue.isEmpty()) {
+                val node = queue.removeFirst()
+                val isClickable = node.isClickable || node.parent?.isClickable == true
+                if (isClickable && !node.isEditable && node.className?.toString()?.contains("EditText", true) != true) {
+                    val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                    val text = node.text?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                    val id = node.viewIdResourceName?.lowercase(Locale.ROOT).orEmpty()
+
+                    val matchesHint = cleanHint.isNotEmpty() && (desc.contains(cleanHint) || text.contains(cleanHint) || id.contains(cleanHint))
+                    val matchesKeyword = keywords.any { kw -> desc.contains(kw) || text.contains(kw) || id.contains(kw) }
+
+                    val isMic = desc.contains("voice") || desc.contains("mic") || id.contains("voice")
+
+                    if (!isMic && (matchesHint || matchesKeyword)) {
+                        return if (node.isClickable) node else (node.parent?.takeIf { it.isClickable } ?: node)
+                    }
+                }
+
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { queue.add(it) }
+                }
+            }
+        }
+        return null
+    }
+
+    fun findSendOrSubmitButtonAcrossRoots(): AccessibilityNodeInfo? {
+        val roots = getAllRootNodes().filter { it.packageName != packageName }
+        for (r in roots) {
+            val btn = findSendOrSubmitButton(r)
+            if (btn != null) return btn
+        }
+        return null
+    }
+
+    private fun findSendOrSubmitButton(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
+        val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
+        val id = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+
+        val isMic = desc.contains("voice") || desc.contains("mic") || desc.contains("record") || id.contains("voice_note")
+        if (isMic) return null
+
+        val isSendOrSubmit = desc == "send" || desc == "send message" || desc == "search" || desc == "go" ||
+                desc == "submit" || desc == "done" || desc == "post" || desc.contains("bhejo") ||
+                text == "send" || text == "search" || text == "go" || text == "submit" || text == "done" || text == "post" ||
+                id.endsWith(":id/send") || id.contains("send_button") || id.contains("btn_send") ||
+                id.contains("compose_send") || id.contains("search_button") || id.contains("btn_search")
+
+        if (isSendOrSubmit && (node.isClickable || node.parent?.isClickable == true || node.isVisibleToUser)) {
+            return if (node.isClickable) node else (node.parent?.takeIf { it.isClickable } ?: node)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findSendOrSubmitButton(child)
+            if (found != null) return found
+        }
+        return null
+    }
+
+    fun findSendButtonAcrossRoots(): AccessibilityNodeInfo? = findSendOrSubmitButtonAcrossRoots()
+
     fun performSystemGesture(gesture: String): Boolean {
-        return when (gesture.lowercase(Locale.ROOT)) {
-            "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
+        val clean = gesture.lowercase(Locale.ROOT).trim()
+        return when (clean) {
+            "home" -> {
+                var ok = performGlobalAction(GLOBAL_ACTION_HOME)
+                if (!ok) {
+                    try {
+                        val homeIntent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+                            addCategory(android.content.Intent.CATEGORY_HOME)
+                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        startActivity(homeIntent)
+                        ok = true
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Home intent fallback failed: ${e.message}")
+                    }
+                }
+                ok
+            }
             "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
             "recents" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
             "notifications" -> performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
@@ -522,72 +843,324 @@ class AutomationAccessibilityService : AccessibilityService() {
         }
     }
 
-    suspend fun dismissAppFromRecents(appName: String? = null, clearAll: Boolean = false): Boolean {
-        // Step 1: Open Recents overview
-        val recentsOpened = performGlobalAction(GLOBAL_ACTION_RECENTS)
-        if (!recentsOpened) return false
-        delay(500)
+    data class RecentsActionResult(
+        val status: String, // "SUCCESS", "PARTIAL", "FAILED"
+        val message: String,
+        val clearedCount: Int = 0,
+        val remainingCardsCount: Int = 0
+    ) {
+        val isSuccess: Boolean get() = status == "SUCCESS"
+    }
 
-        val root = getActiveRootNode()
-        val dm = resources.displayMetrics
-        val w = dm.widthPixels.toFloat()
-        val h = dm.heightPixels.toFloat()
-        val cx = w / 2f
-        val cy = h * 0.55f
+    data class VisibleTaskCard(
+        val node: AccessibilityNodeInfo,
+        val bounds: Rect,
+        val title: String,
+        val isLocked: Boolean,
+        val isAura: Boolean
+    )
 
-        if (clearAll) {
-            val clearButton = findClearAllButton(root)
-            if (clearButton != null) {
-                val clicked = clearButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                if (clicked) {
-                    delay(300)
+    fun getAllRootNodes(): List<AccessibilityNodeInfo> {
+        val roots = mutableListOf<AccessibilityNodeInfo>()
+        try {
+            rootInActiveWindow?.let { roots.add(it) }
+        } catch (_: Exception) {}
+        try {
+            for (window in windows) {
+                try {
+                    window.root?.let { r ->
+                        if (!roots.any { it == r }) {
+                            roots.add(r)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+        if (roots.isEmpty()) {
+            try {
+                getActiveRootNode()?.let { roots.add(it) }
+            } catch (_: Exception) {}
+        }
+        return roots
+    }
+
+    private fun collectAllNodes(
+        node: AccessibilityNodeInfo?,
+        list: MutableList<AccessibilityNodeInfo>,
+        maxNodes: Int = 500,
+        depth: Int = 0
+    ) {
+        if (node == null || list.size >= maxNodes || depth > 30) return
+        list.add(node)
+        for (i in 0 until node.childCount) {
+            if (list.size >= maxNodes) break
+            val child = node.getChild(i) ?: continue
+            collectAllNodes(child, list, maxNodes, depth + 1)
+        }
+    }
+
+    private fun isRecentsOrLauncherOnScreen(roots: List<AccessibilityNodeInfo>): Boolean {
+        if (roots.isEmpty()) return false
+        val allNodes = mutableListOf<AccessibilityNodeInfo>()
+        for (root in roots) {
+            collectAllNodes(root, allNodes, maxNodes = 120)
+        }
+        for (node in allNodes) {
+            val pkg = node.packageName?.toString()?.lowercase(Locale.ROOT) ?: ""
+            val id = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+            val txt = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
+            val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
+
+            if (pkg.contains("launcher") || pkg.contains("systemui") || pkg.contains("recents") || pkg.contains("quickstep")) {
+                if (id.contains("recents") || id.contains("task") || id.contains("clear") || id.contains("snapshot") ||
+                    txt.contains("clear") || desc.contains("clear") || txt.contains("no recent") || desc.contains("no recent")) {
                     return true
                 }
             }
         }
+        for (root in roots) {
+            val pkg = root.packageName?.toString()?.lowercase(Locale.ROOT) ?: ""
+            if (pkg.contains("launcher") || pkg.contains("systemui") || pkg.contains("recents") || pkg.contains("quickstep")) {
+                return true
+            }
+        }
+        return false
+    }
 
-        var startX = cx
-        var startY = cy
-        if (!appName.isNullOrBlank() && root != null) {
-            val matchingNode = findNodeMatchingText(root, appName)
-            if (matchingNode != null) {
-                val rect = Rect()
-                matchingNode.getBoundsInScreen(rect)
-                if (rect.width() > 0 && rect.height() > 0) {
-                    startX = rect.centerX().toFloat()
-                    startY = rect.centerY().toFloat().coerceIn(h * 0.3f, h * 0.7f)
+    private suspend fun openRecentsAndWait(): Boolean {
+        val opened = performGlobalAction(GLOBAL_ACTION_RECENTS)
+        if (!opened) {
+            Log.w(TAG, "GLOBAL_ACTION_RECENTS refused by system")
+            return false
+        }
+
+        // Poll every 150ms up to 1500ms for Recents window to appear
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < 1500) {
+            delay(150)
+            val roots = getAllRootNodes()
+            if (isRecentsOrLauncherOnScreen(roots)) {
+                break
+            }
+        }
+        // Wait 300ms settling delay for task card entry animations to finish
+        delay(300)
+        return true
+    }
+
+    private fun findClearAllButtonAcrossWindows(): AccessibilityNodeInfo? {
+        val roots = getAllRootNodes()
+        if (roots.isEmpty()) return null
+
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels
+        val h = dm.heightPixels
+
+        val tier1Ids = listOf(
+            "clear_all", "clearanimview", "clear_button", "btn_clear", "dismiss_all",
+            "clean_all", "recents_clear", "clear_recents", "close_all", "button_clear",
+            "clearall", "clear_tasks", "clear_all_button", "clear_all_recents", "recent_clear",
+            "recents_clear_all", "dismiss_task", "button_clear_all"
+        )
+
+        val tier2Phrases = listOf(
+            "clear all", "close all", "dismiss all", "remove all",
+            "clear recent", "clean all", "clear memory"
+        )
+
+        val allNodes = mutableListOf<AccessibilityNodeInfo>()
+        for (root in roots) {
+            collectAllNodes(root, allNodes, maxNodes = 500)
+        }
+
+        // Tier 1 — Resource ID Match (case-insensitive substring)
+        for (node in allNodes) {
+            val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+            if (viewId.isNotEmpty() && tier1Ids.any { viewId.contains(it) }) {
+                Log.i(TAG, "findClearAllButton: Tier 1 match on viewId: $viewId")
+                return if (node.isClickable) node else (node.parent?.takeIf { it.isClickable } ?: node)
+            }
+        }
+
+        // Tier 2 — Text or ContentDescription Match (case-insensitive)
+        for (node in allNodes) {
+            val text = node.text?.toString()?.lowercase(Locale.ROOT)?.trim() ?: ""
+            val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT)?.trim() ?: ""
+            val matched = tier2Phrases.any { text.contains(it) || desc.contains(it) } ||
+                    text == "clear" || desc == "clear" || text == "clean" || desc == "clean"
+            if (matched) {
+                Log.i(TAG, "findClearAllButton: Tier 2 match on text='$text', desc='$desc'")
+                return if (node.isClickable) node else (node.parent?.takeIf { it.isClickable } ?: node)
+            }
+        }
+
+        // Tier 3 — Geometric Fallback for Icon-Only Circular X Button
+        // Bottom-center area:
+        // centerX: 35%..65% of screen width
+        // centerY: 80%..96% of screen height
+        // Bounds: width & height < 25% of screen width, >= 24dp
+        val minX = (w * 0.35f).toInt()
+        val maxX = (w * 0.65f).toInt()
+        val minY = (h * 0.80f).toInt()
+        val maxY = (h * 0.96f).toInt()
+        val maxDim = (w * 0.25f).toInt()
+        val minDim = (24 * dm.density).toInt()
+
+        val candidates = mutableListOf<Pair<AccessibilityNodeInfo, Rect>>()
+        val targetCx = w / 2
+        val targetCy = (h * 0.88f).toInt()
+
+        for (node in allNodes) {
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            if (rect.centerX() in minX..maxX && rect.centerY() in minY..maxY &&
+                rect.width() in minDim..maxDim && rect.height() in minDim..maxDim) {
+                val pkg = node.packageName?.toString()?.lowercase(Locale.ROOT) ?: ""
+                val cls = node.className?.toString()?.lowercase(Locale.ROOT) ?: ""
+                val isLauncherOrSys = pkg.contains("launcher") || pkg.contains("systemui") ||
+                        pkg.contains("recents") || pkg.contains("overview") || pkg.isEmpty()
+                val isInteractive = node.isClickable || node.parent?.isClickable == true ||
+                        cls.contains("image") || cls.contains("button") || cls.contains("view")
+
+                if (isLauncherOrSys && isInteractive) {
+                    candidates.add(node to rect)
                 }
             }
         }
 
-        // Gesture: swipe card upwards off the screen to dismiss
-        val path = Path().apply {
-            moveTo(startX, startY)
-            lineTo(startX, h * 0.08f)
+        if (candidates.isNotEmpty()) {
+            val best = candidates.minByOrNull { (_, rect) ->
+                val dx = rect.centerX() - targetCx
+                val dy = rect.centerY() - targetCy
+                dx * dx + dy * dy
+            }
+            if (best != null) {
+                Log.i(TAG, "findClearAllButton: Tier 3 geometric match at ${best.second}")
+                return best.first
+            }
         }
-        val dismissed = gesture(path, 250L)
-        delay(350)
-        return dismissed
+
+        return null
     }
 
-    private fun findClearAllButton(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        node ?: return null
-        val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
-        val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
-        val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+    private suspend fun clickClearAllButton(node: AccessibilityNodeInfo) {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        val cx = rect.centerX().toFloat()
+        val cy = rect.centerY().toFloat()
 
-        val isClearAll = text.contains("clear all") || text.contains("close all") || text == "clear" ||
-                desc.contains("clear all") || desc.contains("close all") ||
-                viewId.contains("clear_all") || viewId.contains("dismiss_task") || viewId.contains("button_clear_all")
-
-        if (isClearAll && (node.isClickable || node.parent?.isClickable == true)) {
-            return if (node.isClickable) node else node.parent
+        var clicked = false
+        if (node.isClickable) {
+            clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } else if (node.parent?.isClickable == true) {
+            clicked = node.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
         }
 
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val found = findClearAllButton(child)
-            if (found != null) return found
+        delay(500)
+        // If ACTION_CLICK returned false or recents cards are still present after 500ms, use gesture tap
+        if (!clicked || isRecentsWithCardsStillOpen()) {
+            Log.i(TAG, "clickClearAllButton: Falling back to 60ms gesture tap at ($cx, $cy)")
+            clickAt(cx, cy, durationMs = 60L)
+            delay(500)
+        }
+    }
+
+    fun findVisibleTaskCards(): List<VisibleTaskCard> {
+        val roots = getAllRootNodes()
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels
+        val h = dm.heightPixels
+
+        val allNodes = mutableListOf<AccessibilityNodeInfo>()
+        for (root in roots) {
+            collectAllNodes(root, allNodes, maxNodes = 500)
+        }
+
+        val cards = mutableListOf<VisibleTaskCard>()
+        val seenBounds = mutableSetOf<String>()
+
+        for (node in allNodes) {
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val nw = rect.width()
+            val nh = rect.height()
+            val cy = rect.centerY()
+
+            val isCardSized = nw > w * 0.35f && nh > h * 0.18f && cy in (h * 0.15f).toInt()..(h * 0.82f).toInt()
+            val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+            val isTaskId = viewId.contains("task_view") || viewId.contains("snapshot") ||
+                    viewId.contains("taskview") || viewId.contains("card") || viewId.contains("recents_view")
+
+            if (isCardSized || isTaskId) {
+                val key = "${rect.left},${rect.top},${rect.right},${rect.bottom}"
+                if (seenBounds.add(key)) {
+                    val cardSubNodes = mutableListOf<AccessibilityNodeInfo>()
+                    collectAllNodes(node, cardSubNodes, maxNodes = 50)
+
+                    var cardTitle = ""
+                    var isLocked = false
+                    var isAura = false
+
+                    for (sub in cardSubNodes) {
+                        val text = sub.text?.toString() ?: ""
+                        val desc = sub.contentDescription?.toString() ?: ""
+                        val subId = sub.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
+
+                        if (cardTitle.isBlank() && text.isNotBlank() && text.length < 40 && !text.contains("clear", true)) {
+                            cardTitle = text
+                        } else if (cardTitle.isBlank() && desc.isNotBlank() && desc.length < 40 && !desc.contains("clear", true)) {
+                            cardTitle = desc
+                        }
+
+                        if (desc.contains("lock", true) || desc.contains("padlock", true) ||
+                            subId.contains("lock") || subId.contains("padlock")) {
+                            isLocked = true
+                        }
+
+                        val pkg = sub.packageName?.toString() ?: ""
+                        if (pkg == packageName || text.contains("aura", true) || desc.contains("aura", true)) {
+                            isAura = true
+                        }
+                    }
+
+                    val nodePkg = node.packageName?.toString() ?: ""
+                    if (nodePkg == packageName) isAura = true
+
+                    cards.add(VisibleTaskCard(node, rect, cardTitle, isLocked, isAura))
+                }
+            }
+        }
+
+        return cards
+    }
+
+    private fun isRecentsWithCardsStillOpen(): Boolean {
+        val roots = getAllRootNodes()
+        if (roots.isEmpty()) return false
+
+        for (root in roots) {
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            collectAllNodes(root, allNodes, maxNodes = 200)
+            for (node in allNodes) {
+                val t = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
+                val d = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
+                if (t.contains("no recent") || d.contains("no recent") ||
+                    t.contains("no items") || d.contains("no items") ||
+                    t.contains("no apps") || d.contains("no apps")) {
+                    return false
+                }
+            }
+        }
+
+        val cards = findVisibleTaskCards()
+        return cards.isNotEmpty()
+    }
+
+    private fun findNodeMatchingTextAcrossRoots(cleanQuery: String): AccessibilityNodeInfo? {
+        val roots = getAllRootNodes()
+        for (root in roots) {
+            val match = findNodeMatchingText(root, cleanQuery)
+            if (match != null) return match
         }
         return null
     }
@@ -606,6 +1179,258 @@ class AutomationAccessibilityService : AccessibilityService() {
             if (found != null) return found
         }
         return null
+    }
+
+    suspend fun executeRecentsAction(
+        appName: String? = null,
+        clearAll: Boolean = false,
+        mode: String = "clear_all" // "clear_all", "swipe_clear_all", "close_specific_app"
+    ): RecentsActionResult {
+        val opened = openRecentsAndWait()
+        if (!opened) {
+            return RecentsActionResult("FAILED", "Could not open Android Recents screen.")
+        }
+
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels.toFloat()
+        val h = dm.heightPixels.toFloat()
+
+        val isSwipeAllOnly = mode == "swipe_clear_all"
+        val isSingleApp = !appName.isNullOrBlank() || mode == "close_specific_app"
+
+        if (isSwipeAllOnly) {
+            // Mode 1: swipe_clear_all (No cross button attempt, swipe all cards upward one-by-one)
+            Log.i(TAG, "executeRecentsAction: Running swipe_clear_all mode")
+            swipeAllUnlockedCardsUpward(w, h, maxSwipes = 12)
+            return verifyRecentsState(wasClearAll = true)
+        }
+
+        if (isSingleApp) {
+            // Mode 2: close_specific_app (Single app swipe removal)
+            val targetName = appName ?: "app"
+            Log.i(TAG, "executeRecentsAction: Running close_specific_app for '$targetName'")
+            closeSpecificAppFromRecents(targetName, w, h)
+            return verifyRecentsState(targetAppName = targetName, wasClearAll = false)
+        }
+
+        // Mode 3: clear_all (Smart Clear with Cross button and automatic Swipe fallback)
+        if (clearAll) {
+            val clearButton = findClearAllButtonAcrossWindows()
+            if (clearButton != null) {
+                Log.i(TAG, "Clear All button found, clicking...")
+                clickClearAllButton(clearButton)
+                val verification = verifyRecentsState(wasClearAll = true)
+                if (verification.status == "SUCCESS" || verification.status == "PARTIAL") {
+                    return verification
+                }
+                Log.w(TAG, "Clear button clicked but cards still present; falling back to upward swipe...")
+            }
+
+            // Swipe Fallback: Swipe visible unlocked cards upward one-by-one
+            swipeAllUnlockedCardsUpward(w, h, maxSwipes = 12)
+            return verifyRecentsState(wasClearAll = true)
+        }
+
+        // Generic close top recent app
+        val topCard = findVisibleTaskCards().firstOrNull { !it.isAura }
+        if (topCard != null) {
+            dismissCardUpward(topCard.node, topCard.bounds, w, h)
+            delay(450)
+        }
+        return verifyRecentsState(wasClearAll = false)
+    }
+
+    private suspend fun swipeAllUnlockedCardsUpward(w: Float, h: Float, maxSwipes: Int = 12) {
+        var consecutiveUnchanged = 0
+        var lastCardSignature = ""
+
+        for (attempt in 0 until maxSwipes) {
+            if (!isRecentsWithCardsStillOpen()) break
+
+            val visibleCards = findVisibleTaskCards()
+            if (visibleCards.isEmpty()) break
+
+            // Check if top card is Aura's own card
+            val topCard = visibleCards.firstOrNull()
+            if (topCard != null && topCard.isAura) {
+                Log.i(TAG, "Aura app card is centered in recents. Swiping horizontally to preserve active session.")
+                // Swipe horizontally to shift Aura away
+                val shiftPath = Path().apply {
+                    moveTo(w * 0.25f, h * 0.50f)
+                    lineTo(w * 0.75f, h * 0.50f)
+                }
+                gesture(shiftPath, 280L)
+                delay(350)
+                continue
+            }
+
+            val targetCard = visibleCards.firstOrNull { !it.isLocked && !it.isAura }
+                ?: visibleCards.firstOrNull { !it.isLocked }
+                ?: break // Only locked cards remaining!
+
+            val cardSig = "${targetCard.title}_${targetCard.bounds}"
+            if (cardSig == lastCardSignature) {
+                consecutiveUnchanged++
+                if (consecutiveUnchanged >= 2) {
+                    Log.w(TAG, "Card remained unchanged after 2 swipe attempts; breaking swipe loop.")
+                    break
+                }
+            } else {
+                consecutiveUnchanged = 0
+                lastCardSignature = cardSig
+            }
+
+            dismissCardUpward(targetCard.node, targetCard.bounds, w, h)
+            delay(450)
+        }
+    }
+
+    private suspend fun closeSpecificAppFromRecents(appName: String, w: Float, h: Float) {
+        val cleanTarget = appName.trim().lowercase(Locale.ROOT)
+        var targetNode = findNodeMatchingTextAcrossRoots(cleanTarget)
+        var horizontalSwipes = 0
+
+        while (horizontalSwipes < 8) {
+            if (targetNode != null) {
+                val rect = Rect()
+                targetNode.getBoundsInScreen(rect)
+                val cx = rect.centerX().toFloat()
+                if (cx in (w * 0.25f)..(w * 0.75f)) {
+                    break
+                } else if (cx < w * 0.25f) {
+                    val path = Path().apply {
+                        moveTo(w * 0.25f, h * 0.50f)
+                        lineTo(w * 0.75f, h * 0.50f)
+                    }
+                    gesture(path, 280L)
+                } else {
+                    val path = Path().apply {
+                        moveTo(w * 0.75f, h * 0.50f)
+                        lineTo(w * 0.25f, h * 0.50f)
+                    }
+                    gesture(path, 280L)
+                }
+            } else {
+                val path = Path().apply {
+                    if (horizontalSwipes < 4) {
+                        moveTo(w * 0.80f, h * 0.50f)
+                        lineTo(w * 0.20f, h * 0.50f)
+                    } else {
+                        moveTo(w * 0.20f, h * 0.50f)
+                        lineTo(w * 0.80f, h * 0.50f)
+                    }
+                }
+                gesture(path, 280L)
+            }
+            delay(350)
+            targetNode = findNodeMatchingTextAcrossRoots(cleanTarget)
+            horizontalSwipes++
+        }
+
+        val cardNode = targetNode ?: findVisibleTaskCards().firstOrNull { it.title.lowercase(Locale.ROOT).contains(cleanTarget) }?.node
+        if (cardNode != null) {
+            val rect = Rect()
+            cardNode.getBoundsInScreen(rect)
+            dismissCardUpward(cardNode, rect, w, h)
+            delay(450)
+        } else {
+            val visible = findVisibleTaskCards().firstOrNull { !it.isAura }
+            if (visible != null) {
+                dismissCardUpward(visible.node, visible.bounds, w, h)
+                delay(450)
+            }
+        }
+    }
+
+    private suspend fun dismissCardUpward(node: AccessibilityNodeInfo, bounds: Rect, w: Float, h: Float) {
+        val dismissed = node.performAction(AccessibilityNodeInfo.ACTION_DISMISS) ||
+                node.parent?.performAction(AccessibilityNodeInfo.ACTION_DISMISS) == true
+
+        if (!dismissed) {
+            val startX = bounds.centerX().toFloat().coerceIn(w * 0.30f, w * 0.70f)
+            val startY = h * 0.65f
+            val endY = h * 0.12f
+
+            val path = Path().apply {
+                moveTo(startX, startY)
+                lineTo(startX, endY)
+            }
+            gesture(path, 250L)
+        }
+    }
+
+    private suspend fun verifyRecentsState(targetAppName: String? = null, wasClearAll: Boolean = false): RecentsActionResult {
+        delay(600)
+
+        val roots = getAllRootNodes()
+        if (roots.isEmpty()) {
+            return RecentsActionResult("SUCCESS", "Recents closed and screen settled.")
+        }
+
+        var hasEmptyRecentsText = false
+        for (root in roots) {
+            val allNodes = mutableListOf<AccessibilityNodeInfo>()
+            collectAllNodes(root, allNodes, maxNodes = 200)
+            for (node in allNodes) {
+                val t = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
+                val d = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
+                if (t.contains("no recent") || d.contains("no recent") ||
+                    t.contains("no items") || d.contains("no items") ||
+                    t.contains("no apps") || d.contains("no apps")) {
+                    hasEmptyRecentsText = true
+                    break
+                }
+            }
+            if (hasEmptyRecentsText) break
+        }
+
+        val cards = findVisibleTaskCards()
+        val cardsStillOpen = isRecentsWithCardsStillOpen()
+
+        if (wasClearAll) {
+            if (hasEmptyRecentsText || !cardsStillOpen || cards.isEmpty()) {
+                return RecentsActionResult("SUCCESS", "All recent apps cleared successfully.")
+            }
+            val lockedCards = cards.filter { it.isLocked }
+            if (lockedCards.isNotEmpty()) {
+                return RecentsActionResult(
+                    status = "PARTIAL",
+                    message = "Cleared unlocked apps, but ${lockedCards.size} locked app(s) remain in recents.",
+                    remainingCardsCount = cards.size
+                )
+            }
+            return RecentsActionResult(
+                status = "FAILED",
+                message = "Recents opened, but apps could not be cleared. Cards are still visible on screen.",
+                remainingCardsCount = cards.size
+            )
+        }
+
+        if (!targetAppName.isNullOrBlank()) {
+            val cleanTarget = targetAppName.trim().lowercase(Locale.ROOT)
+            val matchFound = cards.any { it.title.lowercase(Locale.ROOT).contains(cleanTarget) } ||
+                    findNodeMatchingTextAcrossRoots(cleanTarget) != null
+
+            return if (!matchFound) {
+                RecentsActionResult("SUCCESS", "Closed $targetAppName and removed from recents.")
+            } else {
+                RecentsActionResult(
+                    status = "FAILED",
+                    message = "Failed to close $targetAppName; card is still visible in recents.",
+                    remainingCardsCount = cards.size
+                )
+            }
+        }
+
+        return if (!cardsStillOpen) {
+            RecentsActionResult("SUCCESS", "Recents closed successfully.")
+        } else {
+            RecentsActionResult("FAILED", "Action completed but cards are still visible.", remainingCardsCount = cards.size)
+        }
+    }
+
+    suspend fun dismissAppFromRecents(appName: String? = null, clearAll: Boolean = false): Boolean {
+        return executeRecentsAction(appName, clearAll).isSuccess
     }
 
     fun performScroll(direction: String): Boolean {

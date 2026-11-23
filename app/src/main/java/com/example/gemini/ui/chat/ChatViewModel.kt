@@ -260,6 +260,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val isServerOnline = agyBackend.isServerOnline
     val isReconnecting = agyBackend.isReconnecting
     val isBridgeOnline = agyBackend.isBridgeOnline
+    val bridgeUiState = agyBackend.bridgeUiState
     fun checkBridgeHealth() = agyBackend.checkBridgeHealth()
     val agyAuthInfo = agyBackend.agyAuthInfo
     val isAuthBusy = agyBackend.isAuthBusy
@@ -361,6 +362,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (isOpenCodeEnabled) openCodeBackend.onAppForegrounded()
         if (isCodexEnabled) codexBackend.onAppForegrounded()
+    }
+    fun onAppBackgrounded() {
+        agyBackend.onAppBackgrounded()
+        if (isClaudeEnabled) claudeBackend.onAppBackgrounded()
+        if (isOpenCodeEnabled) openCodeBackend.onAppBackgrounded()
+        if (isCodexEnabled) codexBackend.onAppBackgrounded()
     }
     fun onProjectChanged(projectPath: String) = agyBackend.onProjectChanged(projectPath)
     fun onUserStartedTyping() = agyBackend.onUserStartedTyping()

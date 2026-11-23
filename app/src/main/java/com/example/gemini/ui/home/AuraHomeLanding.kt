@@ -38,6 +38,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.LaunchedEffect
@@ -189,6 +196,7 @@ fun AuraSuggestionPillChip(
 @Composable
 fun AuraVoiceWelcome(
     userName: String? = null,
+    isPaused: Boolean = false,
     onActionTap: () -> Unit,
     onActionDoubleTap: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -215,13 +223,14 @@ fun AuraVoiceWelcome(
     }
 
     val prompt = when (livePhase) {
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> liveStatusText.ifBlank { "Connecting to Gemini Live…" }
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> "Listening — speak anytime"
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> "Thinking…"
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.WORKING -> liveStatusText.ifBlank { "Working on task…" }
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> if (displayedSpokenText.isNotBlank()) displayedSpokenText else "Jarvis speaking…"
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> liveStatusText.ifBlank { "Connecting..." }
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE_READY -> "Speak to ask"
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> "Listening..."
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> "Thinking..."
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.WORKING -> liveStatusText.ifBlank { "Working..." }
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> if (displayedSpokenText.isNotBlank()) displayedSpokenText else "Speaking..."
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.MUTED -> "Muted — single tap to unmute, double tap to stop"
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> if (com.example.gemini.data.live.AuraLiveVoiceManager.isLive()) "Ask anything — speak anytime" else "Tap the orb to start conversation"
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> if (com.example.gemini.data.live.AuraLiveVoiceManager.isLive()) "Speak to ask" else "Tap the orb to start conversation"
     }
 
     val rawName = userName?.trim().orEmpty()
@@ -256,16 +265,35 @@ fun AuraVoiceWelcome(
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(8.dp))
-        Text(
-            text = prompt,
-            color = if (livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING && displayedSpokenText.isNotBlank()) AuraInk else AuraMuted,
-            fontSize = 15.sp,
-            lineHeight = 21.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 44.dp)
-        )
+        AnimatedContent(
+            targetState = prompt,
+            transitionSpec = {
+                (fadeIn(animationSpec = tween(220)) + slideInVertically(animationSpec = tween(220)) { it / 4 })
+                    .togetherWith(fadeOut(animationSpec = tween(180)) + slideOutVertically(animationSpec = tween(180)) { -it / 4 })
+            },
+            label = "voice_status_anim"
+        ) { targetPrompt ->
+            val textColor = when (livePhase) {
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> if (displayedSpokenText.isNotBlank()) AuraInk else MaterialTheme.colorScheme.primary
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> MaterialTheme.colorScheme.primary
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING,
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.WORKING -> MaterialTheme.colorScheme.tertiary
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE_READY -> MaterialTheme.colorScheme.onSurfaceVariant
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> MaterialTheme.colorScheme.secondary
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.MUTED -> Color(0xFFDC2626)
+                com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> AuraMuted
+            }
+            Text(
+                text = targetPrompt,
+                color = textColor,
+                fontSize = 15.sp,
+                lineHeight = 21.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp).heightIn(min = 44.dp)
+            )
+        }
         Spacer(Modifier.weight(0.28f))
         Box(
             modifier = Modifier
@@ -280,6 +308,8 @@ fun AuraVoiceWelcome(
             com.example.gemini.ui.components.AuraOrbView(
                 modifier = Modifier.fillMaxSize(),
                 phase = legacyPhase,
+                livePhase = livePhase,
+                isPaused = isPaused,
                 onOrbTapped = onActionTap
             )
         }
@@ -312,12 +342,13 @@ fun AuraVoiceActions(
 
     val (startLabel, accentColor, iconVector) = when (livePhase) {
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> Triple("Connecting…", Color(0xFFD97706), Icons.Default.HourglassEmpty)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE_READY -> Triple("Speak to ask", Color(0xFF475569), Icons.Rounded.Mic)
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> Triple("Listening…", Color(0xFF16A34A), Icons.Rounded.Mic)
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> Triple("Thinking…", Color(0xFF8B5CF6), Icons.Default.HourglassEmpty)
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.WORKING -> Triple("Working…", Color(0xFFD97706), Icons.Default.HourglassEmpty)
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> Triple("Speaking…", Color(0xFF2563EB), Icons.Filled.VolumeUp)
         com.example.gemini.data.live.AuraLiveVoiceManager.Phase.MUTED -> Triple("Muted", Color(0xFFDC2626), Icons.Filled.MicOff)
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> if (com.example.gemini.data.live.AuraLiveVoiceManager.isLive()) Triple("Ask anything", Color(0xFF16A34A), Icons.Rounded.Mic) else Triple("Tap to Start", AuraBlue, Icons.Rounded.Mic)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> if (com.example.gemini.data.live.AuraLiveVoiceManager.isLive()) Triple("Speak to ask", Color(0xFF475569), Icons.Rounded.Mic) else Triple("Tap to Start", AuraBlue, Icons.Rounded.Mic)
     }
 
     val languageLabel = remember(currentLang) {

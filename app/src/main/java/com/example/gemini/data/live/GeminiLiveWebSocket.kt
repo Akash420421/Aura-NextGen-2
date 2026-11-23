@@ -288,7 +288,17 @@ class GeminiLiveWebSocket(
                 })
             })
 
-            // 0e. open_current_voice_chat
+            // 0e. open_live_chat
+            put(JSONObject().apply {
+                put("name", "open_live_chat")
+                put("description", "Immediately switches to the chat screen displaying the active voice session thread while keeping the live voice call active. Call when user asks 'live chat open karo', 'chat dikhao', 'open live chat', 'hamari chat kholo', 'current chat open karo', or 'live chat dikhao'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 0e-2. open_current_voice_chat (backward compatibility)
             put(JSONObject().apply {
                 put("name", "open_current_voice_chat")
                 put("description", "Opens the active ongoing voice conversation in the chat screen so the user can see the messages. Call when user asks 'hamari chat kholo', 'current chat open karo', or 'chat dikhao'.")
@@ -302,6 +312,16 @@ class GeminiLiveWebSocket(
             put(JSONObject().apply {
                 put("name", "open_previous_voice_chat")
                 put("description", "Opens the previous voice session in the chat screen. Call when user asks 'pichhli chat kholo' or 'previous chat open karo'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 0f-2. create_new_chat
+            put(JSONObject().apply {
+                put("name", "create_new_chat")
+                put("description", "Opens a fresh new chat session inside Aura app with welcome suggestion cards. Call immediately when user asks 'new chat open karo', 'nayi chat shuru karo', 'start a new chat', 'open new chat', or 'fresh chat banao'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject())
@@ -347,18 +367,26 @@ class GeminiLiveWebSocket(
             // 2. open_website
             put(JSONObject().apply {
                 put("name", "open_website")
-                put("description", "Opens one or more websites/URLs in Google Chrome in separate tabs. Use whenever the user asks to open a website, visit a URL, or preview localhost (e.g. \"open github.com\", \"open vercel.com\", \"open localhost:8080\").")
+                put("description", "Opens one or more websites/URLs. Defaults to opening inside Aura AI's In-Built Web Browser. Set external=true ONLY if the user explicitly commanded 'Chrome mein kholo' or 'external browser'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("urls", JSONObject().apply {
                             put("type", "ARRAY")
-                            put("description", "Array of website URLs or domain names to open, each in its own tab.")
+                            put("description", "Array of website URLs or domain names to open.")
                             put("items", JSONObject().apply { put("type", "STRING") })
+                        })
+                        put("url", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Single website URL to open.")
                         })
                         put("query", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Optional string containing the website URL or domain name.")
+                            put("description", "Optional search query or domain name.")
+                        })
+                        put("external", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Set to true ONLY if user explicitly commanded 'Chrome mein kholo' or 'external browser'. Defaults to false (In-Built Browser).")
                         })
                     })
                 })
@@ -605,7 +633,7 @@ class GeminiLiveWebSocket(
             // 15. type_text
             put(JSONObject().apply {
                 put("name", "type_text")
-                put("description", "Types text into the focused or named input field on screen.")
+                put("description", "Instantly injects text into any input field, search box, or message entry bar using universal direct text injection (ACTION_SET_TEXT and clipboard-preserving paste). Works across all native apps, WebViews, Telegram, WhatsApp, Chrome, and fake search bars. Zero keyboard typing, zero screen share needed.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -619,7 +647,11 @@ class GeminiLiveWebSocket(
                         })
                         put("submit", JSONObject().apply {
                             put("type", "BOOLEAN")
-                            put("description", "Whether to submit or press enter after typing.")
+                            put("description", "Whether to submit, send message, or press enter after typing.")
+                        })
+                        put("clear_existing", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Whether to clear existing text before typing (default true).")
                         })
                     })
                     put("required", JSONArray().put("text"))
@@ -665,7 +697,17 @@ class GeminiLiveWebSocket(
             // 18. inspect_screen
             put(JSONObject().apply {
                 put("name", "inspect_screen")
-                put("description", "Reads the foreground app, screen title, and accessible UI elements on the user's active screen.")
+                put("description", "Reads the foreground app, screen title, visible chat messages, text content, and accessible UI controls via Accessibility. Zero screen share needed. ALWAYS call this when asked 'what is on screen', 'kya message aaya', or before clicking/typing.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 18b. read_screen
+            put(JSONObject().apply {
+                put("name", "read_screen")
+                put("description", "Alias for inspect_screen. Reads all visible text, messages, and UI controls on the user's active screen via Accessibility without screen share.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject())
@@ -767,7 +809,7 @@ class GeminiLiveWebSocket(
             // 25. close_app
             put(JSONObject().apply {
                 put("name", "close_app")
-                put("description", "Closes the current or named app, stops playing background audio/media, and optionally removes its task card from Android Recents overview or clears all recent apps. Use when user says 'close app', 'band karo', 'recents se hatao', 'minimize se hatao', 'sab close karo'.")
+                put("description", "Closes the current or named app, stops playing background audio/media, and dismisses its task card from Android Recents overview or clears all recent apps with hardware gesture and post-action verification. Returns structured status ('success', 'partial', 'error') and verified message. Never claim success if status is error or partial.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -783,20 +825,56 @@ class GeminiLiveWebSocket(
                             put("type", "BOOLEAN")
                             put("description", "True to dismiss or clear all cards from recents.")
                         })
+                        put("mode", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Execution mode: 'clear_all' (cross button with swipe fallback), 'swipe_clear_all' (swipes all unlocked cards upward one-by-one without cross button), or 'close_specific_app' (swipes and removes only the target app).")
+                        })
                     })
                 })
             })
 
-            // 26. open_inbuilt_browser
+            // 26. open_in_app_browser (Primary)
             put(JSONObject().apply {
-                put("name", "open_inbuilt_browser")
-                put("description", "Opens a website or URL inside Aura AI's own internal in-built web browser tab instead of external Google Chrome. Call when user specifically says 'in-built browser mein kholo', 'internal browser open karo', or asks to view a page inside the app.")
+                put("name", "open_in_app_browser")
+                put("description", "Opens any website, URL, or YouTube inside Aura AI's own In-Built Web Browser. ALWAYS use this tool whenever the user asks to open a website, browse a page, open YouTube, or visit a link (e.g. 'in-built browser mein YouTube open karo', 'open youtube in browser', 'open github.com', 'google kholo') UNLESS the user explicitly demands external Chrome.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("url", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "The website URL or query to open, e.g. 'https://youtube.com', 'https://github.com'.")
+                            put("description", "The website URL, shorthand, or query to open (e.g. 'youtube', 'm.youtube.com', 'https://github.com', 'localhost:8080').")
+                        })
+                    })
+                    put("required", JSONArray().put("url"))
+                })
+            })
+
+            // 26b. open_inbuilt_browser (Alias)
+            put(JSONObject().apply {
+                put("name", "open_inbuilt_browser")
+                put("description", "Alias for open_in_app_browser. Opens a website or URL inside Aura AI's In-Built Web Browser.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("url", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The website URL or query to open.")
+                        })
+                    })
+                    put("required", JSONArray().put("url"))
+                })
+            })
+
+            // 26c. open_url (Alias)
+            put(JSONObject().apply {
+                put("name", "open_url")
+                put("description", "Opens a URL inside Aura AI's In-Built Web Browser.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("url", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The URL to open.")
                         })
                     })
                     put("required", JSONArray().put("url"))

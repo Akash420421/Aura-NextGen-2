@@ -1,17 +1,17 @@
 {
-  "version_code": 241,
-  "version_name": "2.4.1",
+  "version_code": 242,
+  "version_name": "2.4.2",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.1 — Smoothness & Performance, Real Recents Management, In-Built Browser, & Voice Persistence",
-    "App Smoothness & Zero-Lag Fix: Throttled accessibility micro-events, eliminated main-thread tree crawling, restored fluid 60-120 FPS scrolling",
-    "Recents Dismissal & Background Media Silence: New close_app tool pauses playing media and dismisses app cards or clears all recents via hardware gesture",
-    "Native Text Injection: Strict directive prohibiting screen-share prompts for typing/clicking; injects text directly into active focus fields",
-    "Complete Voice Lifecycle & Orb States: Connecting -> Idle (Ask anything) -> Listening -> Thinking -> Working -> Speaking; eliminated idle orb vibration",
-    "Persistent Voice Sessions in Drawer: Persisted locally via VoiceSessionStore; review complete voice chats with tool calls from Drawer -> Voice",
-    "In-Built Web Browser Support: open_inbuilt_browser routes web pages directly into Aura's internal browser tab instead of external Chrome",
-    "System App & Dialer Intent Routing: Fixed 'phone dialer' URL error, prevented PhonePe collisions on 'phone' queries, and added system dialer intent fallbacks",
-    "Always-Visible New Chat Suggestions: Adjusted height constraints so suggestion chips remain visible on all mobile screen heights"
+    "Aura AI v2.4.2 — Comprehensive Performance, Voice Lifecycle, Recents Dismissal, In-Built Browser & Bridge Hardening",
+    "Top-Bar Switching & Drawer Freeze Elimination: Keyboard dismiss before navigation drawer open/mode switch, optimized recompositions",
+    "Accurate Recents Dismissal: Swipe-up app card removal and bottom X button support with verification; zero false success confirmations",
+    "Accessibility & Direct Text Injection: Reliable direct text injection and UI tree reading without requesting screen share",
+    "Complete Voice Lifecycle: 6 explicit states (Connecting, Speak to ask idle, Listening, Thinking, Working, Speaking) with smooth transitions",
+    "Voice Session Room/SQLite Persistence: Live real-time two-way synchronization between Voice Mode and Chat thread database",
+    "In-Built Browser Routing: Opening websites and YouTube launches directly inside Aura internal browser tab instead of external Chrome",
+    "New Chat & Blank Screen Fix: Instant direct New Chat creation via voice/top bar without white screen flash or empty state glitch",
+    "Antigravity Bridge Hardening: Eliminated persistent red disconnected banner; exponential backoff, atomic reconnect, and background lifecycle pause"
   ],
   "is_critical": false
 }
