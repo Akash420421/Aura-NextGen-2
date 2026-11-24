@@ -870,8 +870,13 @@ class TrajectoryEngine {
             val code = stepError?.error_code
             val errId = stepError?.error_id ?: ""
 
+            val isStoppedByUser = shortErr.contains("cancel", ignoreCase = true) ||
+                userMsg.contains("cancel", ignoreCase = true) ||
+                userMsg.contains("stopped by user", ignoreCase = true) ||
+                userMsg.contains("generation stopped", ignoreCase = true)
+
             val title = when {
-                shortErr.contains("cancel", ignoreCase = true) || userMsg.contains("cancel", ignoreCase = true) || userMsg.contains("stopped by user", ignoreCase = true) -> "Generation Stopped by User"
+                isStoppedByUser -> "Generation stopped"
                 shortErr.contains("auth", ignoreCase = true) || userMsg.contains("auth", ignoreCase = true) -> "Authentication Required"
                 shortErr.contains("quota", ignoreCase = true) || shortErr.contains("credit", ignoreCase = true) || code == 429 -> "Quota / Usage Limit Exceeded"
                 shortErr.contains("model not found", ignoreCase = true) || shortErr.contains("unknown model", ignoreCase = true) -> "Model Configuration Error"

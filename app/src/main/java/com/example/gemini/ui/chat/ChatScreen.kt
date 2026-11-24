@@ -2740,6 +2740,62 @@ fun ChatScreen(
                         }
                     }
                 }
+
+                // Floating "Scroll to latest message" button anchored strictly inside Chat feed container
+                val isChatMode = !auraHomeVoice
+                val showScrollToBottom by remember {
+                    derivedStateOf {
+                        isChatMode && feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = showScrollToBottom,
+                    enter = fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.8f, animationSpec = tween(150)),
+                    exit = fadeOut(animationSpec = tween(150)) + scaleOut(targetScale = 0.8f, animationSpec = tween(150)),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(
+                            end = 16.dp,
+                            bottom = if (isAuraHome) {
+                                WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 96.dp
+                            } else {
+                                16.dp
+                            }
+                        )
+                ) {
+                    val isDark = isAppInDarkTheme()
+                    Surface(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    if (feedItems.isNotEmpty()) {
+                                        listState.animateScrollToItem(maxOf(0, feedItems.size - 1))
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w("ChatScreen", "Scroll to bottom failed: ${e.message}")
+                                }
+                            }
+                        },
+                        shape = CircleShape,
+                        color = if (isDark) Color(0xFF2A2A2C) else Color.White,
+                        shadowElevation = 4.dp,
+                        border = BorderStroke(1.dp, if (isDark) Color(0xFF3A3A3C) else Color(0xFFE5E7EB)),
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Scroll to latest message",
+                                tint = if (isDark) Color(0xFFD1D1D6) else Color(0xFF4A4A4E),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -2748,49 +2804,6 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Floating "Scroll to latest message" button (centered horizontally directly above composer with safe clearance, strictly hidden in Voice Mode)
-                    val isChatMode = !auraHomeVoice
-                    val showScrollToBottom = isChatMode && feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
-
-                    AnimatedVisibility(
-                        visible = showScrollToBottom,
-                        enter = fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.8f, animationSpec = tween(150)),
-                        exit = fadeOut(animationSpec = tween(150)) + scaleOut(targetScale = 0.8f, animationSpec = tween(150)),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    ) {
-                        val isDark = isAppInDarkTheme()
-                        Surface(
-                            onClick = {
-                                scope.launch {
-                                    try {
-                                        if (feedItems.isNotEmpty()) {
-                                            listState.animateScrollToItem(maxOf(0, feedItems.size - 1))
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.w("ChatScreen", "Scroll to bottom failed: ${e.message}")
-                                    }
-                                }
-                            },
-                            shape = CircleShape,
-                            color = if (isDark) Color(0xFF2A2A2C) else Color.White,
-                            shadowElevation = 4.dp,
-                            border = BorderStroke(1.dp, if (isDark) Color(0xFF3A3A3C) else Color(0xFFE5E7EB)),
-                            modifier = Modifier.size(38.dp)
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = "Scroll to latest message",
-                                    tint = if (isDark) Color(0xFFD1D1D6) else Color(0xFF4A4A4E),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-
                     // Dynamic Bridge / Project / Model Initialization Banner
                     AnimatedVisibility(
                     visible = isAgyChat && !bridgeStatusMessage.isNullOrBlank(),
@@ -2977,8 +2990,8 @@ fun ChatScreen(
                 }
                 AnimatedVisibility(
                     visible = pendingQuestion != null && approvalItems.isEmpty(),
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
+                    enter = slideInVertically { it } + fadeIn(),
+                    exit = slideOutVertically { it } + fadeOut()
                 ) {
                     pendingQuestion?.let { q ->
                         com.example.gemini.ui.agents.AgentQuestionPanel(
@@ -3155,15 +3168,7 @@ fun ChatScreen(
                 }
 
                 if (isAuraHome) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer {
-                                val isVisible = auraHomeVoice
-                                alpha = if (isVisible) 1f else 0f
-                                translationY = if (isVisible) 0f else 600f
-                            }
-                    ) {
+                    if (auraHomeVoice) {
                         com.example.gemini.ui.home.AuraVoiceActions(
                             autoSend = auraAutoSend,
                             onActionTap = onActionTapAuraJarvis,
@@ -3184,17 +3189,7 @@ fun ChatScreen(
                             },
                             onToggleAuto = { com.example.gemini.data.jarvis.JarvisPreferences.autoSend.set(!auraAutoSend) }
                         )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer {
-                                val isVisible = !auraHomeVoice
-                                alpha = if (isVisible) 1f else 0f
-                                translationY = if (isVisible) 0f else 600f
-                            }
-                    ) {
+                    } else {
                         chatInputBarComposable()
                     }
                 } else {

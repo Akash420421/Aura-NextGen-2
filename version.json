@@ -1,17 +1,14 @@
 {
-  "version_code": 242,
-  "version_name": "2.4.2",
+  "version_code": 243,
+  "version_name": "2.4.3",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.2 — Comprehensive Performance, Voice Lifecycle, Recents Dismissal, In-Built Browser & Bridge Hardening",
-    "Top-Bar Switching & Drawer Freeze Elimination: Keyboard dismiss before navigation drawer open/mode switch, optimized recompositions",
-    "Accurate Recents Dismissal: Swipe-up app card removal and bottom X button support with verification; zero false success confirmations",
-    "Accessibility & Direct Text Injection: Reliable direct text injection and UI tree reading without requesting screen share",
-    "Complete Voice Lifecycle: 6 explicit states (Connecting, Speak to ask idle, Listening, Thinking, Working, Speaking) with smooth transitions",
-    "Voice Session Room/SQLite Persistence: Live real-time two-way synchronization between Voice Mode and Chat thread database",
-    "In-Built Browser Routing: Opening websites and YouTube launches directly inside Aura internal browser tab instead of external Chrome",
-    "New Chat & Blank Screen Fix: Instant direct New Chat creation via voice/top bar without white screen flash or empty state glitch",
-    "Antigravity Bridge Hardening: Eliminated persistent red disconnected banner; exponential backoff, atomic reconnect, and background lifecycle pause"
+    "Aura AI v2.4.3 — UI/UX Layout, Voice Dock & Question Dialog Optimization",
+    "Docked Question Card: Anchored to bottom sheet layout with full IME keyboard-awareness, dynamic scrollable options, and 48dp touch targets",
+    "Voice Screen Thumb-Zone Dock: Eliminated duplicate system insets and empty dead space under bottom voice controls (Screen, Mic, Language)",
+    "Clean Voice Status Hierarchy: Live dynamic status (Listening, Thinking, Working, Speaking) shown exclusively under top greeting; bottom center button dedicated to action (Mute/Unmute/Start)",
+    "Chat-Scoped Scroll-to-Bottom: Floating down-arrow button strictly scoped to Chat message list feed; removed root floating switcher overlay",
+    "Subtle Generation Stop Indicator: Clean neutral inline pill with StopCircle icon on user cancellation, eliminating harsh red error cards while preserving streamed output"
   ],
   "is_critical": false
 }

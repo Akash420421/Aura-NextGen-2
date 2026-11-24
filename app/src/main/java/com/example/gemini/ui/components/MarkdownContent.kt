@@ -49,6 +49,7 @@ import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.PriorityHigh
 import androidx.compose.material.icons.outlined.Report
 import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.ZoomOut
@@ -1364,6 +1365,42 @@ fun AgentErrorCard(
     onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val isStoppedByUser = error.title.contains("stopped", ignoreCase = true) ||
+        error.title.contains("cancel", ignoreCase = true) ||
+        error.userMessage.contains("stopped by user", ignoreCase = true) ||
+        error.userMessage.contains("cancelled", ignoreCase = true) ||
+        error.shortError.contains("cancel", ignoreCase = true)
+
+    if (isStoppedByUser) {
+        Surface(
+            modifier = modifier
+                .padding(vertical = 4.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.StopCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Generation stopped",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
     val context = LocalContext.current
     var isExpanded by remember { mutableStateOf(false) }
     val isDark = isAppInDarkTheme()

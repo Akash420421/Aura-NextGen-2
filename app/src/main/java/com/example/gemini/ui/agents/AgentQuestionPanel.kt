@@ -18,9 +18,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -51,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -120,8 +124,15 @@ fun AgentQuestionPanel(
         }
     }
 
+    val configuration = LocalConfiguration.current
+    val maxScrollHeight = (configuration.screenHeightDp * 0.55f).coerceIn(240f, 420f).dp
+
     Surface(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .navigationBarsPadding()
+            .imePadding(),
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, accent.copy(alpha = 0.38f)),
@@ -175,7 +186,7 @@ fun AgentQuestionPanel(
                 label = "question_page"
             ) { index ->
                 val q = questions[index.coerceIn(0, questions.lastIndex)]
-                Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.heightIn(max = maxScrollHeight).verticalScroll(rememberScrollState())) {
                     q.description?.takeIf { it.isNotBlank() }?.let { d ->
                         if (d.length <= 28) {
                             Text(
@@ -237,12 +248,20 @@ fun AgentQuestionPanel(
             Spacer(Modifier.height(8.dp))
             val isLast = page >= questions.lastIndex
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { onSkip(responses(skipAll = true)) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                TextButton(
+                    onClick = { onSkip(responses(skipAll = true)) },
+                    modifier = Modifier.defaultMinSize(minWidth = 64.dp, minHeight = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                ) {
                     Text(if (questions.size > 1) "Skip all" else "Skip", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
                 Spacer(Modifier.weight(1f))
                 if (page > 0) {
-                    TextButton(onClick = { page-- }) { Text("Back", fontSize = 13.sp) }
+                    TextButton(
+                        onClick = { page-- },
+                        modifier = Modifier.defaultMinSize(minWidth = 64.dp, minHeight = 48.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    ) { Text("Back", fontSize = 13.sp) }
                     Spacer(Modifier.width(4.dp))
                 }
                 val canSubmit = questions.any { answered(it) }
@@ -257,7 +276,8 @@ fun AgentQuestionPanel(
                     enabled = !isLast || canSubmit,
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color.White),
-                    contentPadding = PaddingValues(horizontal = 18.dp)
+                    modifier = Modifier.defaultMinSize(minWidth = 88.dp, minHeight = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp)
                 ) {
                     Text(
                         when {
@@ -281,7 +301,7 @@ private fun OptionCard(label: String, description: String?, selected: Boolean, m
         shape = shape,
         color = if (selected) accent.copy(alpha = 0.1f) else Color.Transparent,
         border = BorderStroke(if (selected) 1.5.dp else 1.dp, if (selected) accent.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
     ) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             // radio / checkbox
