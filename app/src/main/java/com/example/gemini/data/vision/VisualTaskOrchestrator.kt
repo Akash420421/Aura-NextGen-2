@@ -1293,7 +1293,7 @@ class VisualTaskOrchestrator(
         } == true
 
         // Fix 16: Hard Abort Guard against injecting chat messages into Search bars
-        val goalLower = AgentTaskEngine.current()?.userPrompt?.lowercase(Locale.ROOT) ?: ""
+        val goalLower = AgentTaskEngine.current()?.originalGoal?.lowercase(Locale.ROOT) ?: ""
         val isMessageGoal = goalLower.contains("message") || goalLower.contains("msg") ||
                 goalLower.contains("chat") || goalLower.contains("bhejo") || goalLower.contains("send") ||
                 submit

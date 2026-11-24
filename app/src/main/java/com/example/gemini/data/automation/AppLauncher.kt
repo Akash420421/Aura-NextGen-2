@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
