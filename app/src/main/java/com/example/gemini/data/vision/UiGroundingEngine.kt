@@ -248,6 +248,41 @@ class UiGroundingEngine {
             }
         }
 
+        // Fix 15: Reels Tab Priority (bottom navigation bar Reels tab)
+        val isReelsTabRequest = query == "reels" || query == "reel" || query.contains("reel tab") ||
+                query.contains("reels tab") || query.contains("reel button") || query.contains("reels button") ||
+                query.contains("reel wala button") || query.contains("reels wala button") ||
+                query.contains("clips tab") || query.contains("clips")
+        if (isReelsTabRequest) {
+            val reelsTab = elements.firstOrNull { el ->
+                val vId = el.viewId.lowercase(Locale.ROOT)
+                val label = el.primaryLabel.lowercase(Locale.ROOT)
+                (vId.contains("clips_tab") || vId.contains("reels_tab") || vId.contains("tab_reels") ||
+                 label == "reels" || label == "reel") &&
+                (el.bounds.top >= 1500 || vId.contains("tab") || vId.contains("nav"))
+            }
+            if (reelsTab != null) {
+                Log.i(TAG, "Grounded Reels bottom navigation tab: '${reelsTab.primaryLabel}' (id=${reelsTab.id}, bounds=${reelsTab.bounds})")
+                return reelsTab
+            }
+        }
+
+        // Fix 16: Instagram Direct Message / Inbox button priority
+        val isInstagramInboxRequest = (query == "direct" || query == "dm" || query.contains("inbox") || query.contains("direct message") || query.contains("messages")) &&
+                elements.any { it.viewId.contains("instagram") }
+        if (isInstagramInboxRequest) {
+            val inboxBtn = elements.firstOrNull {
+                val vId = it.viewId.lowercase(Locale.ROOT)
+                val label = it.primaryLabel.lowercase(Locale.ROOT)
+                vId.contains("action_bar_inbox") || vId.contains("action_bar_button_action_inbox") ||
+                label.contains("direct") || label.contains("message") || label.contains("inbox")
+            }
+            if (inboxBtn != null) {
+                Log.i(TAG, "Grounded Instagram DM / Inbox button: '${inboxBtn.primaryLabel}' (id=${inboxBtn.id})")
+                return inboxBtn
+            }
+        }
+
         // Explicit button clicks (send/generate/submit/enter) — NEVER route to input fields
         val isExplicitButtonQuery = query.contains("send button") || query.contains("generate button") ||
                 query.contains("submit button") || query.contains("enter button") ||
@@ -391,14 +426,26 @@ class UiGroundingEngine {
             }
         }
 
+        // Fix 16: Bottom nav tabs exclusion when searching for contacts, messages, cards, or content
+        val isExplicitTabQuery = query.contains("tab") || query.contains("bar") || query.contains("nav") ||
+                query in listOf("search", "explore", "home", "feed", "reels", "profile", "notifications")
+        val candidateElements = if (isExplicitTabQuery) elements else elements.filter { el ->
+            val vId = el.viewId.lowercase(Locale.ROOT)
+            val label = el.primaryLabel.lowercase(Locale.ROOT)
+            val isNavTab = (vId.contains("search_tab") || vId.contains("feed_tab") || vId.contains("clips_tab") ||
+                    vId.contains("profile_tab") || vId.contains("news_tab") || vId.contains("bottom_nav")) ||
+                   (el.bounds.top >= 1800 && el.bounds.height() in 80..220 && (label == "search" || label == "search and explore" || label == "home" || label == "reels" || label == "profile"))
+            !isNavTab
+        }
+
         // Tiered matching candidate lists:
         // Tier 1: Clickable non-editable interactive items (links, buttons, list cards, icons)
         // Tier 2: Non-editable content items (headings, labels, descriptions)
         // Tier 3: Editable inputs (search bars, text fields - ONLY as a last resort)
         val tiers = listOf(
-            elements.filter { !it.isEditable && (it.isClickable || it.isCheckable) },
-            elements.filter { !it.isEditable },
-            elements.filter { it.isEditable }
+            candidateElements.filter { !it.isEditable && (it.isClickable || it.isCheckable) },
+            candidateElements.filter { !it.isEditable },
+            candidateElements.filter { it.isEditable }
         )
 
         // Case 2: Exact text or Normalized match with non-editable priority

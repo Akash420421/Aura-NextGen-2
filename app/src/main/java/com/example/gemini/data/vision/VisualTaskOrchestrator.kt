@@ -988,6 +988,37 @@ class VisualTaskOrchestrator(
         val stateChanged = !postSig.isEquivalentTo(preSig)
         val watchedMs = System.currentTimeMillis() - waitStartedAt
 
+        // Fix 18: WhatsApp / Messaging Profile Picture Popup Recovery
+        val isMessagingApp = rootPkg.contains("whatsapp", ignoreCase = true) || rootPkg.contains("telegram", ignoreCase = true)
+        if (isMessagingApp) {
+            val hasProfilePopup = elementsAfter.any { el ->
+                val vId = el.viewId.lowercase(Locale.ROOT)
+                val label = el.primaryLabel.lowercase(Locale.ROOT)
+                vId.contains("profile_dialog") || vId.contains("quick_contact") || vId.contains("badge") ||
+                label == "view contact" || label == "message info" || label == "group info"
+            }
+            val hasChatComposer = elementsAfter.any { el ->
+                val vId = el.viewId.lowercase(Locale.ROOT)
+                vId.contains("entry") || vId.contains("composer") || vId.contains("message_box")
+            }
+            if (hasProfilePopup && !hasChatComposer) {
+                Log.w(TAG, "Opened profile dialog instead of chat thread in $rootPkg. Dismissing popup and retrying right-center tap...")
+                service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                delay(350)
+                val refreshedRoot = service.getActiveRootNode()
+                val refreshedElements = groundingEngine.scanScreen(refreshedRoot)
+                val contactNode = groundingEngine.findTargetElement(refreshedElements, targetName)
+                if (contactNode != null) {
+                    val rightCenterX = contactNode.bounds.left + contactNode.bounds.width() * 0.65f
+                    val centerY = contactNode.bounds.exactCenterY()
+                    service.clickAt(rightCenterX, centerY, 80L)
+                    delay(500)
+                    rootAfter = service.getActiveRootNode()
+                    elementsAfter = groundingEngine.scanScreen(rootAfter)
+                }
+            }
+        }
+
         // Verify if toggle state changed
         var toggleVerified = false
         if (target.isSwitchOrToggle()) {
@@ -1260,6 +1291,30 @@ class VisualTaskOrchestrator(
         val composeField = targetInputName?.lowercase(Locale.ROOT)?.let { name ->
             listOf("recipient", "email", "message", "compose", "subject", "body", "to").any(name::contains)
         } == true
+
+        // Fix 16: Hard Abort Guard against injecting chat messages into Search bars
+        val goalLower = AgentTaskEngine.current()?.userPrompt?.lowercase(Locale.ROOT) ?: ""
+        val isMessageGoal = goalLower.contains("message") || goalLower.contains("msg") ||
+                goalLower.contains("chat") || goalLower.contains("bhejo") || goalLower.contains("send") ||
+                submit
+        val inputNameLower = (targetInputName ?: "").lowercase(Locale.ROOT)
+        val isSearchTarget = inputNameLower.contains("search") || inputNameLower.contains("find") || inputNameLower.contains("explore")
+        val isTargetInSearchBar = targetRect?.let { r ->
+            elementsForTyping.any { el ->
+                (el.bounds == r || el.bounds.contains(r.centerX(), r.centerY())) &&
+                (el.viewId.contains("search", ignoreCase = true) || el.primaryLabel.contains("search", ignoreCase = true))
+            }
+        } ?: false
+
+        if (isMessageGoal && (isSearchTarget || isTargetInSearchBar) && !inputNameLower.contains("message") && !inputNameLower.contains("composer")) {
+            Log.w(TAG, "Blocked injecting message into search bar! Target: '$targetInputName', Goal: '$goalLower'")
+            return@withContext TaskActionResult(
+                success = false,
+                message = "FAILED: Screen is currently showing a Search bar ('$targetInputName'), not a chat thread. Cannot inject chat message into a search field. Please navigate to Direct Messages first.",
+                currentStateSummary = groundingEngine.formatElementsSummary(elementsForTyping, rootForTyping),
+                verified = false
+            )
+        }
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
         val injectionResult = SerializedActionExecutor.execute(
             "type:${targetInputName ?: "focused-field"}",
@@ -1376,7 +1431,36 @@ class VisualTaskOrchestrator(
 
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
         val preSignature = ScreenSignatureCalculator.computeSignature(service.getActiveRootNode())
-        val success = mutateUi("scroll:$direction") { service.performSmartScroll(direction, distance) }
+
+        val rootNode = service.getActiveRootNode()
+        val pkg = rootNode?.packageName?.toString() ?: ""
+        val isInstagramReels = pkg.contains("instagram", ignoreCase = true) &&
+                groundingEngine.scanScreen(rootNode).any { it.viewId.contains("clips") || it.viewId.contains("reel") }
+        val isShortVideoFeed = isInstagramReels || distance.lowercase(Locale.ROOT) == "reel"
+
+        val success = if (isShortVideoFeed) {
+            val upward = direction.lowercase(Locale.ROOT) != "up"
+            mutateUi("reel-swipe:${if (upward) "next" else "prev"}") { service.performReelSwipe(upward) }
+        } else {
+            mutateUi("scroll:$direction") { service.performSmartScroll(direction, distance) }
+        }
+
+        if (isShortVideoFeed) {
+            delay(400)
+            val rootAfterReel = service.getActiveRootNode()
+            val postSignatureReel = ScreenSignatureCalculator.computeSignature(rootAfterReel)
+            val reelAdvanced = !postSignatureReel.isEquivalentTo(preSignature)
+            val elementsAfterReel = groundingEngine.scanScreen(rootAfterReel)
+            return@withContext TaskActionResult(
+                success = success && reelAdvanced,
+                message = if (success && reelAdvanced) "Reel swipe succeeded (advanced to next reel)."
+                          else if (success) "FAILED: Reel swipe gesture dispatched but screen did not advance. Still showing same reel."
+                          else "FAILED: Reel swipe gesture failed to dispatch.",
+                currentStateSummary = groundingEngine.formatElementsSummary(elementsAfterReel, rootAfterReel),
+                verified = success && reelAdvanced
+            )
+        }
+
         AgentTaskEngine.current()?.scrollCount = (AgentTaskEngine.current()?.scrollCount ?: 0) + 1
         dispatchImmediateScreenFrame()
         val uiWait = waitForUiState(preSignature, expectedPackage = service.getActiveRootNode()?.packageName?.toString(), timeoutMs = 8_000L)

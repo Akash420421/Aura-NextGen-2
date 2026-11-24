@@ -212,11 +212,13 @@ class AutomationAccessibilityService : AccessibilityService() {
                 desc.contains("avatar") || desc.contains("photo") ||
                 viewId.contains("avatar") || viewId.contains("profile_picture") ||
                 viewId.contains("contact_photo") || viewId.contains("picture") ||
+                viewId.contains("badge") || viewId.contains("contact_badge") ||
                 (className.contains("imageview") && (desc.isBlank() || desc.contains("profile") || desc.contains("photo")))
     }
 
     /**
-     * Safely clicks a contact or group name, strictly avoiding clicking the profile picture/avatar.
+     * Safely clicks a contact or group name, strictly avoiding clicking the profile picture/avatar
+     * by filtering out avatar nodes and biasing the coordinate tap to the right-center text area (X = 60%).
      */
     fun clickContactOrGroupName(targetName: String): Boolean {
         val root = getActiveRootNode() ?: return false
@@ -233,9 +235,27 @@ class AutomationAccessibilityService : AccessibilityService() {
                 val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
 
                 if (text.contains(cleanTarget) || desc.contains(cleanTarget)) {
-                    if (clickNodeAndTap(node)) {
-                        Log.i(TAG, "Clicked contact name safely (avoided avatar): '$targetName'")
+                    // Try direct ACTION_CLICK first
+                    if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        Log.i(TAG, "Clicked contact name via ACTION_CLICK: '$targetName'")
                         return true
+                    }
+                    val parent = node.parent
+                    if (parent != null && parent.isClickable && !isProfileAvatarOrIcon(parent) && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        Log.i(TAG, "Clicked contact name parent via ACTION_CLICK: '$targetName'")
+                        return true
+                    }
+
+                    // Coordinate fallback: land on the text portion (60% width), safely avoiding the left avatar
+                    val bounds = Rect()
+                    node.getBoundsInScreen(bounds)
+                    if (bounds.width() > 0 && bounds.height() > 0) {
+                        val cx = bounds.left + bounds.width() * 0.60f
+                        val cy = bounds.exactCenterY()
+                        if (clickAt(cx, cy, durationMs = 80L)) {
+                            Log.i(TAG, "Clicked contact name safely at ($cx, $cy) (avoided avatar): '$targetName'")
+                            return true
+                        }
                     }
                 }
             }
@@ -367,28 +387,28 @@ class AutomationAccessibilityService : AccessibilityService() {
                vid.contains("location_bar") || vid.contains("search_box_text")
     }
 
-    fun performSmartScroll(direction: String, distance: String = "small"): Boolean {
+    fun performSmartScroll(direction: String, distance: String = "medium"): Boolean {
         val dm = resources.displayMetrics
         val width = dm.widthPixels.toFloat()
         val height = dm.heightPixels.toFloat()
 
-        val deltaY = when (distance.lowercase()) {
-            "small" -> height * 0.18f
-            "large" -> height * 0.45f
-            else -> height * 0.28f
+        val deltaY = when (distance.lowercase(Locale.ROOT)) {
+            "short", "small" -> height * 0.35f
+            "long", "large" -> height * 0.80f
+            else -> height * 0.65f // "medium" covers ~65% screen height
         }
-        val durationMs = when (distance.lowercase()) {
-            "small" -> 600L
-            "large" -> 400L
-            else -> 550L
+        val durationMs = when (distance.lowercase(Locale.ROOT)) {
+            "short", "small" -> 280L
+            "long", "large" -> 380L
+            else -> 320L
         }
 
-        val (startX, startY, endX, endY) = when (direction.lowercase()) {
-            "down" -> listOf(width * 0.5f, height * 0.58f, width * 0.5f, height * 0.58f - deltaY)
-            "up" -> listOf(width * 0.5f, height * 0.42f, width * 0.5f, height * 0.42f + deltaY)
-            "left" -> listOf(width * 0.75f, height * 0.5f, width * 0.25f, height * 0.5f)
-            "right" -> listOf(width * 0.25f, height * 0.5f, width * 0.75f, height * 0.5f)
-            else -> listOf(width * 0.5f, height * 0.58f, width * 0.5f, height * 0.58f - deltaY)
+        val (startX, startY, endX, endY) = when (direction.lowercase(Locale.ROOT)) {
+            "down" -> listOf(width * 0.5f, height * 0.78f, width * 0.5f, (height * 0.78f - deltaY).coerceAtLeast(height * 0.12f))
+            "up" -> listOf(width * 0.5f, height * 0.22f, width * 0.5f, (height * 0.22f + deltaY).coerceAtMost(height * 0.88f))
+            "left" -> listOf(width * 0.80f, height * 0.5f, width * 0.20f, height * 0.5f)
+            "right" -> listOf(width * 0.20f, height * 0.5f, width * 0.80f, height * 0.5f)
+            else -> listOf(width * 0.5f, height * 0.78f, width * 0.5f, (height * 0.78f - deltaY).coerceAtLeast(height * 0.12f))
         }
 
         try {
@@ -400,12 +420,128 @@ class AutomationAccessibilityService : AccessibilityService() {
                 .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
                 .build()
             val dispatched = dispatchGesture(gesture, null, null)
-            Log.i(TAG, "Dispatched smart scroll $direction gesture (distance=$distance, duration=${durationMs}ms): $dispatched")
+            Log.i(TAG, "Dispatched smart scroll $direction gesture (distance=$distance, deltaY=$deltaY, duration=${durationMs}ms): $dispatched")
             return dispatched
         } catch (e: Exception) {
             Log.e(TAG, "Scroll gesture failed: ${e.message}")
         }
         return false
+    }
+
+    /**
+     * Dedicated high-velocity vertical flick gesture for short-video feeds (Instagram Reels, YouTube Shorts, etc.).
+     * Operates strictly in the center column (X=50%) between Y=78% and Y=18% (200ms flick), staying safely
+     * above Android's bottom gesture navigation threshold (Y=88%+) to prevent accidental home navigation.
+     */
+    fun performReelSwipe(upward: Boolean = true): Boolean {
+        val dm = resources.displayMetrics
+        val width = dm.widthPixels.toFloat()
+        val height = dm.heightPixels.toFloat()
+
+        val startX = width * 0.5f
+        val endX = width * 0.5f
+        val (startY, endY) = if (upward) {
+            Pair(height * 0.78f, height * 0.18f)
+        } else {
+            Pair(height * 0.22f, height * 0.82f)
+        }
+
+        return try {
+            val path = Path().apply {
+                moveTo(startX, startY)
+                lineTo(endX, endY)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, 200L))
+                .build()
+            val dispatched = dispatchGesture(gesture, null, null)
+            Log.i(TAG, "performReelSwipe (upward=$upward, startY=$startY -> endY=$endY): $dispatched")
+            dispatched
+        } catch (e: Exception) {
+            Log.e(TAG, "performReelSwipe failed: ${e.message}", e)
+            false
+        }
+    }
+
+    // Continuous auto-scroll engine
+    @Volatile
+    private var continuousScrollJob: Job? = null
+    val isContinuousScrolling: Boolean get() = continuousScrollJob?.isActive == true
+
+    fun startContinuousScroll(
+        direction: String = "down",
+        speed: String = "normal",
+        onStopped: ((reason: String) -> Unit)? = null
+    ): Boolean {
+        stopContinuousScroll("Starting new continuous scroll session")
+        val initialPkg = getActiveRootNode()?.packageName?.toString() ?: ""
+
+        val scrollIntervalMs = when (speed.lowercase(Locale.ROOT)) {
+            "slow" -> 2200L
+            "fast" -> 900L
+            else -> 1500L
+        }
+        val scrollDistance = when (speed.lowercase(Locale.ROOT)) {
+            "slow" -> "small"
+            "fast" -> "large"
+            else -> "medium"
+        }
+
+        continuousScrollJob = CoroutineScope(Dispatchers.IO).launch {
+            var lastScreenSignature = ""
+            var duplicateCount = 0
+            var totalScrolls = 0
+            val maxScrolls = 40
+
+            try {
+                while (isActive && totalScrolls < maxScrolls) {
+                    val currentPkg = getActiveRootNode()?.packageName?.toString() ?: ""
+                    if (initialPkg.isNotEmpty() && currentPkg != initialPkg && !currentPkg.contains("systemui") && !currentPkg.contains("launcher")) {
+                        Log.i(TAG, "Continuous scroll auto-stopped: App switched from $initialPkg to $currentPkg")
+                        onStopped?.invoke("App switched to $currentPkg")
+                        break
+                    }
+
+                    val ok = performSmartScroll(direction, scrollDistance)
+                    if (!ok) {
+                        Log.w(TAG, "Continuous scroll gesture dispatch failed, stopping.")
+                        break
+                    }
+                    totalScrolls++
+
+                    delay(scrollIntervalMs)
+
+                    val root = getActiveRootNode()
+                    val sig = root?.let { ScreenSignatureCalculator.computeSignature(it).toString() } ?: ""
+                    if (sig.isNotEmpty() && sig == lastScreenSignature) {
+                        duplicateCount++
+                        if (duplicateCount >= 2) {
+                            Log.i(TAG, "Continuous scroll auto-stopped: End of screen reached")
+                            onStopped?.invoke("End of screen reached")
+                            break
+                        }
+                    } else {
+                        duplicateCount = 0
+                        lastScreenSignature = sig
+                    }
+                }
+            } catch (_: CancellationException) {
+                Log.i(TAG, "Continuous scroll cancelled normally")
+            } catch (e: Exception) {
+                Log.e(TAG, "Continuous scroll loop error: ${e.message}")
+            } finally {
+                continuousScrollJob = null
+            }
+        }
+        return true
+    }
+
+    fun stopContinuousScroll(reason: String = "user_stopped"): Boolean {
+        val wasActive = continuousScrollJob?.isActive == true
+        continuousScrollJob?.cancel()
+        continuousScrollJob = null
+        Log.i(TAG, "Continuous scroll stopped (wasActive=$wasActive, reason=$reason)")
+        return wasActive
     }
 
     data class DirectInjectionResult(
@@ -1186,8 +1322,9 @@ class AutomationAccessibilityService : AccessibilityService() {
     suspend fun executeRecentsAction(
         appName: String? = null,
         clearAll: Boolean = false,
-        mode: String = "clear_all" // "clear_all", "swipe_clear_all", "close_specific_app"
+        mode: String = "clear_all" // "clear_all", "swipe_clear_all", "close_specific_app", "close_current_app"
     ): RecentsActionResult {
+        val foregroundPkgBefore = getActiveRootNode()?.packageName?.toString() ?: ""
         val opened = openRecentsAndWait()
         if (!opened) {
             return RecentsActionResult("FAILED", "Could not open Android Recents screen.")
@@ -1197,8 +1334,38 @@ class AutomationAccessibilityService : AccessibilityService() {
         val w = dm.widthPixels.toFloat()
         val h = dm.heightPixels.toFloat()
 
+        val isCloseCurrent = mode == "close_current_app"
         val isSwipeAllOnly = mode == "swipe_clear_all"
-        val isSingleApp = !appName.isNullOrBlank() || mode == "close_specific_app"
+        val isSingleApp = (!appName.isNullOrBlank() || mode == "close_specific_app") && !isCloseCurrent
+
+        if (isCloseCurrent) {
+            Log.i(TAG, "executeRecentsAction: Running close_current_app (targetPackage: $foregroundPkgBefore)")
+            val cards = findVisibleTaskCards()
+            val targetCard = cards.firstOrNull { it.node.packageName?.toString() == foregroundPkgBefore && !it.isAura }
+                ?: cards.firstOrNull { !it.isAura }
+
+            if (targetCard != null) {
+                dismissCardUpward(targetCard.node, targetCard.bounds, w, h)
+                delay(400)
+                // Verify post-swipe: check if app accidentally reopened
+                val currentPkg = getActiveRootNode()?.packageName?.toString() ?: ""
+                if (foregroundPkgBefore.isNotBlank() && currentPkg == foregroundPkgBefore) {
+                    Log.w(TAG, "App $foregroundPkgBefore was accidentally reopened during recents dismissal! Retrying with steeper upward flick...")
+                    openRecentsAndWait()
+                    val steeperPath = Path().apply {
+                        moveTo(w * 0.5f, h * 0.68f)
+                        lineTo(w * 0.5f, h * 0.05f)
+                    }
+                    gesture(steeperPath, 130L)
+                    delay(350)
+                }
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                return RecentsActionResult("SUCCESS", "Closed foreground app ($foregroundPkgBefore) and returned home.")
+            } else {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                return RecentsActionResult("SUCCESS", "Closed foreground app and returned home.")
+            }
+        }
 
         if (isSwipeAllOnly) {
             // Mode 1: swipe_clear_all (No cross button attempt, swipe all cards upward one-by-one)
@@ -1345,20 +1512,16 @@ class AutomationAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun dismissCardUpward(node: AccessibilityNodeInfo, bounds: Rect, w: Float, h: Float) {
-        val dismissed = node.performAction(AccessibilityNodeInfo.ACTION_DISMISS) ||
-                node.parent?.performAction(AccessibilityNodeInfo.ACTION_DISMISS) == true
+        val startX = bounds.centerX().toFloat().coerceIn(w * 0.35f, w * 0.65f)
+        val startY = h * 0.62f
+        val endY = h * 0.08f
 
-        if (!dismissed) {
-            val startX = bounds.centerX().toFloat().coerceIn(w * 0.30f, w * 0.70f)
-            val startY = h * 0.65f
-            val endY = h * 0.12f
-
-            val path = Path().apply {
-                moveTo(startX, startY)
-                lineTo(startX, endY)
-            }
-            gesture(path, 250L)
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(startX, endY)
         }
+        // Decisive high-velocity upward fling (150ms) to ensure the Android launcher dismisses the task card
+        gesture(path, 150L)
     }
 
     private suspend fun verifyRecentsState(targetAppName: String? = null, wasClearAll: Boolean = false): RecentsActionResult {

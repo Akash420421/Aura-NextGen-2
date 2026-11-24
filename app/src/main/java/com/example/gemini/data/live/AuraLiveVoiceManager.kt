@@ -319,22 +319,41 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("  3) `inspect_screen` explicitly returned that the screen is blank/inaccessible.\n\n")
 
         sb.append("### CLOSING APPS & RECENTS (3 MODES):\n")
-        sb.append("- When asked to close an app or dismiss from recents (e.g. 'Chrome close karo', 'app band karo', 'recents se hatao'): ALWAYS call `close_app(app_name=\"...\", remove_from_recents=true)`.\n")
+        sb.append("- When asked to close the current active app (e.g. 'app close karo', 'app band karo', 'ye app hata do'): ALWAYS call `close_current_app()`! It flings away the active app and returns home.\n")
+        sb.append("- When asked to close a specific app or dismiss from recents (e.g. 'Chrome close karo', 'YouTube close karo', 'recents se hatao'): ALWAYS call `close_app(app_name=\"...\", remove_from_recents=true)`.\n")
         sb.append("- When asked to clear recents via swipe or one-by-one (e.g. 'swipe karke hatao', 'ek ek karke hata do'): ALWAYS call `close_app(clear_all_recents=true, mode=\"swipe_clear_all\")`.\n")
         sb.append("- When asked to clear all recents in general (e.g. 'sab apps hata do', 'recents clear all karo'): ALWAYS call `close_app(clear_all_recents=true, mode=\"clear_all\")`.\n\n")
 
         sb.append("### MANDATORY ACTION TRUTHFULNESS & VERIFICATION (NEVER LIE OR FALSELY CONFIRM):\n")
         sb.append("- NEVER tell the user an action succeeded if the tool returned status 'error', 'partial', or status 'FAILED'!\n")
-        sb.append("- If `close_app` returns status 'error' or 'FAILED' (e.g. apps could not be cleared or cards are still visible), truthfully tell the user in Hindi/Hinglish that the apps could not be cleared (e.g. 'Recents open ho gaya lekin apps clear nahi ho paaye, screen par abhi bhi cards dikh rahe hain'). NEVER claim 'Saare apps remove kar diye' or 'Chrome close ho gaya' when it failed!\n")
+        sb.append("- If a reel swipe or scroll did not advance the screen, truthfully tell the user in Hindi/Hinglish (e.g. 'Reel advance nahi ho paayi, screen abhi bhi usi reel par hai'). NEVER claim success if it didn't change!\n")
+        sb.append("- If `close_app` or `close_current_app` returns status 'error' or 'FAILED' (e.g. apps could not be cleared or cards are still visible), truthfully tell the user in Hindi/Hinglish that the apps could not be cleared (e.g. 'Recents open ho gaya lekin apps clear nahi ho paaye, screen par abhi bhi cards dikh rahe hain'). NEVER claim 'Saare apps remove kar diye' or 'Chrome close ho gaya' when it failed!\n")
         sb.append("- If `close_app` returns 'partial' (e.g. locked apps remain), inform the user honestly that locked apps ki wajah se kuch apps nahi hate.\n")
         sb.append("- Report EXACTLY what happened based on the tool's verified result message!\n\n")
 
-        sb.append("### IN-BUILT BROWSER VS EXTERNAL CHROME (STRICT DIRECTIVE):\n")
+        sb.append("### NATIVE APPS FIRST (YOUTUBE, WHATSAPP, INSTAGRAM, ETC.):\n")
+        sb.append("- When the user asks to open YouTube, WhatsApp, Instagram, Camera, Settings, Pinterest, etc. (e.g. 'YouTube open karo', 'YouTube chalao', 'WhatsApp open karo', 'Instagram kholo'): ALWAYS call `open_app(app_name=\"...\")` to launch the native app on the phone!\n")
+        sb.append("- When the user asks to search on YouTube (e.g. 'YouTube par Arijit Singh ke gaane search karo'): ALWAYS call `search_youtube(query=\"...\")` (or `search_and_play_youtube`) to use the native YouTube app!\n")
+        sb.append("- NEVER open YouTube in a web browser unless the user EXPLICITLY demands 'in-built browser mein YouTube open karo' or 'browser mein youtube kholo'!\n\n")
+
+        sb.append("### IN-BUILT BROWSER VS EXTERNAL CHROME:\n")
         sb.append("- Aura has its own full-featured In-Built Web Browser (`open_in_app_browser`).\n")
-        sb.append("- Whenever the user asks to open YouTube, visit a website, browse a webpage, or view a link (e.g. 'in-built browser mein YouTube open karo', 'open youtube in browser', 'google kholo', 'github open karo', 'website open karo', 'search on browser'):\n")
+        sb.append("- Whenever the user asks to open websites, visit URLs, or browse webpages in general (e.g. 'google kholo', 'wikipedia open karo', 'github open karo', 'website open karo', 'in-built browser mein YouTube open karo'):\n")
         sb.append("  -> ALWAYS call `open_in_app_browser(url=...)`! It opens the page inside Aura's In-Built Browser immediately.\n")
         sb.append("- Launch external Google Chrome ONLY IF the user explicitly says 'Chrome mein kholo' or 'external browser mein open karo'. Never hijack default web browsing to Chrome!\n")
         sb.append("- When asked to close the browser or preview (e.g. 'browser band karo', 'browser close karo', 'preview close karo'): ALWAYS call `close_in_app_browser()`! Never close the whole app or trigger recents for the browser!\n\n")
+
+        sb.append("### PHONE CALLS & NUMERIC DIALING:\n")
+        sb.append("- When asked to dial or call a numeric phone number (e.g. '9876543210 dial karo', 'call 1234567890', 'number dial karo'): ALWAYS call `dial_number(phone_number=\"...\")`! Speak back the dialed number clearly. NEVER type phone numbers into search bars or call contact_name with digits!\n")
+        sb.append("- When asked to call a saved contact by name (e.g. 'call Rahul', 'mom ko phone karo'): Call `call_contact(contact_name=\"...\")`.\n\n")
+
+        sb.append("### SHORT VIDEO FEEDS (INSTAGRAM REELS, SHORTS, TIKTOK):\n")
+        sb.append("- When asked to tap the Reels tab or button (e.g. 'Reel wala button dabao', 'Reels open karo', 'Reels tab'): ALWAYS call `click_ui_element(target_name=\"Reels\")` targeting the bottom navigation Reels tab.\n")
+        sb.append("- When asked to swipe or advance a reel (e.g. 'Reel swipe karo', 'next reel', 'agla reel', 'swipe reel'): ALWAYS call `swipe_reel(direction=\"up\")`!\n\n")
+
+        sb.append("### CONTINUOUS AUTO-SCROLL:\n")
+        sb.append("- When asked to auto-scroll (e.g. 'scroll karte raho', 'auto scroll chalu karo', 'keep scrolling'): Call `start_continuous_scroll(direction=\"down\")`.\n")
+        sb.append("- When asked to stop scrolling (e.g. 'scroll rok do', 'stop scrolling', 'ruko', 'bas'): Call `stop_continuous_scroll()`.\n\n")
 
         sb.append("### NATIVE APP & CHAT CONTROL (NEVER USE ACCESSIBILITY OR SCREEN SHARE ON AURA):\n")
         sb.append("- You have 100% direct internal programmatic control over Aura AI's own interface!\n")
@@ -668,6 +687,15 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     if (appName.equals("aura", true) || appName.equals("aura ai", true) || appName.equals("antigem", true)) {
                         bringAuraToForeground(context)
                         JSONObject().put("status", "success").put("message", "Opened Aura AI and brought to foreground")
+                    } else if (appName.equals("youtube", true) || appName.equals("yt", true)) {
+                        val launched = AppLauncher.launchApp(context, "youtube", appNumber)
+                        if (launched) {
+                            JSONObject().put("status", "success").put("message", "Opened YouTube app.")
+                        } else {
+                            val ok = phoneControl.searchYouTubeNative(context, "")
+                            JSONObject().put("status", if (ok) "success" else "error")
+                                .put("message", if (ok) "Opened YouTube app." else "Could not open YouTube.")
+                        }
                     } else {
                         val launched = AppLauncher.launchApp(context, appName, appNumber)
                         if (launched) {
@@ -681,6 +709,17 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                                 JSONObject().put("status", "error").put("message", "Could not find $appName.")
                             }
                         }
+                    }
+                }
+
+                "close_current_app" -> {
+                    val svc = AutomationAccessibilityService.instance
+                    svc?.pauseMediaPlayback()
+                    val result = svc?.executeRecentsAction(mode = "close_current_app")
+                        ?: AutomationAccessibilityService.RecentsActionResult("FAILED", "Accessibility service is not running.")
+                    JSONObject().apply {
+                        put("status", if (result.isSuccess) "success" else "error")
+                        put("message", result.message)
                     }
                 }
 
@@ -917,34 +956,103 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
 
                 "call_contact" -> {
-                    val contact = args.optString("contact_name", "").trim()
+                    val contact = args.optString("contact_name", "").ifBlank { args.optString("name", "") }.trim()
                     audioPlayer?.flush()
-                    val callResult = ContactCaller.callContact(context, contact)
-                    when (callResult) {
-                        is ContactCaller.CallResult.Success -> {
-                            JSONObject().put("status", "success")
-                                .put("message", "Calling ${callResult.contact.name}.")
-                        }
-                        is ContactCaller.CallResult.NoMatch -> {
-                            JSONObject().put("status", "not_found")
-                                .put("message", "Could not find contact '$contact' in contacts.")
-                        }
-                        is ContactCaller.CallResult.MultipleMatches -> {
-                            JSONObject().put("status", "multiple_matches")
-                                .put("message", "Found multiple contacts matching '$contact'.")
-                        }
-                        is ContactCaller.CallResult.MissingContactsPermission -> {
-                            JSONObject().put("status", "missing_permission")
-                                .put("message", "Contacts permission is not granted.")
-                        }
-                        is ContactCaller.CallResult.MissingCallPermission -> {
-                            JSONObject().put("status", "missing_permission")
-                                .put("message", "Phone call permission is not granted.")
-                        }
-                        is ContactCaller.CallResult.CallFailed -> {
-                            JSONObject().put("status", "error").put("message", "Could not place phone call.")
+                    val digitsOnly = contact.replace(Regex("[^0-9+]"), "")
+                    if (digitsOnly.length >= 5) {
+                        val res = phoneControl.dialNumber(context, digitsOnly, autoCall = false)
+                        res.fold(
+                            onSuccess = { dialed ->
+                                JSONObject().put("status", "success")
+                                    .put("dialed_number", dialed)
+                                    .put("message", "Opened dialer with $dialed.")
+                            },
+                            onFailure = { err ->
+                                JSONObject().put("status", "error")
+                                    .put("message", "Failed to dial number: ${err.message}")
+                            }
+                        )
+                    } else {
+                        val callResult = ContactCaller.callContact(context, contact)
+                        when (callResult) {
+                            is ContactCaller.CallResult.Success -> {
+                                JSONObject().put("status", "success")
+                                    .put("message", "Calling ${callResult.contact.name}.")
+                            }
+                            is ContactCaller.CallResult.NoMatch -> {
+                                JSONObject().put("status", "not_found")
+                                    .put("message", "Could not find contact '$contact' in contacts.")
+                            }
+                            is ContactCaller.CallResult.MultipleMatches -> {
+                                JSONObject().put("status", "multiple_matches")
+                                    .put("message", "Found multiple contacts matching '$contact'.")
+                            }
+                            is ContactCaller.CallResult.MissingContactsPermission -> {
+                                JSONObject().put("status", "missing_permission")
+                                    .put("message", "Contacts permission is not granted.")
+                            }
+                            is ContactCaller.CallResult.MissingCallPermission -> {
+                                JSONObject().put("status", "missing_permission")
+                                    .put("message", "Phone call permission is not granted.")
+                            }
+                            is ContactCaller.CallResult.CallFailed -> {
+                                JSONObject().put("status", "error").put("message", "Could not place phone call.")
+                            }
                         }
                     }
+                }
+
+                "dial_number" -> {
+                    val rawNum = args.optString("phone_number", "").ifBlank { args.optString("number", "") }.trim()
+                    val autoCall = args.optBoolean("auto_call", false)
+                    val res = phoneControl.dialNumber(context, rawNum, autoCall)
+                    res.fold(
+                        onSuccess = { dialed ->
+                            JSONObject().put("status", "success")
+                                .put("dialed_number", dialed)
+                                .put("message", "Opened phone dialer with $dialed.")
+                        },
+                        onFailure = { err ->
+                            JSONObject().put("status", "error")
+                                .put("message", "Failed to dial number: ${err.message}")
+                        }
+                    )
+                }
+
+                "swipe_reel" -> {
+                    val dir = args.optString("direction", "up").trim().lowercase(Locale.ROOT)
+                    val res = VisualTaskOrchestrator.getInstance().handleScroll(
+                        direction = if (dir == "up" || dir == "next") "down" else "up",
+                        distance = "reel"
+                    )
+                    JSONObject().put("status", if (res.success) "success" else "error")
+                        .put("message", res.message)
+                        .put("verified", res.verified ?: false)
+                        .apply {
+                            if (res.currentStateSummary.isNotBlank()) {
+                                put("current_state", res.currentStateSummary)
+                            }
+                        }
+                }
+
+                "start_continuous_scroll" -> {
+                    val dir = args.optString("direction", "down").trim()
+                    val speed = args.optString("speed", "normal").trim()
+                    val svc = AutomationAccessibilityService.instance
+                    if (svc != null) {
+                        val started = svc.startContinuousScroll(direction = dir, speed = speed)
+                        JSONObject().put("status", if (started) "success" else "error")
+                            .put("message", if (started) "Started continuous scroll ($dir, speed: $speed)." else "Could not start continuous scroll.")
+                    } else {
+                        JSONObject().put("status", "error").put("message", "Accessibility service is not running.")
+                    }
+                }
+
+                "stop_continuous_scroll" -> {
+                    val svc = AutomationAccessibilityService.instance
+                    val stopped = svc?.stopContinuousScroll("user_stopped") ?: false
+                    JSONObject().put("status", "success")
+                        .put("message", if (stopped) "Continuous scrolling stopped." else "Continuous scroll was not active.")
                 }
 
                 "set_volume" -> {

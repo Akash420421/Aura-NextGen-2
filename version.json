@@ -1,15 +1,16 @@
 {
-  "version_code": 245,
-  "version_name": "2.4.5",
+  "version_code": 246,
+  "version_name": "2.4.6",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.5 — Dark Vibrant RGB Orb, Native Chat Control & Persistent Memory",
-    "Voice Greeting Placement: Greeting title sits comfortably below the floating top header with clean status bar insets",
-    "Dark Vibrant RGB Particle Orb: Deep, punchy jewel-toned RGB color cycle (sapphire, emerald, ruby, amethyst) with high particle opacity against white backgrounds",
-    "Native In-App Chat Control: Native send_message_to_chat tool dispatches messages directly to current or new chats without accessibility or screen share",
-    "Persistent Chat History & Memory: Instant search and recall of previous chats and code projects via list_recent_chats and open_chat_by_id",
-    "Clean Task Dispatch: Eliminated stale wrapper prefixes; tasks are dispatched cleanly to newly created chats",
-    "Voice Browser Closure: Cleanly close the in-built browser via voice (close_in_app_browser) without triggering system recents"
+    "Aura AI v2.4.6 — Phone Automation & App Control Overhaul (Fixes 15–21)",
+    "Instagram Reels: Bottom nav Reels tab grounding and 200ms upward flick with reel advancement verification",
+    "Instagram DM Target Validation: Excluded bottom nav tabs from contact search; hard abort guard against injecting chat messages into search bars",
+    "Enhanced Scroll & Continuous Auto-Scroll: Re-calibrated scroll distances (35%, 65%, 80%) and background continuous auto-scrolling with smart auto-stop triggers",
+    "Messaging Chat Row Click: Filtered out avatar/profile picture nodes and biased coordinate clicks to text area with auto-recovery from profile dialogs",
+    "Native Phone Dialer: Direct dial_number intent pre-fills native dialpad across all OEM dialers without using search bars",
+    "Dedicated App Close & Recents Reopen Guard: Separated close_current_app from clear_all_recents with 150ms upward fling and auto-recovery if an app reopens",
+    "Native YouTube Priority: Direct native intent launches com.google.android.youtube by default, reserving In-Built Browser for explicit requests"
   ],
   "is_critical": false
 }

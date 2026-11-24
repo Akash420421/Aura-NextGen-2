@@ -911,7 +911,7 @@ class GeminiLiveWebSocket(
             // 26. open_in_app_browser (Primary)
             put(JSONObject().apply {
                 put("name", "open_in_app_browser")
-                put("description", "Opens any website, URL, or YouTube inside Aura AI's own In-Built Web Browser. ALWAYS use this tool whenever the user asks to open a website, browse a page, open YouTube, or visit a link (e.g. 'in-built browser mein YouTube open karo', 'open youtube in browser', 'open github.com', 'google kholo') UNLESS the user explicitly demands external Chrome.")
+                put("description", "Opens any website, URL, or webpage inside Aura AI's own In-Built Web Browser. Use this tool when the user asks to open a website, browse a webpage, visit a link, or explicitly asks for YouTube in browser (e.g. 'in-built browser mein YouTube open karo', 'open github.com', 'google kholo', 'wikipedia open karo') UNLESS the user explicitly demands external Chrome. NOTE: For standard app requests like 'YouTube open karo' or 'open YouTube', ALWAYS use open_app(app_name=\"YouTube\") instead!")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -960,6 +960,80 @@ class GeminiLiveWebSocket(
             put(JSONObject().apply {
                 put("name", "close_in_app_browser")
                 put("description", "Closes the In-Built Browser / website preview immediately and returns to the chat or voice screen. Use whenever the user commands to close browser, exit website preview, or close in-built browser (e.g. 'browser band karo', 'browser close karo', 'preview close karo').")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 28. dial_number
+            put(JSONObject().apply {
+                put("name", "dial_number")
+                put("description", "Opens the phone's native dialpad with the given numeric phone number pre-filled, or places the call. ALWAYS use this tool whenever the user provides a numeric phone number to dial or call (e.g. '9876543210 dial karo', 'call 1234567890', 'number dial karo'). NEVER type phone numbers into search bars.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("phone_number", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The exact numeric phone number to dial (e.g. '9876543210', '+919876543210').")
+                        })
+                        put("auto_call", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "True to directly place call, false to pre-fill dialpad for user to review and call (default false).")
+                        })
+                    })
+                    put("required", JSONArray().apply { put("phone_number") })
+                })
+            })
+
+            // 29. swipe_reel
+            put(JSONObject().apply {
+                put("name", "swipe_reel")
+                put("description", "Performs a fast, decisive vertical flick to swipe to the next or previous video in Instagram Reels, YouTube Shorts, or TikTok feeds. Call whenever the user says 'Reel swipe karo', 'next reel', 'agla reel', 'swipe reel', or 'reel change karo'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("direction", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Direction to swipe: 'up' (default, moves to next reel) or 'down' (moves to previous reel).")
+                        })
+                    })
+                })
+            })
+
+            // 30. start_continuous_scroll
+            put(JSONObject().apply {
+                put("name", "start_continuous_scroll")
+                put("description", "Starts automatic continuous scrolling in the background (e.g. 'scroll karte raho', 'auto scroll chalu karo', 'keep scrolling'). Automatically stops when app switches, end of screen is reached, or stop_continuous_scroll is called.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("direction", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Direction to scroll continuously: 'down' (default) or 'up'.")
+                        })
+                        put("speed", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Scroll speed: 'slow', 'normal' (default), or 'fast'.")
+                        })
+                    })
+                })
+            })
+
+            // 31. stop_continuous_scroll
+            put(JSONObject().apply {
+                put("name", "stop_continuous_scroll")
+                put("description", "Stops background automatic continuous scrolling immediately. Call when user says 'scroll rok do', 'stop scrolling', 'ruko', 'bas', or 'stop'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                })
+            })
+
+            // 32. close_current_app
+            put(JSONObject().apply {
+                put("name", "close_current_app")
+                put("description", "Closes the current active foreground app immediately, flings its task card away from Android Recents, and returns to the home screen. Use when user says 'app close karo', 'app band karo', or 'ye app hata do'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject())

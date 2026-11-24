@@ -207,4 +207,50 @@ class PhoneControlManager(private val context: Context) {
         }
         return anyLaunched
     }
+
+    fun dialNumber(context: Context, phoneNumber: String, autoCall: Boolean = false): Result<String> {
+        val cleanNumber = phoneNumber.replace(Regex("[^0-9+*#]"), "")
+        if (cleanNumber.isBlank()) {
+            return Result.failure(IllegalArgumentException("Phone number cannot be empty."))
+        }
+
+        val action = if (autoCall) Intent.ACTION_CALL else Intent.ACTION_DIAL
+        val intent = Intent(action, Uri.parse("tel:$cleanNumber")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        return try {
+            val launched = ActivityLauncherHelper.startActivitySafely(context, intent)
+            if (launched) {
+                Result.success(cleanNumber)
+            } else {
+                val fallback = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleanNumber")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (ActivityLauncherHelper.startActivitySafely(context, fallback)) {
+                    Result.success(cleanNumber)
+                } else {
+                    Result.failure(Exception("Could not launch Phone dialer."))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "dialNumber failed: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    fun searchYouTubeNative(context: Context, query: String): Boolean {
+        val encoded = Uri.encode(query.trim())
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$encoded&gl=IN&hl=en")).apply {
+            setPackage("com.google.android.youtube")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val launched = ActivityLauncherHelper.startActivitySafely(context, intent)
+        if (launched) return true
+
+        val fallback = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$encoded&gl=IN&hl=en")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return ActivityLauncherHelper.startActivitySafely(context, fallback)
+    }
 }

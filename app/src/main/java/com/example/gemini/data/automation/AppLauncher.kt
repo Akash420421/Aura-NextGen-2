@@ -254,6 +254,33 @@ object AppLauncher {
                 if (ok) return OpenAppResult.Success(InstalledApp(label = "Calculator", packageName = "com.android.calculator2"))
             }
 
+            if (lower in listOf("youtube", "yt", "youtube app", "com.google.android.youtube")) {
+                val ytIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com")).apply {
+                    setPackage("com.google.android.youtube")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val ok = ActivityLauncherHelper.startActivitySafely(context, ytIntent)
+                if (ok) return OpenAppResult.Success(InstalledApp(label = "YouTube", packageName = "com.google.android.youtube"))
+            }
+
+            if (lower in listOf("instagram", "insta", "instagram app", "com.instagram.android")) {
+                val instaIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://instagram.com")).apply {
+                    setPackage("com.instagram.android")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val ok = ActivityLauncherHelper.startActivitySafely(context, instaIntent)
+                if (ok) return OpenAppResult.Success(InstalledApp(label = "Instagram", packageName = "com.instagram.android"))
+            }
+
+            if (lower in listOf("pinterest", "pinterest app", "com.pinterest")) {
+                val pinIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://pinterest.com")).apply {
+                    setPackage("com.pinterest")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val ok = ActivityLauncherHelper.startActivitySafely(context, pinIntent)
+                if (ok) return OpenAppResult.Success(InstalledApp(label = "Pinterest", packageName = "com.pinterest"))
+            }
+
             return OpenAppResult.NotFound(spokenName)
         }
 
