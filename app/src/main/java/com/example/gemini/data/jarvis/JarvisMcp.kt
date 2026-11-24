@@ -512,10 +512,10 @@ object JarvisMcp {
                     text(JarvisController.stopChat(id))
                 }
                 "jarvis_open_chat" -> {
-                    val id = args.optString("id").ifBlank { return error("id is required") }
-                    JarvisController.vm.selectConversation(id)
-                    JarvisController.vm.requestViewMode("CHAT")
-                    text("Opened the chat.")
+                    val query = args.optString("id").ifBlank { args.optString("name").ifBlank { args.optString("title") } }.trim()
+                    if (query.isBlank()) return error("id, name, or title is required")
+                    val result = com.example.gemini.data.live.ChatContextBridge.openChatByName(query)
+                    text(result)
                 }
                 "jarvis_rename_chat" -> {
                     val id = resolveId(args) ?: return error("No chat. Give an id.")
@@ -722,12 +722,17 @@ object JarvisMcp {
     }
 
     /** The chat id meant by args.id: a task's (also shortened), a chat's (also shortened, when unique), else as given; none = the chat on screen. */
-    private fun resolveId(args: JSONObject): String? =
-        args.optString("id").trim().ifBlank { null }?.let { given ->
-            JarvisTasks.find(given)?.id ?: given.takeIf { g -> vm.allConversations.value.any { it.id == g } }
-                ?: given.takeIf { it.length >= 6 }?.let { g -> vm.allConversations.value.filter { it.id.startsWith(g) }.singleOrNull()?.id }
-                ?: given
-        } ?: vm.currentConversation.value?.id
+    private fun resolveId(args: JSONObject): String? {
+        val given = args.optString("id").ifBlank { args.optString("name").ifBlank { args.optString("title").ifBlank { args.optString("query") } } }.trim()
+        if (given.isBlank()) return vm.currentConversation.value?.id
+
+        return JarvisTasks.find(given)?.id
+            ?: given.takeIf { g -> vm.allConversations.value.any { it.id == g } }
+            ?: given.takeIf { it.length >= 6 }?.let { g -> vm.allConversations.value.filter { it.id.startsWith(g) }.singleOrNull()?.id }
+            ?: vm.allConversations.value.firstOrNull { it.title.equals(given, ignoreCase = true) }?.id
+            ?: vm.allConversations.value.firstOrNull { it.title.contains(given, ignoreCase = true) }?.id
+            ?: given
+    }
 
     private fun claudeOnScreen() =
         if (vm.currentConversation.value?.agent == AgentKind.CLAUDE) vm.claudeBackend else null

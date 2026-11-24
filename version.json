@@ -1,14 +1,15 @@
 {
-  "version_code": 243,
-  "version_name": "2.4.3",
+  "version_code": 244,
+  "version_name": "2.4.4",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.3 — UI/UX Layout, Voice Dock & Question Dialog Optimization",
-    "Docked Question Card: Anchored to bottom sheet layout with full IME keyboard-awareness, dynamic scrollable options, and 48dp touch targets",
-    "Voice Screen Thumb-Zone Dock: Eliminated duplicate system insets and empty dead space under bottom voice controls (Screen, Mic, Language)",
-    "Clean Voice Status Hierarchy: Live dynamic status (Listening, Thinking, Working, Speaking) shown exclusively under top greeting; bottom center button dedicated to action (Mute/Unmute/Start)",
-    "Chat-Scoped Scroll-to-Bottom: Floating down-arrow button strictly scoped to Chat message list feed; removed root floating switcher overlay",
-    "Subtle Generation Stop Indicator: Clean neutral inline pill with StopCircle icon on user cancellation, eliminating harsh red error cards while preserving streamed output"
+    "Aura AI v2.4.4 — Minimalist Voice Screen, RGB Particle Orb & Spoken Chat Switcher",
+    "Streamlined Home Suggestions: Exactly 3 clean prompt pills on empty state (removed 'Phone automation & tasks')",
+    "Minimalist Dynamic Voice Header: Clean greeting title only ('Good morning, $Name'); completely eliminated subtitle clutter and in-flight transcript from header",
+    "Perfect Orb Centering: 3D Orb now sits in the exact vertical center between header and bottom dock",
+    "Continuous RGB Rainbow Animation: Dynamic WebGL color spectrum cycling continuously across particle volume, celestial rings, and cosmic dust",
+    "Live Status on Bottom Dock: Clean real-time status (Speak to ask, Listening, Thinking, Working, Speaking, Muted) displayed directly on the center button",
+    "Open Renamed Chats by Voice: Aura AI now supports open_chat_by_name to instantly find and display any renamed chat or voice session when spoken by title"
   ],
   "is_critical": false
 }

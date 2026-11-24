@@ -328,6 +328,22 @@ class GeminiLiveWebSocket(
                 })
             })
 
+            // 0f-3. open_chat_by_name
+            put(JSONObject().apply {
+                put("name", "open_chat_by_name")
+                put("description", "Opens a specific chat, voice session, or renamed conversation on screen by searching its name or title. Call when user asks to open a specific chat, e.g. 'Project Alpha wala chat kholo', 'Meeting Notes chat open karo', 'wo wala chat kholo jiska naam X hai', or 'open session X'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("chat_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The name or title of the chat or session to open (e.g. 'Project Alpha', 'Meeting Notes', 'Voice Session • 10:49 AM')")
+                        })
+                    })
+                    put("required", JSONArray().apply { put("chat_name") })
+                })
+            })
+
             // 0g. delegate_task_to_app_agent (alias)
             put(JSONObject().apply {
                 put("name", "delegate_task_to_app_agent")

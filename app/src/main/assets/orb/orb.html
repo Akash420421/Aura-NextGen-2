@@ -335,6 +335,29 @@ function updateOrb(dt){
   if(!dragging&&Math.abs(orb.rotation.x)>.001) orb.rotation.x*=Math.exp(-dt*.6);
   U.uTime.value=flow;U.uAmp.value=audio.level+cur.wob*.25;U.uBass.value=audio.bass;U.uHigh.value=audio.high;
   U.uCyan.value=cur.cyan;U.uPurple.value=cur.purple;U.uBright.value=cur.bright+idlePulse;
+
+  // Continuous RGB Color Cycle Animation
+  const rgbSpeed = 0.08;
+  const baseHue = (time * rgbSpeed) % 1.0;
+  const cDeep = new THREE.Color().setHSL(baseHue, 0.85, 0.30);
+  const cBlue = new THREE.Color().setHSL((baseHue + 0.18) % 1.0, 0.95, 0.55);
+  const cCyan = new THREE.Color().setHSL((baseHue + 0.42) % 1.0, 0.95, 0.62);
+  const cPurp = new THREE.Color().setHSL((baseHue + 0.68) % 1.0, 0.95, 0.58);
+
+  U.DEEP.value.copy(cDeep);
+  U.BLUE.value.copy(cBlue);
+  U.CYAN.value.copy(cCyan);
+  U.PURP.value.copy(cPurp);
+
+  if (orbitPts && orbitPts.geometry && orbitPts.geometry.attributes && orbitPts.geometry.attributes.aColor) {
+    const oc = orbitPts.geometry.attributes.aColor;
+    for(let i = 0; i < ORBIT; i++) {
+      const ptCol = (i % 3 === 0) ? cCyan : (i % 3 === 1 ? cBlue : cPurp);
+      oc.setXYZ(i, ptCol.r, ptCol.g, ptCol.b);
+    }
+    oc.needsUpdate = true;
+  }
+
   glowMat.uniforms.uTime.value=time;glowMat.uniforms.uMix.value=cur.cyan;
   glowMat.uniforms.uStrength.value=cur.glow+audio.level*.6+idlePulse*2;
   const pulse=cur.ring*.5*(.5+.5*Math.sin(time*4))+audio.bass*.8;

@@ -360,6 +360,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
         sb.append("4. OPENING VOICE CHATS & CREATING NEW CHATS ON SCREEN:\n")
         sb.append("   - When the user asks: 'new chat open karo', 'nayi chat shuru karo', 'start a new chat', 'open new chat', 'ek nayi chat banao', 'clear chat and start new' -> Call `create_new_chat()`. NEVER tell the user to manually click the new chat button or that you cannot open a new chat. You have direct control over Aura's chat interface!\n")
+        sb.append("   - When the user asks to open a specific chat or renamed session by name (e.g. 'Project Alpha wala chat kholo', 'Meeting Notes chat open karo', 'wo wala chat kholo jiska naam X hai', 'open chat [name]'): Call `open_chat_by_name(chat_name=\"...\")`. It searches all saved and renamed chats and displays that exact chat on screen immediately!\n")
         sb.append("   - When the user asks: 'live chat open karo', 'chat dikhao', 'open live chat', 'hamari chat kholo', 'current chat open karo', 'jo baat chal rahi hai wo chat dikhao', 'live chat dikhao' -> Call `open_live_chat()` (or `open_current_voice_chat()`).\n")
         sb.append("   - When the user asks: 'pichhli chat kholo', 'previous chat open karo' -> Call `open_previous_voice_chat()`.\n\n")
 
@@ -553,6 +554,15 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     val msg = ChatContextBridge.openPreviousVoiceChat()
                     JSONObject().apply {
                         put("status", "success")
+                        put("message", msg)
+                    }
+                }
+
+                "open_chat_by_name", "open_chat" -> {
+                    val name = args.optString("chat_name").ifBlank { args.optString("name").ifBlank { args.optString("title").ifBlank { args.optString("id") } } }.trim()
+                    val msg = ChatContextBridge.openChatByName(name)
+                    JSONObject().apply {
+                        put("status", if (msg.startsWith("Could not find")) "not_found" else "success")
                         put("message", msg)
                     }
                 }

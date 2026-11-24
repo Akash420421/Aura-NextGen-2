@@ -170,6 +170,56 @@ object ChatContextBridge {
         }
     }
 
+    fun openChatByName(chatName: String): String {
+        val vm = viewModel ?: return "Chat system is not available."
+        val query = chatName.trim()
+        if (query.isBlank()) return "Please specify a chat name to open."
+
+        val all = vm.allConversations.value
+        if (all.isEmpty()) return "No conversations found in the app."
+
+        // 1. Exact title match (case-insensitive)
+        var matched = all.firstOrNull { it.title.equals(query, ignoreCase = true) }
+
+        // 2. Title contains query or query contains title (case-insensitive)
+        if (matched == null) {
+            matched = all.firstOrNull {
+                it.title.contains(query, ignoreCase = true) || query.contains(it.title, ignoreCase = true)
+            }
+        }
+
+        // 3. Normalized keyword match (filtering out common filler words)
+        if (matched == null) {
+            val stopWords = setOf("chat", "session", "kholo", "open", "wala", "wali", "dikhao", "the", "a", "an", "show")
+            val queryTokens = query.lowercase().split("\\s+".toRegex()).filter { it.length >= 2 && it !in stopWords }
+            if (queryTokens.isNotEmpty()) {
+                matched = all.maxByOrNull { conv ->
+                    val titleLower = conv.title.lowercase()
+                    queryTokens.count { token -> titleLower.contains(token) }
+                }?.takeIf { conv ->
+                    val titleLower = conv.title.lowercase()
+                    queryTokens.any { token -> titleLower.contains(token) }
+                }
+            }
+        }
+
+        // 4. Exact ID or prefix ID match
+        if (matched == null) {
+            matched = all.firstOrNull { it.id == query || it.id.startsWith(query) }
+        }
+
+        return if (matched != null) {
+            isNewChatDraft = false
+            vm.selectConversation(matched.id)
+            requestViewMode("CHAT")
+            requestSwitchToChatTab.value = true
+            "Opened chat '${matched.title}' on screen."
+        } else {
+            val sampleTitles = all.take(4).joinToString(", ") { "'${it.title}'" }
+            "Could not find a chat matching '$query'. Available recent chats: $sampleTitles."
+        }
+    }
+
     fun getCurrentConversation(): Conversation? = viewModel?.currentConversation?.value
 
     fun getCurrentMessages(): List<ChatMessage> = viewModel?.messages?.value ?: emptyList()
