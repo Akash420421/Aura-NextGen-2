@@ -1,15 +1,15 @@
 {
-  "version_code": 244,
-  "version_name": "2.4.4",
+  "version_code": 245,
+  "version_name": "2.4.5",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.4 — Minimalist Voice Screen, RGB Particle Orb & Spoken Chat Switcher",
-    "Streamlined Home Suggestions: Exactly 3 clean prompt pills on empty state (removed 'Phone automation & tasks')",
-    "Minimalist Dynamic Voice Header: Clean greeting title only ('Good morning, $Name'); completely eliminated subtitle clutter and in-flight transcript from header",
-    "Perfect Orb Centering: 3D Orb now sits in the exact vertical center between header and bottom dock",
-    "Continuous RGB Rainbow Animation: Dynamic WebGL color spectrum cycling continuously across particle volume, celestial rings, and cosmic dust",
-    "Live Status on Bottom Dock: Clean real-time status (Speak to ask, Listening, Thinking, Working, Speaking, Muted) displayed directly on the center button",
-    "Open Renamed Chats by Voice: Aura AI now supports open_chat_by_name to instantly find and display any renamed chat or voice session when spoken by title"
+    "Aura AI v2.4.5 — Dark Vibrant RGB Orb, Native Chat Control & Persistent Memory",
+    "Voice Greeting Placement: Greeting title sits comfortably below the floating top header with clean status bar insets",
+    "Dark Vibrant RGB Particle Orb: Deep, punchy jewel-toned RGB color cycle (sapphire, emerald, ruby, amethyst) with high particle opacity against white backgrounds",
+    "Native In-App Chat Control: Native send_message_to_chat tool dispatches messages directly to current or new chats without accessibility or screen share",
+    "Persistent Chat History & Memory: Instant search and recall of previous chats and code projects via list_recent_chats and open_chat_by_id",
+    "Clean Task Dispatch: Eliminated stale wrapper prefixes; tasks are dispatched cleanly to newly created chats",
+    "Voice Browser Closure: Cleanly close the in-built browser via voice (close_in_app_browser) without triggering system recents"
   ],
   "is_critical": false
 }
