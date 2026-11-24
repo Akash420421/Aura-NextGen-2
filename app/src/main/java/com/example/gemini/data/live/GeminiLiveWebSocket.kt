@@ -344,6 +344,65 @@ class GeminiLiveWebSocket(
                 })
             })
 
+            // 0f-4. open_chat_by_id
+            put(JSONObject().apply {
+                put("name", "open_chat_by_id")
+                put("description", "Opens a conversation on screen by its exact or partial conversation ID.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("chat_id", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The ID of the conversation to open.")
+                        })
+                    })
+                    put("required", JSONArray().apply { put("chat_id") })
+                })
+            })
+
+            // 0f-5. list_recent_chats
+            put(JSONObject().apply {
+                put("name", "list_recent_chats")
+                put("description", "Lists recent saved conversations and projects with metadata (ID, title, summary, project path) from Aura's memory database. Call when user asks what chats exist or asks about previous projects.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional search keyword to filter chat titles or projects.")
+                        })
+                        put("limit", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Maximum number of chats to return (default 10).")
+                        })
+                    })
+                })
+            })
+
+            // 0f-6. send_message_to_chat
+            put(JSONObject().apply {
+                put("name", "send_message_to_chat")
+                put("description", "Natively dispatches a message, prompt, or question directly into Aura AI's chat without using accessibility or requesting screen share. Supports sending to 'CURRENT' chat, a 'NEW' chat, or a specific chat ID/name.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("message", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "The message or prompt to send into the chat.")
+                        })
+                        put("target", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Target chat: 'CURRENT' (default), 'NEW' (starts a new chat first), or a specific chat title / ID.")
+                        })
+                        put("auto_send", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Whether to automatically send the message (default true).")
+                        })
+                    })
+                    put("required", JSONArray().apply { put("message") })
+                })
+            })
+
             // 0g. delegate_task_to_app_agent (alias)
             put(JSONObject().apply {
                 put("name", "delegate_task_to_app_agent")
@@ -894,6 +953,16 @@ class GeminiLiveWebSocket(
                         })
                     })
                     put("required", JSONArray().put("url"))
+                })
+            })
+
+            // 27. close_in_app_browser
+            put(JSONObject().apply {
+                put("name", "close_in_app_browser")
+                put("description", "Closes the In-Built Browser / website preview immediately and returns to the chat or voice screen. Use whenever the user commands to close browser, exit website preview, or close in-built browser (e.g. 'browser band karo', 'browser close karo', 'preview close karo').")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
                 })
             })
         }

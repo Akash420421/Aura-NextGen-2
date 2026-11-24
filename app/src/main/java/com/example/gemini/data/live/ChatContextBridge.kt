@@ -229,31 +229,46 @@ object ChatContextBridge {
         val conv = vm.currentConversation.value
         val msgs = vm.messages.value
 
-        if (conv == null && msgs.isEmpty()) return ""
+        val sb = StringBuilder()
 
-        val title = conv?.title?.takeIf { it.isNotBlank() } ?: "Untitled Chat"
-        _lastActiveChatTitle.value = title
-
-        val sb = StringBuilder("\n## Active Chat Context on Screen:\n")
-        sb.append("The user is currently viewing the conversation: \"$title\".\n")
-        sb.append("Recent messages in this chat (from oldest to newest):\n")
-
-        val recent = msgs.takeLast(MAX_MESSAGES_IN_CONTEXT)
-        if (recent.isEmpty()) {
-            sb.append("(No messages in this chat yet. This is a fresh chat.)\n")
-        } else {
-            recent.forEach { m ->
-                val roleName = when (m.role) {
-                    MessageRole.USER -> "User"
-                    MessageRole.ASSISTANT -> "Assistant"
-                    MessageRole.SYSTEM -> "System"
-                    else -> "Assistant"
-                }
-                val text = if (m.content.length > 500) m.content.take(500) + "... [truncated]" else m.content
-                sb.append("$roleName: $text\n")
+        // 1. Dynamic Recent Chats Memory Index (prevents hallucination about past chats/projects)
+        val all = vm.allConversations.value.sortedByDescending { it.updatedAt }.take(8)
+        if (all.isNotEmpty()) {
+            sb.append("\n## Saved Conversations & Projects Index in Memory:\n")
+            all.forEach { c ->
+                val proj = if (c.workspaceUri.isNotBlank()) " [Project: ${c.workspaceUri.trimEnd('/').substringAfterLast('/')}]" else ""
+                val sum = if (!c.summary.isNullOrBlank()) " - ${c.summary.take(60)}" else ""
+                sb.append("- ID: \"${c.id}\" | Title: \"${c.title}\"$proj$sum\n")
             }
         }
-        sb.append("Instructions: If the user asks about previous discussion, use this context immediately!\n\n")
+
+        // 2. Active Chat Context on Screen
+        if (conv != null || msgs.isNotEmpty()) {
+            val title = conv?.title?.takeIf { it.isNotBlank() } ?: "Untitled Chat"
+            _lastActiveChatTitle.value = title
+
+            sb.append("\n## Active Chat Context on Screen:\n")
+            sb.append("The user is currently viewing the conversation: \"$title\".\n")
+            sb.append("Recent messages in this chat (from oldest to newest):\n")
+
+            val recent = msgs.takeLast(MAX_MESSAGES_IN_CONTEXT)
+            if (recent.isEmpty()) {
+                sb.append("(No messages in this chat yet. This is a fresh chat.)\n")
+            } else {
+                recent.forEach { m ->
+                    val roleName = when (m.role) {
+                        MessageRole.USER -> "User"
+                        MessageRole.ASSISTANT -> "Assistant"
+                        MessageRole.SYSTEM -> "System"
+                        else -> "Assistant"
+                    }
+                    val text = if (m.content.length > 500) m.content.take(500) + "... [truncated]" else m.content
+                    sb.append("$roleName: $text\n")
+                }
+            }
+            sb.append("Instructions: If the user asks about previous discussion, use this context immediately!\n\n")
+        }
+
         return sb.toString()
     }
 
@@ -288,25 +303,26 @@ object ChatContextBridge {
     }
 
     /**
-     * Instructs the current chat agent to create a new chat and build the project/task there.
-     * Includes anti-duplicate guard to prevent prompt looping or queued message flooding.
+     * Natively creates a dedicated new chat thread inside Aura and dispatches the task prompt directly.
+     * Prevents duplicate execution, prompt looping, or leaking wrapper strings.
      */
     suspend fun startNewChatTask(prompt: String): String = withContext(Dispatchers.Main) {
         val vm = viewModel ?: return@withContext "Error: App chat is not connected. Open the chat screen first."
-        if (prompt.isBlank()) return@withContext "Error: Task prompt cannot be empty."
+        val cleanPrompt = prompt.trim()
+        if (cleanPrompt.isBlank()) return@withContext "Error: Task prompt cannot be empty."
 
-        val lowerPrompt = prompt.lowercase()
+        val lowerPrompt = cleanPrompt.lowercase()
         val capabilityPhrases = listOf(
             "tum kya kya kar sakte ho", "kya kar sakte ho", "capabilities", "what can you do", "help me understand"
         )
         if (capabilityPhrases.any { lowerPrompt.contains(it) }) {
-            Log.w(TAG, "Blocked capability query from executing as code task: $prompt")
+            Log.w(TAG, "Blocked capability query from executing as code task: $cleanPrompt")
             return@withContext "Ye ek question hai, koi coding task nahi. Kripya aawaz me natural jawab dein."
         }
 
         val now = System.currentTimeMillis()
-        if (prompt.trim() == lastSentPrompt.trim() && (now - lastSentTime < 25_000L)) {
-            Log.w(TAG, "Duplicate prompt blocked by guard: $prompt")
+        if (cleanPrompt == lastSentPrompt && (now - lastSentTime < 25_000L)) {
+            Log.w(TAG, "Duplicate prompt blocked by guard: $cleanPrompt")
             return@withContext "Ye task already app me chal raha hai aur agent kaam kar raha hai. Aap 'status kya hai' poochh sakte hain."
         }
 
@@ -316,22 +332,28 @@ object ChatContextBridge {
             return@withContext "Agent abhi ek task pe actively kaam kar raha hai. Kripya thoda wait karein ya 'status kya hai' poochhein."
         }
 
-        lastSentPrompt = prompt.trim()
+        lastSentPrompt = cleanPrompt
         lastSentTime = now
 
         try {
-            ensureConversationExists(vm)
+            // 1. Natively create a fresh new chat session in Kotlin FIRST
+            isNewChatDraft = false
+            vm.startNewChat()
+            requestViewMode("CHAT")
+            requestSwitchToChatTab.value = true
+            _lastActiveChatTitle.value = "New Chat"
+
+            delay(350L) // Allow new conversation session to bind
+
             val initialMsgCount = vm.messages.value.size
+            Log.i(TAG, "Sending clean task prompt directly to new chat: $cleanPrompt")
 
-            // Instruct the current chat to create a new chat and execute the task in that new chat
-            val formatted = "Ek new chat create karo aur usme ye website/task execute karo:\n\n$prompt"
-            Log.i(TAG, "Sending new chat task prompt to app chat: $formatted")
+            // 2. Dispatch the exact user prompt directly without any hardcoded wrapper prefixes
+            vm.sendMessage(cleanPrompt)
 
-            vm.sendMessage(formatted)
-
-            // Wait up to 8s for initial acknowledgment from the agent
+            // Wait up to 6s for initial acknowledgment from the agent
             val waitStart = System.currentTimeMillis()
-            while (System.currentTimeMillis() - waitStart < 8000L) {
+            while (System.currentTimeMillis() - waitStart < 6000L) {
                 val currentMsgs = vm.messages.value
                 val lastMsg = currentMsgs.lastOrNull()
                 if (lastMsg != null && lastMsg.role == MessageRole.ASSISTANT && lastMsg.content.isNotBlank() && currentMsgs.size > initialMsgCount) {
@@ -340,11 +362,170 @@ object ChatContextBridge {
                 delay(200L)
             }
 
-            return@withContext "Maine new chat create karke task start karne ka instruction bhej diya hai aur agent ne kaam shuru kar diya hai."
+            return@withContext "Maine ek nayi chat shuru karke aapka task initiate kar diya hai. Agent is par actively kaam kar raha hai."
         } catch (e: Exception) {
             Log.e(TAG, "Error starting new chat task: ${e.message}", e)
             return@withContext "Error: ${e.message}"
         }
+    }
+
+    /**
+     * Natively sends a message to chat without requiring Android accessibility or Screen Share.
+     * Can send to the current chat, create a new chat, or target a specific chat by ID or title.
+     */
+    suspend fun sendMessageToChat(
+        message: String,
+        target: String = "CURRENT",
+        autoSend: Boolean = true
+    ): String = withContext(Dispatchers.Main) {
+        val vm = viewModel ?: return@withContext "Error: App chat is not connected."
+        val text = message.trim()
+        if (text.isBlank()) return@withContext "Error: Message cannot be empty."
+
+        when (target.trim().uppercase()) {
+            "NEW" -> {
+                isNewChatDraft = false
+                vm.startNewChat()
+                requestViewMode("CHAT")
+                requestSwitchToChatTab.value = true
+                _lastActiveChatTitle.value = "New Chat"
+                if (autoSend) {
+                    delay(350L)
+                    vm.sendMessage(text)
+                    "Nayi chat start karke message bhej diya gaya hai."
+                } else {
+                    "Nayi chat start kar di gayi hai."
+                }
+            }
+            "CURRENT", "" -> {
+                isNewChatDraft = false
+                ensureConversationExists(vm)
+                requestViewMode("CHAT")
+                requestSwitchToChatTab.value = true
+                if (autoSend) {
+                    vm.sendMessage(text)
+                    "Current chat mein message send kar diya hai."
+                } else {
+                    "Switched to current chat."
+                }
+            }
+            else -> {
+                val all = vm.allConversations.value
+                val query = target.trim()
+                val matched = all.firstOrNull { it.id == query || it.id.startsWith(query) }
+                    ?: all.firstOrNull { it.title.equals(query, ignoreCase = true) }
+                    ?: all.firstOrNull { it.title.contains(query, ignoreCase = true) }
+                if (matched != null) {
+                    isNewChatDraft = false
+                    vm.selectConversation(matched.id)
+                    requestViewMode("CHAT")
+                    requestSwitchToChatTab.value = true
+                    if (autoSend) {
+                        delay(350L)
+                        vm.sendMessage(text)
+                        "Chat '${matched.title}' open karke message bhej diya hai."
+                    } else {
+                        "Chat '${matched.title}' open kar di hai."
+                    }
+                } else {
+                    isNewChatDraft = false
+                    ensureConversationExists(vm)
+                    requestViewMode("CHAT")
+                    requestSwitchToChatTab.value = true
+                    if (autoSend) {
+                        vm.sendMessage(text)
+                        "Message send kar diya hai."
+                    } else {
+                        "Switched to chat."
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Lists recent saved conversations and projects with metadata (ID, title, summary, project path).
+     */
+    fun listRecentChats(query: String? = null, limit: Int = 10): String {
+        val vm = viewModel ?: return "Chat system is not available."
+        val all = vm.allConversations.value
+        if (all.isEmpty()) return "No conversations found in the app."
+
+        val q = query?.trim()?.lowercase()
+        val filtered = if (!q.isNullOrBlank()) {
+            all.filter { conv ->
+                conv.title.lowercase().contains(q) ||
+                conv.summary?.lowercase()?.contains(q) == true ||
+                conv.workspaceUri.lowercase().contains(q) ||
+                conv.id.lowercase().contains(q)
+            }
+        } else {
+            all
+        }
+
+        val results = filtered.sortedByDescending { it.updatedAt }.take(limit.coerceIn(1, 30))
+        if (results.isEmpty()) {
+            return "No chats found matching '$query'."
+        }
+
+        val timeFormat = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
+        val sb = StringBuilder("Found ${results.size} recent chats:\n")
+        results.forEachIndexed { idx, c ->
+            val dateStr = timeFormat.format(Date(c.updatedAt))
+            sb.append("${idx + 1}. [${c.id}] \"${c.title}\"")
+            if (!c.summary.isNullOrBlank()) {
+                sb.append(" - Summary: ${c.summary.take(80)}")
+            }
+            if (c.workspaceUri.isNotBlank()) {
+                val projName = c.workspaceUri.trimEnd('/').substringAfterLast('/')
+                if (projName.isNotBlank()) sb.append(" [Project: $projName]")
+            }
+            sb.append(" ($dateStr)\n")
+        }
+        return sb.toString().trim()
+    }
+
+    /**
+     * Opens a specific chat on screen by its exact or partial conversation ID.
+     */
+    fun openChatById(chatId: String): String {
+        val vm = viewModel ?: return "Chat system is not available."
+        val query = chatId.trim()
+        if (query.isBlank()) return "Please specify a chat ID to open."
+
+        val all = vm.allConversations.value
+        val matched = all.firstOrNull { it.id == query || it.id.startsWith(query) }
+            ?: all.firstOrNull { it.title.equals(query, ignoreCase = true) }
+
+        return if (matched != null) {
+            isNewChatDraft = false
+            vm.selectConversation(matched.id)
+            requestViewMode("CHAT")
+            requestSwitchToChatTab.value = true
+            "Opened chat '${matched.title}' on screen."
+        } else {
+            "Could not find a chat with ID '$chatId'."
+        }
+    }
+
+    /**
+     * Programmatically closes the In-Built Browser and pauses WebView media/timers.
+     */
+    fun closeInAppBrowser(): String {
+        try {
+            val browserSession = com.example.gemini.ui.browser.BrowserSessionManager.instance
+            browserSession.getActiveTab()?.webView?.let { wv ->
+                wv.post {
+                    try {
+                        wv.onPause()
+                        wv.stopLoading()
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+
+        requestViewMode("CHAT")
+        return "In-Built Browser closed and returned to chat screen."
     }
 
     /**
@@ -408,7 +589,7 @@ object ChatContextBridge {
 
         try {
             ensureConversationExists(vm)
-            val updateMsg = "Jo website/task banayi ja rahi hai, usme ye update karo: $instruction"
+            val updateMsg = instruction.trim()
             vm.sendMessage(updateMsg)
             return@withContext "Update task chat mein bhej diya gaya hai: $instruction"
         } catch (e: Exception) {

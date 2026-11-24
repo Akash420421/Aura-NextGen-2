@@ -333,7 +333,17 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- Aura has its own full-featured In-Built Web Browser (`open_in_app_browser`).\n")
         sb.append("- Whenever the user asks to open YouTube, visit a website, browse a webpage, or view a link (e.g. 'in-built browser mein YouTube open karo', 'open youtube in browser', 'google kholo', 'github open karo', 'website open karo', 'search on browser'):\n")
         sb.append("  -> ALWAYS call `open_in_app_browser(url=...)`! It opens the page inside Aura's In-Built Browser immediately.\n")
-        sb.append("- Launch external Google Chrome ONLY IF the user explicitly says 'Chrome mein kholo' or 'external browser mein open karo'. Never hijack default web browsing to Chrome!\n\n")
+        sb.append("- Launch external Google Chrome ONLY IF the user explicitly says 'Chrome mein kholo' or 'external browser mein open karo'. Never hijack default web browsing to Chrome!\n")
+        sb.append("- When asked to close the browser or preview (e.g. 'browser band karo', 'browser close karo', 'preview close karo'): ALWAYS call `close_in_app_browser()`! Never close the whole app or trigger recents for the browser!\n\n")
+
+        sb.append("### NATIVE APP & CHAT CONTROL (NEVER USE ACCESSIBILITY OR SCREEN SHARE ON AURA):\n")
+        sb.append("- You have 100% direct internal programmatic control over Aura AI's own interface!\n")
+        sb.append("- To send a message or task to chat: call `send_message_to_chat(message=\"...\", target=\"CURRENT\" | \"NEW\" | \"<chat_id>\")`.\n")
+        sb.append("- To open a new chat: call `create_new_chat()` or `send_message_to_chat(..., target=\"NEW\")`.\n")
+        sb.append("- To list recent chats or remember past projects: call `list_recent_chats()`.\n")
+        sb.append("- To open any chat by ID or name: call `open_chat_by_id(chat_id=\"...\")` or `open_chat_by_name(chat_name=\"...\")`.\n")
+        sb.append("- To close the In-Built Browser / web preview: call `close_in_app_browser()`.\n")
+        sb.append("- NEVER use accessibility tools (`click_ui_element`, `type_text`, `scroll_screen`) or ask for Screen Share when controlling Aura AI itself! Accessibility tools are ONLY for third-party Android apps (WhatsApp, YouTube, Telegram, Phone dialer, etc.)!\n\n")
 
         sb.append("### OPENING SYSTEM APPS & DIALER:\n")
         sb.append("- When asked to open phone dialer, phone app, or calling app (e.g. 'phone dialer kholo', 'calling app open karo', 'phone open karo'): ALWAYS call `open_app(app_name=\"phone\")` or `call_contact(contact_name=\"...\")`! DO NOT open PhonePe! DO NOT open Chrome!\n")
@@ -567,6 +577,49 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                 }
 
+                "open_chat_by_id" -> {
+                    val chatId = args.optString("chat_id", "").ifBlank { args.optString("id", "") }.trim()
+                    val msg = ChatContextBridge.openChatById(chatId)
+                    JSONObject().apply {
+                        put("status", if (msg.startsWith("Could not find")) "not_found" else "success")
+                        put("message", msg)
+                    }
+                }
+
+                "list_recent_chats" -> {
+                    val query = args.optString("query", "").ifBlank { null }
+                    val limit = args.optInt("limit", 10)
+                    val result = ChatContextBridge.listRecentChats(query, limit)
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("chats", result)
+                        put("message", result)
+                    }
+                }
+
+                "send_message_to_chat" -> {
+                    val message = args.optString("message", "").ifBlank { args.optString("text", "") }.trim()
+                    val target = args.optString("target", "CURRENT").ifBlank { "CURRENT" }
+                    val autoSend = args.optBoolean("auto_send", true)
+                    if (message.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "Message cannot be empty.")
+                    } else {
+                        val reply = ChatContextBridge.sendMessageToChat(message, target, autoSend)
+                        JSONObject().apply {
+                            put("status", "success")
+                            put("message", reply)
+                        }
+                    }
+                }
+
+                "close_in_app_browser", "close_browser", "close_inbuilt_browser", "close_preview" -> {
+                    val msg = ChatContextBridge.closeInAppBrowser()
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("message", msg)
+                    }
+                }
+
                 "send_task_update" -> {
                     val instruction = args.optString("instruction", "").trim()
                     if (instruction.isBlank()) {
@@ -633,6 +686,14 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
                 "close_app" -> {
                     val appName = args.optString("app_name", "").ifBlank { null }
+                    val appLower = appName?.lowercase(java.util.Locale.ROOT)?.trim()
+                    if (appLower != null && (appLower == "browser" || appLower.contains("in-built browser") || appLower.contains("inbuilt browser") || appLower == "preview" || appLower.contains("web preview"))) {
+                        val msg = ChatContextBridge.closeInAppBrowser()
+                        return JSONObject().apply {
+                            put("status", "success")
+                            put("message", msg)
+                        }
+                    }
                     val removeFromRecents = args.optBoolean("remove_from_recents", false)
                     val clearAllRecents = args.optBoolean("clear_all_recents", false)
                     val mode = args.optString("mode", "").ifBlank {

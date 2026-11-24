@@ -760,6 +760,18 @@ class VisualTaskOrchestrator(
         }
 
         val rootBefore = service.getActiveRootNode()
+        val rootPkgBefore = rootBefore?.packageName?.toString() ?: ""
+        if (rootPkgBefore.contains("com.example.gemini")) {
+            val lower = targetName.lowercase(Locale.ROOT).trim()
+            if (lower.contains("new chat") || lower.contains("nayi chat") || lower.contains("start a new chat") || lower.contains("fresh chat")) {
+                com.example.gemini.data.live.ChatContextBridge.createNewChat()
+                return@withContext TaskActionResult(
+                    success = true,
+                    message = "Opened new chat natively inside Aura.",
+                    verified = true
+                )
+            }
+        }
         val elementsBefore = groundingEngine.scanScreen(rootBefore)
         val preTapSignature = ScreenSignatureCalculator.computeSignature(rootBefore)
         val repeatedTarget = targetName.lowercase(Locale.ROOT).trim()
@@ -1058,6 +1070,15 @@ class VisualTaskOrchestrator(
         // Resolve target input element
         var targetRect: Rect? = null
         val rootForTyping = service.getAppRootNode() ?: service.getActiveRootNode()
+        val currentTypingPkg = rootForTyping?.packageName?.toString() ?: ""
+        if (currentTypingPkg.contains("com.example.gemini")) {
+            com.example.gemini.data.live.ChatContextBridge.sendMessageToChat(text, target = "CURRENT", autoSend = submit)
+            return@withContext TaskActionResult(
+                success = true,
+                message = "Dispatched text directly into Aura chat via native engine.",
+                verified = true
+            )
+        }
         val elementsForTyping = if (rootForTyping != null) groundingEngine.scanScreen(rootForTyping) else emptyList()
         val visibleUiText = elementsForTyping.joinToString(" ") {
             "${it.text} ${it.contentDescription} ${it.viewId}"
