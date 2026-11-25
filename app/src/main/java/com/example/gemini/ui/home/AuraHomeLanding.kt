@@ -244,10 +244,9 @@ fun AuraVoiceWelcome(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .statusBarsPadding()
-            .padding(top = 64.dp)
             .padding(horizontal = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Text(
             text = greetingTitle,
@@ -256,7 +255,7 @@ fun AuraVoiceWelcome(
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center
         )
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(32.dp))
         Box(
             modifier = Modifier
                 .size(270.dp)
@@ -276,7 +275,6 @@ fun AuraVoiceWelcome(
                 onOrbTapped = onActionTap
             )
         }
-        Spacer(Modifier.weight(1f))
     }
 }
 

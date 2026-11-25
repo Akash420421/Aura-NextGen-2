@@ -1,11 +1,16 @@
 {
-  "version_code": 126,
-  "version_name": "1.1.6",
+  "version_code": 246,
+  "version_name": "2.4.6",
   "min_supported_version_code": 1,
   "changelog": [
-    "Fixed file upload: files from your phone are now streamed to the agent's machine with progress (big files no longer have to fit in memory), big photos are shrunk first, and the new \"From Files\" option attaches any file of any size without copying it",
-    "Added Antigravity cloud agents: run Antigravity chats on a Google cloud machine with your GitHub repos, and preview the apps they serve (off by default, enable it in Settings → Antigravity → Cloud agents) (and wont work with free pro account may be)",
-    "Added an error log for Antigravity voice calls: when a call fails, tap Details to see the full error and what the Antigravity server logged, then copy it or send a screenshot"
+    "Aura AI v2.4.6 — Phone Automation & App Control Overhaul (Fixes 15–21)",
+    "Instagram Reels: Bottom nav Reels tab grounding and 200ms upward flick with reel advancement verification",
+    "Instagram DM Target Validation: Excluded bottom nav tabs from contact search; hard abort guard against injecting chat messages into search bars",
+    "Enhanced Scroll & Continuous Auto-Scroll: Re-calibrated scroll distances (35%, 65%, 80%) and background continuous auto-scrolling with smart auto-stop triggers",
+    "Messaging Chat Row Click: Filtered out avatar/profile picture nodes and biased coordinate clicks to text area with auto-recovery from profile dialogs",
+    "Native Phone Dialer: Direct dial_number intent pre-fills native dialpad across all OEM dialers without using search bars",
+    "Dedicated App Close & Recents Reopen Guard: Separated close_current_app from clear_all_recents with 150ms upward fling and auto-recovery if an app reopens",
+    "Native YouTube Priority: Direct native intent launches com.google.android.youtube by default, reserving In-Built Browser for explicit requests"
   ],
   "is_critical": false
 }

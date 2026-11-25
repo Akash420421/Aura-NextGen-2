@@ -1,4 +1,5 @@
 import groovy.json.JsonSlurper
+import java.util.Base64
 
 val versionFile = rootProject.file("version.json")
 val parsedVersion = if (versionFile.exists()) {
@@ -10,6 +11,16 @@ val parsedVersion = if (versionFile.exists()) {
 
 val appVersionCode = (parsedVersion["version_code"] as? Number)?.toInt() ?: 1
 val appVersionName = (parsedVersion["version_name"] as? String) ?: "1.0.0"
+
+val debugKeystoreFile = rootProject.file("debug.keystore")
+val debugKeystoreBase64File = rootProject.file("debug.keystore.base64")
+val isAiStudioContainer = debugKeystoreBase64File.exists()
+if (isAiStudioContainer && !debugKeystoreFile.exists()) {
+    runCatching {
+        val cleanBase64 = debugKeystoreBase64File.readText().replace("\\s".toRegex(), "")
+        debugKeystoreFile.writeBytes(Base64.getDecoder().decode(cleanBase64))
+    }
+}
 
 // The IDE bridge (Go) reports the same version as the app: its build embeds a copy of version.json, refreshed here on
 // every Gradle build so the two can never differ and nobody has to remember it.
@@ -37,8 +48,12 @@ android {
         versionName = appVersionName
         // The local environment (glibc, proot, IDE bridge, bootstrap) is arm64 only, but armeabi-v7a is kept so 32-bit
         // ARM phones can install the app and use server mode (bridge on a PC). x86/x86_64 copies of dependency
-        // libraries stay out of the APK
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        // libraries stay out of the APK (except inside AI Studio's x86_64 emulator container).
+        if (isAiStudioContainer) {
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86") }
+        } else {
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        }
     }
 
     signingConfigs {
@@ -56,6 +71,14 @@ android {
                 storePassword = System.getenv("AURA_DEBUG_STORE_PASSWORD") ?: ""
                 keyAlias = "aura-debug"
                 keyPassword = System.getenv("AURA_DEBUG_KEY_PASSWORD") ?: ""
+            }
+        }
+        if (rootProject.file("debug.keystore").exists()) {
+            create("debugConfig") {
+                storeFile = rootProject.file("debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
             }
         }
     }
@@ -93,6 +116,8 @@ android {
         debug {
             if (file("aura-debug.jks").exists()) {
                 signingConfig = signingConfigs.getByName("auraDebug")
+            } else if (rootProject.file("debug.keystore").exists()) {
+                signingConfig = signingConfigs.getByName("debugConfig")
             }
         }
         release {
@@ -258,9 +283,14 @@ wire {
 // The bridge is built into build/ and shipped xz-compressed (13 MB -> 3.8 MB in the APK); the app unpacks it into the
 // terminal's bin/ (LocalServerManager). Preset 6 compresses as well as -9e here, with an 8 MB dictionary, so unpacking
 // needs little memory.
+val hasGoCompiler = (System.getenv("PATH") ?: "")
+  .split(File.pathSeparator)
+  .any { dir -> dir.isNotBlank() && File(dir, "go").canExecute() }
+
 val agyIdeBridgeRaw = layout.buildDirectory.file("intermediates/agyIdeBridge/agy_ide_bridge")
 val buildAgyIdeBridge = tasks.register<Exec>("buildAgyIdeBridge") {
   dependsOn(syncBridgeVersion) // the bridge embeds the app's version
+  enabled = hasGoCompiler
   val bridgeSourceDir = layout.projectDirectory.dir("../agy_ide_bridge")
   val rawFile = agyIdeBridgeRaw.get().asFile
 
@@ -277,6 +307,7 @@ val buildAgyIdeBridge = tasks.register<Exec>("buildAgyIdeBridge") {
 
 val compressAgyIdeBridge = tasks.register<Exec>("compressAgyIdeBridge") {
   dependsOn(buildAgyIdeBridge)
+  enabled = hasGoCompiler
   val binDir = layout.projectDirectory.dir("src/main/assets/bin").asFile
   val rawFile = agyIdeBridgeRaw.get().asFile
 
@@ -435,8 +466,46 @@ val generateChangelog = tasks.register<GenerateChangelogTask>("generateChangelog
     repoDir.set(rootProject.layout.projectDirectory)
     outputDir.set(layout.buildDirectory.dir("generated/changelog/kotlin"))
 }
+
 androidComponents {
+    beforeVariants { variantBuilder ->
+        if (isAiStudioContainer && variantBuilder.flavorName != "termux") {
+            variantBuilder.enable = false
+        }
+    }
     onVariants { variant ->
         variant.sources.kotlin?.addGeneratedSourceDirectory(generateChangelog, GenerateChangelogTask::outputDir)
     }
+}
+
+abstract class SyncAiStudioDebugApkTask : DefaultTask() {
+    @get:Internal
+    abstract val apkRootDir: DirectoryProperty
+
+    init {
+        outputs.upToDateWhen { false }
+    }
+
+    @TaskAction
+    fun sync() {
+        val root = apkRootDir.get().asFile
+        val candidates = listOf(
+            File(root, "termux/debug/antiGem-termux-debug.apk"),
+            File(root, "standard/debug/antiGem-standard-debug.apk")
+        )
+        val sourceApk = candidates.firstOrNull { it.exists() } ?: return
+        val targetApk = File(root, "debug/app-debug.apk")
+        targetApk.parentFile.mkdirs()
+        sourceApk.copyTo(targetApk, overwrite = true)
+    }
+}
+
+val syncAiStudioDebugApk = tasks.register<SyncAiStudioDebugApkTask>("syncAiStudioDebugApk") {
+    apkRootDir.set(layout.buildDirectory.dir("outputs/apk"))
+}
+
+tasks.matching {
+    it.name == "assembleDebug" || it.name == "assembleTermuxDebug" || it.name == "assembleStandardDebug"
+}.configureEach {
+    finalizedBy(syncAiStudioDebugApk)
 }
