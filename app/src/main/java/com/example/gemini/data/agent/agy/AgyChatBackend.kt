@@ -1338,7 +1338,9 @@ class AgyChatBackend(
                                             }
                                             if (pendingAsk != null && !historyChunk) {
                                                 val firstQ = pendingAsk.questionnaire?.questions?.firstOrNull()
-                                                val qText = firstQ?.prompt?.takeIf { it.isNotBlank() } ?: pendingAsk.title
+                                                val qText = firstQ?.prompt?.takeIf { it.isNotBlank() }
+                                                    ?: pendingAsk.command.takeIf { it.isNotBlank() }
+                                                    ?: pendingAsk.name.ifBlank { "Question" }
                                                 val qOpts = firstQ?.options?.map { it.label } ?: emptyList()
                                                 val qKey = "${conversationId}:${pendingAsk.stepIndex}:${firstQ?.id ?: qText.hashCode()}"
                                                 com.example.gemini.data.live.AuraAgentEventBus.emit(
@@ -1361,7 +1363,7 @@ class AgyChatBackend(
                                                 com.example.gemini.data.live.AuraAgentEventBus.emit(
                                                     com.example.gemini.data.live.AuraAgentEvent.RealError(
                                                         conversationId = conversationId,
-                                                        errorTitle = failedTool.title.ifBlank { "Execution Error" },
+                                                        errorTitle = failedTool.name.ifBlank { "Execution Error" },
                                                         errorMessage = failedTool.output
                                                     )
                                                 )
