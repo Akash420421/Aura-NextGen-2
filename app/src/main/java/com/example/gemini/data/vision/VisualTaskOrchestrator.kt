@@ -555,7 +555,42 @@ class VisualTaskOrchestrator(
         // button labelled Send. Require the active user task to explicitly request it.
         val initialRoot = service.getActiveRootNode()
         val initialPackage = initialRoot?.packageName?.toString().orEmpty().lowercase(Locale.ROOT)
+        // #6: Zero Accessibility on Aura AI's own UI
+        if (initialPackage.contains("com.example.gemini") || initialPackage.contains("com.aura.ai")) {
+            return@withContext TaskActionResult(
+                success = false,
+                message = "Accessibility click is disabled on Aura's own UI. Use native Aura tools instead (create_new_chat, open_chat_by_id, open_chat_by_name, send_message_to_chat, open_in_app_browser, close_in_app_browser).",
+                verified = false
+            )
+        }
         val normalizedTarget = targetName.lowercase(Locale.ROOT).trim()
+        // #16: Instagram DM Inbox guard — refuse to click bottom nav tabs or random feed items when trying to open a DM contact from Home/Explore
+        if (initialPackage.contains("instagram") &&
+            (taskGoal.contains("dm", ignoreCase = true) || taskGoal.contains("message", ignoreCase = true)) &&
+            normalizedTarget !in setOf("messages", "direct", "messenger", "inbox", "search", "reels", "home", "profile", "send", "back", "like", "comment", "share")
+        ) {
+            val igElements = groundingEngine.scanScreen(initialRoot)
+            val isInDirectInbox = igElements.any { el ->
+                val v = el.viewId.lowercase(Locale.ROOT)
+                val l = el.primaryLabel.lowercase(Locale.ROOT)
+                v.contains("direct_inbox") || v.contains("row_inbox") || v.contains("inbox_search") ||
+                    v.contains("thread_title") || l == "primary" || l == "requests" || l == "messages"
+            }
+            val isBottomNavTab = igElements.any { el ->
+                val v = el.viewId.lowercase(Locale.ROOT)
+                val l = el.primaryLabel.lowercase(Locale.ROOT)
+                (v.contains("search_tab") || v.contains("feed_tab") || v.contains("clips_tab") || v.contains("profile_tab")) &&
+                    l.contains(normalizedTarget)
+            }
+            if (!isInDirectInbox && isBottomNavTab) {
+                return@withContext TaskActionResult(
+                    success = false,
+                    message = "FAILED: Currently not in Instagram Direct Messages inbox. Refused to tap bottom navigation tab '$targetName'. Open Direct Messages (top-right Messenger icon) first.",
+                    currentStateSummary = groundingEngine.formatElementsSummary(igElements, initialRoot),
+                    verified = false
+                )
+            }
+        }
         val isGmailSend = initialPackage.contains("com.google.android.gm") &&
             (normalizedTarget == "send" || normalizedTarget == "send email" || normalizedTarget == "send message")
         if (isGmailSend) {
@@ -959,7 +994,24 @@ class VisualTaskOrchestrator(
 
         val initialCheckedState = target.isChecked
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
-        val clickOk = mutateUi("click:${target.primaryLabel}") { service.performClickAtRect(target.bounds) }
+        val isWhatsAppChatRow = rootPkg.contains("whatsapp", ignoreCase = true) &&
+            target.bounds.width() > (service.resources.displayMetrics.widthPixels * 0.40f) &&
+            target.bounds.top > 180 &&
+            !target.viewId.contains("send", ignoreCase = true) &&
+            !target.viewId.contains("menuitem", ignoreCase = true) &&
+            !target.viewId.contains("search", ignoreCase = true)
+        val clickOk = mutateUi("click:${target.primaryLabel}") {
+            if (isWhatsAppChatRow) {
+                // #18: Strictly tap right-center (60% width) to avoid WhatsApp's left circular profile avatar!
+                val screenW = service.resources.displayMetrics.widthPixels.toFloat().coerceAtLeast(1f)
+                val safeX = (target.bounds.left + target.bounds.width() * 0.60f)
+                    .coerceAtLeast(screenW * 0.30f)
+                    .coerceAtMost(screenW * 0.85f)
+                service.clickAt(safeX, target.bounds.exactCenterY(), 80L)
+            } else {
+                service.performClickAtRect(target.bounds)
+            }
+        }
 
         if (!clickOk) {
             return@withContext TaskActionResult(
@@ -988,28 +1040,71 @@ class VisualTaskOrchestrator(
         val stateChanged = !postSig.isEquivalentTo(preSig)
         val watchedMs = System.currentTimeMillis() - waitStartedAt
 
-        // Fix 18: WhatsApp / Messaging Profile Picture Popup Recovery
+        // #15: Post-click verification when opening Instagram Reels tab
+        val isInstagramReelsClick = rootPkg.contains("instagram", ignoreCase = true) &&
+            (normalizedTarget == "reels" || normalizedTarget == "reel" || normalizedTarget.contains("reels tab"))
+        if (isInstagramReelsClick) {
+            delay(500)
+            rootAfter = service.getActiveRootNode()
+            elementsAfter = groundingEngine.scanScreen(rootAfter)
+            val reelsViewerActive = elementsAfter.any { el ->
+                val vId = el.viewId.lowercase(Locale.ROOT)
+                val lbl = el.primaryLabel.lowercase(Locale.ROOT)
+                vId.contains("clips_viewer") || vId.contains("clips_video") || vId.contains("clips_media") ||
+                    vId.contains("reel") || lbl.contains("reels camera") || lbl.contains("audio")
+            } || (elementsAfter.any { it.primaryLabel.equals("Like", true) } &&
+                elementsAfter.any { it.primaryLabel.equals("Comment", true) } &&
+                elementsAfter.any { it.primaryLabel.equals("Share", true) })
+            val reelSummary = groundingEngine.formatElementsSummary(elementsAfter, rootAfter)
+            return@withContext TaskActionResult(
+                success = reelsViewerActive,
+                message = if (reelsViewerActive) "Opened Instagram Reels viewer and verified active playback controls."
+                          else "FAILED: Tapped '${target.primaryLabel}', but Instagram Reels viewer did not open. Inspect screen before retrying.",
+                currentStateSummary = reelSummary,
+                verified = reelsViewerActive
+            )
+        }
+
+        // #18: WhatsApp / Messaging Profile Picture Popup Recovery
         val isMessagingApp = rootPkg.contains("whatsapp", ignoreCase = true) || rootPkg.contains("telegram", ignoreCase = true)
         if (isMessagingApp) {
+            delay(450)
+            rootAfter = service.getActiveRootNode()
+            elementsAfter = groundingEngine.scanScreen(rootAfter)
             val hasProfilePopup = elementsAfter.any { el ->
                 val vId = el.viewId.lowercase(Locale.ROOT)
                 val label = el.primaryLabel.lowercase(Locale.ROOT)
                 vId.contains("profile_dialog") || vId.contains("quick_contact") || vId.contains("badge") ||
-                label == "view contact" || label == "message info" || label == "group info"
+                vId.contains("picture_animation") ||
+                label == "view contact" || label == "message info" || label == "group info" || label == "info"
             }
             val hasChatComposer = elementsAfter.any { el ->
                 val vId = el.viewId.lowercase(Locale.ROOT)
-                vId.contains("entry") || vId.contains("composer") || vId.contains("message_box")
+                val lbl = el.primaryLabel.lowercase(Locale.ROOT)
+                vId.contains("entry") || vId.contains("composer") || vId.contains("message_box") ||
+                    (el.isEditable && lbl.contains("message"))
             }
-            if (hasProfilePopup && !hasChatComposer) {
-                Log.w(TAG, "Opened profile dialog instead of chat thread in $rootPkg. Dismissing popup and retrying right-center tap...")
+            if ((hasProfilePopup || isWhatsAppChatRow) && !hasChatComposer) {
+                Log.w(TAG, "Profile/Info popup detected instead of chat thread in $rootPkg. Pressing BACK and retrying right-center tap once...")
                 service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
                 delay(350)
                 val refreshedRoot = service.getActiveRootNode()
                 val refreshedElements = groundingEngine.scanScreen(refreshedRoot)
-                val contactNode = groundingEngine.findTargetElement(refreshedElements, targetName)
+                val nonAvatarMatches = refreshedElements.filter { el ->
+                    val vId = el.viewId.lowercase(Locale.ROOT)
+                    val lbl = el.primaryLabel.lowercase(Locale.ROOT)
+                    !vId.contains("contact_photo") && !vId.contains("avatar") && !vId.contains("profile_pic") &&
+                        !lbl.contains("profile photo") && !lbl.contains("profile picture")
+                }
+                val contactNode = nonAvatarMatches.firstOrNull {
+                    it.viewId.contains("conversations_row_contact_name", ignoreCase = true) &&
+                        it.primaryLabel.contains(targetName, ignoreCase = true)
+                } ?: groundingEngine.findTargetElement(nonAvatarMatches, targetName)
                 if (contactNode != null) {
-                    val rightCenterX = contactNode.bounds.left + contactNode.bounds.width() * 0.65f
+                    val screenW = service.resources.displayMetrics.widthPixels.toFloat().coerceAtLeast(1f)
+                    val rightCenterX = (contactNode.bounds.left + contactNode.bounds.width() * 0.62f)
+                        .coerceAtLeast(screenW * 0.30f)
+                        .coerceAtMost(screenW * 0.85f)
                     val centerY = contactNode.bounds.exactCenterY()
                     service.clickAt(rightCenterX, centerY, 80L)
                     delay(500)
@@ -1102,12 +1197,40 @@ class VisualTaskOrchestrator(
         var targetRect: Rect? = null
         val rootForTyping = service.getAppRootNode() ?: service.getActiveRootNode()
         val currentTypingPkg = rootForTyping?.packageName?.toString() ?: ""
-        if (currentTypingPkg.contains("com.example.gemini")) {
+        // #6: Zero Accessibility on Aura AI's own UI
+        if (currentTypingPkg.contains("com.example.gemini") || currentTypingPkg.contains("com.aura.ai")) {
             com.example.gemini.data.live.ChatContextBridge.sendMessageToChat(text, target = "CURRENT", autoSend = submit)
             return@withContext TaskActionResult(
                 success = true,
                 message = "Dispatched text directly into Aura chat via native engine.",
                 verified = true
+            )
+        }
+        // #19: NEVER type phone numbers into Phone/Dialer/Contacts search bar — route directly to native ACTION_DIAL!
+        val isPhoneOrContactsApp = currentTypingPkg.contains("dialer", ignoreCase = true) ||
+            currentTypingPkg.contains("contacts", ignoreCase = true) ||
+            currentTypingPkg.contains("telecom", ignoreCase = true) ||
+            currentTypingPkg.contains("incallui", ignoreCase = true)
+        val rawDigits = text.replace(Regex("[^0-9+*#]"), "")
+        val pureDigitCount = rawDigits.count { it.isDigit() }
+        if (isPhoneOrContactsApp && pureDigitCount in 7..15 && text.trim().matches(Regex("^[+0-9\\s\\-()*#]+$"))) {
+            val dialRes = com.example.gemini.data.automation.PhoneControlManager(service)
+                .dialNumber(service, rawDigits, autoCall = false)
+            return@withContext dialRes.fold(
+                onSuccess = { dialed ->
+                    TaskActionResult(
+                        success = true,
+                        message = "Redirected phone number to native ACTION_DIAL dialpad with '$dialed' (blocked search-bar injection).",
+                        verified = true
+                    )
+                },
+                onFailure = { err ->
+                    TaskActionResult(
+                        success = false,
+                        message = "FAILED: Blocked typing phone number into search bar and native dialer failed: ${err.message}",
+                        verified = false
+                    )
+                }
             )
         }
         val elementsForTyping = if (rootForTyping != null) groundingEngine.scanScreen(rootForTyping) else emptyList()
@@ -1292,25 +1415,37 @@ class VisualTaskOrchestrator(
             listOf("recipient", "email", "message", "compose", "subject", "body", "to").any(name::contains)
         } == true
 
-        // Fix 16: Hard Abort Guard against injecting chat messages into Search bars
+        // #16: Guard against injecting chat/DM message body into a Search bar (especially Instagram Search / Meta AI Search!)
         val goalLower = AgentTaskEngine.current()?.originalGoal?.lowercase(Locale.ROOT) ?: ""
-        val isMessageGoal = goalLower.contains("message") || goalLower.contains("msg") ||
-                goalLower.contains("chat") || goalLower.contains("bhejo") || goalLower.contains("send") ||
-                submit
         val inputNameLower = (targetInputName ?: "").lowercase(Locale.ROOT)
-        val isSearchTarget = inputNameLower.contains("search") || inputNameLower.contains("find") || inputNameLower.contains("explore")
+        val explicitlyWantsMessageComposer = inputNameLower.contains("message") || inputNameLower.contains("composer") || inputNameLower.contains("chat box") || inputNameLower.contains("write a message")
+        val explicitlyWantsSearch = inputNameLower.contains("search") || inputNameLower.contains("find") || inputNameLower.contains("contact") || inputNameLower.contains("query")
+        val isInstagramPkg = currentTypingPkg.contains("instagram", ignoreCase = true)
         val isTargetInSearchBar = targetRect?.let { r ->
             elementsForTyping.any { el ->
                 (el.bounds == r || el.bounds.contains(r.centerX(), r.centerY())) &&
-                (el.viewId.contains("search", ignoreCase = true) || el.primaryLabel.contains("search", ignoreCase = true))
+                (el.viewId.contains("search", ignoreCase = true) ||
+                    el.viewId.contains("action_bar_search_edit_text", ignoreCase = true) ||
+                    el.primaryLabel.contains("search", ignoreCase = true) ||
+                    el.primaryLabel.contains("ask meta ai", ignoreCase = true))
             }
         } ?: false
+        val hasRealInstagramDmComposer = elementsForTyping.any { el ->
+            val v = el.viewId.lowercase(Locale.ROOT)
+            val l = el.primaryLabel.lowercase(Locale.ROOT)
+            v.contains("row_thread_composer_edittext") || v.contains("thread_composer") ||
+                (el.isEditable && (l == "message..." || l == "message" || l.startsWith("message")))
+        }
+        val isInstagramDmIntent = isInstagramPkg && !explicitlyWantsSearch &&
+            (explicitlyWantsMessageComposer || goalLower.contains("dm") || goalLower.contains("message") || goalLower.contains("send") || submit)
 
-        if (isMessageGoal && (isSearchTarget || isTargetInSearchBar) && !inputNameLower.contains("message") && !inputNameLower.contains("composer")) {
-            Log.w(TAG, "Blocked injecting message into search bar! Target: '$targetInputName', Goal: '$goalLower'")
+        if ((explicitlyWantsMessageComposer && !explicitlyWantsSearch && isTargetInSearchBar) ||
+            (isInstagramDmIntent && (isTargetInSearchBar || !hasRealInstagramDmComposer))
+        ) {
+            Log.w(TAG, "Blocked injecting DM/message into Search bar! pkg='$currentTypingPkg', Target='$targetInputName', hasIgComposer=$hasRealInstagramDmComposer")
             return@withContext TaskActionResult(
                 success = false,
-                message = "FAILED: Screen is currently showing a Search bar ('$targetInputName'), not a chat thread. Cannot inject chat message into a search field. Please navigate to Direct Messages first.",
+                message = "FAILED: Screen is showing a Search bar rather than an open DM message composer (row_thread_composer_edittext). Refused to type message into Search. Open the contact's DM thread first.",
                 currentStateSummary = groundingEngine.formatElementsSummary(elementsForTyping, rootForTyping),
                 verified = false
             )
@@ -1409,7 +1544,8 @@ class VisualTaskOrchestrator(
     /**
      * Performs a directional scroll with loop guard.
      */
-    suspend fun handleScroll(direction: String, distance: String = "small"): TaskActionResult = withContext(Dispatchers.IO) {
+    // #17: Default scroll distance is "medium" (~65% screen height) instead of "small"
+    suspend fun handleScroll(direction: String, distance: String = "medium"): TaskActionResult = withContext(Dispatchers.IO) {
         AgentTaskEngine.setState(AgentTaskEngine.State.OBSERVING)
         val service = AutomationAccessibilityService.instance
         if (service == null) {
@@ -1430,13 +1566,22 @@ class VisualTaskOrchestrator(
         }
 
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
-        val preSignature = ScreenSignatureCalculator.computeSignature(service.getActiveRootNode())
-
         val rootNode = service.getActiveRootNode()
+        val preSignature = ScreenSignatureCalculator.computeSignature(rootNode)
+        val preElements = groundingEngine.scanScreen(rootNode)
+
         val pkg = rootNode?.packageName?.toString() ?: ""
         val isInstagramReels = pkg.contains("instagram", ignoreCase = true) &&
-                groundingEngine.scanScreen(rootNode).any { it.viewId.contains("clips") || it.viewId.contains("reel") }
+                preElements.any { it.viewId.contains("clips") || it.viewId.contains("reel") }
         val isShortVideoFeed = isInstagramReels || distance.lowercase(Locale.ROOT) == "reel"
+
+        // #15: Snapshot visible Reel handle/caption/audio metadata before swiping
+        val preReelMeta = if (isShortVideoFeed) {
+            preElements.mapNotNull { it.primaryLabel.trim().takeIf { lbl -> lbl.length >= 2 } }
+                .distinct()
+                .take(15)
+                .joinToString("|")
+        } else ""
 
         val success = if (isShortVideoFeed) {
             val upward = direction.lowercase(Locale.ROOT) != "up"
@@ -1446,15 +1591,20 @@ class VisualTaskOrchestrator(
         }
 
         if (isShortVideoFeed) {
-            delay(400)
+            delay(500)
             val rootAfterReel = service.getActiveRootNode()
             val postSignatureReel = ScreenSignatureCalculator.computeSignature(rootAfterReel)
-            val reelAdvanced = !postSignatureReel.isEquivalentTo(preSignature)
             val elementsAfterReel = groundingEngine.scanScreen(rootAfterReel)
+            val postReelMeta = elementsAfterReel.mapNotNull { it.primaryLabel.trim().takeIf { lbl -> lbl.length >= 2 } }
+                .distinct()
+                .take(15)
+                .joinToString("|")
+            val reelAdvanced = !postSignatureReel.isEquivalentTo(preSignature) ||
+                (preReelMeta.isNotBlank() && postReelMeta.isNotBlank() && preReelMeta != postReelMeta)
             return@withContext TaskActionResult(
                 success = success && reelAdvanced,
-                message = if (success && reelAdvanced) "Reel swipe succeeded (advanced to next reel)."
-                          else if (success) "FAILED: Reel swipe gesture dispatched but screen did not advance. Still showing same reel."
+                message = if (success && reelAdvanced) "Reel swipe succeeded and verified new Reel metadata."
+                          else if (success) "FAILED: Reel swipe gesture dispatched, but Reel metadata/screen did not change after 500ms. Still on the same Reel."
                           else "FAILED: Reel swipe gesture failed to dispatch.",
                 currentStateSummary = groundingEngine.formatElementsSummary(elementsAfterReel, rootAfterReel),
                 verified = success && reelAdvanced
@@ -1583,6 +1733,211 @@ class VisualTaskOrchestrator(
         val summary = screenSource + groundingEngine.formatElementsSummary(elements, root) + otpNotice
         Log.i(TAG, "Screen inspection generated:\n$summary")
         return@withContext summary
+    }
+
+    /**
+     * Waits up to [timeoutMs] for an app matching [appNameHint] to appear in the foreground window
+     * and returns its live accessibility screen summary.
+     */
+    suspend fun waitForAppInForeground(appNameHint: String, timeoutMs: Long = 3800L): Pair<String, String> = withContext(Dispatchers.IO) {
+        val service = AutomationAccessibilityService.instance
+            ?: return@withContext ("unknown" to "Accessibility Service is not running.")
+        val hintLower = appNameHint.lowercase(Locale.ROOT).trim()
+        val expectedToken = when {
+            hintLower.contains("whatsapp") -> "whatsapp"
+            hintLower.contains("instagram") || hintLower == "insta" -> "instagram"
+            hintLower.contains("youtube") || hintLower == "yt" -> "youtube"
+            hintLower.contains("telegram") -> "telegram"
+            hintLower.contains("chrome") -> "chrome"
+            hintLower.contains("phone") || hintLower.contains("dialer") -> "dialer"
+            else -> hintLower.split(" ").firstOrNull().orEmpty()
+        }
+        val start = System.currentTimeMillis()
+        var currentPkg = ""
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            val root = service.getActiveRootNode()
+            currentPkg = (root?.packageName?.toString() ?: service.foregroundPackage ?: "").lowercase(Locale.ROOT)
+            if (currentPkg.isNotBlank() && !currentPkg.contains("com.example.gemini") && !currentPkg.contains("com.aura.ai") && !currentPkg.contains("com.termux")) {
+                if (expectedToken.isBlank() || currentPkg.contains(expectedToken)) {
+                    delay(450) // Let initial UI controls settle
+                    break
+                }
+            }
+            delay(250)
+        }
+        val rootAfter = service.getActiveRootNode()
+        val finalPkg = rootAfter?.packageName?.toString() ?: service.foregroundPackage ?: "unknown"
+        val elements = if (rootAfter != null) groundingEngine.scanScreen(rootAfter) else emptyList()
+        val summary = if (rootAfter != null) groundingEngine.formatElementsSummary(elements, rootAfter) else "Screen loading..."
+        finalPkg to summary
+    }
+
+    /**
+     * In-App UI Search & Send fallback for WhatsApp when a contact/group is not in Android phone contacts
+     * (or Contacts permission is missing).
+     * Flow:
+     * 1. Launch WhatsApp and wait for foreground UI.
+     * 2. Tap Search icon/bar and directly inject [recipientName].
+     * 3. Locate and tap the matching contact/chat row from search results.
+     * 4. Directly inject [message] into the chat message composer and trigger verified Send.
+     */
+    suspend fun runWhatsAppInAppSearchAndSend(
+        context: android.content.Context,
+        recipientName: String,
+        message: String,
+        appNumber: Int? = null
+    ): TaskActionResult = withContext(Dispatchers.IO) {
+        val service = AutomationAccessibilityService.instance
+            ?: return@withContext TaskActionResult(false, "Accessibility Service is not running.")
+
+        val launched = com.example.gemini.data.automation.AppLauncher.launchApp(context, "WhatsApp", appNumber)
+        if (!launched) {
+            return@withContext TaskActionResult(false, "Could not launch WhatsApp on this device.")
+        }
+
+        waitForAppInForeground("whatsapp", timeoutMs = 4200L)
+
+        // If we are inside an existing chat thread, press Back to reach the main WhatsApp chats/search screen
+        for (backAttempt in 0..1) {
+            val root = service.getActiveRootNode()
+            val elems = if (root != null) groundingEngine.scanScreen(root) else emptyList()
+            val hasSearchControl = elems.any {
+                it.primaryLabel.contains("search", ignoreCase = true) ||
+                it.contentDescription.contains("search", ignoreCase = true) ||
+                it.viewId.contains("search", ignoreCase = true)
+            }
+            val hasNavigateUp = elems.any {
+                it.contentDescription.equals("Navigate up", ignoreCase = true) ||
+                it.contentDescription.equals("Back", ignoreCase = true)
+            }
+            if (!hasSearchControl && hasNavigateUp) {
+                service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                delay(450)
+            } else {
+                break
+            }
+        }
+
+        // Step 1: Open Search bar if not already editable
+        var rootNow = service.getActiveRootNode()
+        var elemsNow = if (rootNow != null) groundingEngine.scanScreen(rootNow) else emptyList()
+        val hasEditableSearch = elemsNow.any {
+            it.isEditable && (it.primaryLabel.contains("search", ignoreCase = true) || it.viewId.contains("search", ignoreCase = true))
+        }
+        if (!hasEditableSearch) {
+            val searchBtn = elemsNow.firstOrNull {
+                it.contentDescription.contains("search", ignoreCase = true) ||
+                it.primaryLabel.contains("search", ignoreCase = true) ||
+                it.viewId.contains("menuitem_search", ignoreCase = true) ||
+                it.viewId.contains("search", ignoreCase = true)
+            }
+            if (searchBtn != null) {
+                service.performClickAtRect(searchBtn.bounds)
+                delay(550)
+            }
+        }
+
+        // Step 2: Directly inject recipientName into the Search field
+        val searchTypeRes = handleType(
+            text = recipientName,
+            targetInputName = "Search",
+            submit = false,
+            clearExisting = true
+        )
+        if (!searchTypeRes.success) {
+            return@withContext TaskActionResult(
+                success = false,
+                message = "Opened WhatsApp, but could not type '$recipientName' into the search bar.",
+                currentStateSummary = captureCurrentStateSummary(service),
+                verified = false
+            )
+        }
+
+        delay(850) // Allow WhatsApp search results list to populate
+
+        // Step 3: Find matching contact row below the search bar
+        rootNow = service.getActiveRootNode()
+        elemsNow = if (rootNow != null) groundingEngine.scanScreen(rootNow) else emptyList()
+        val queryLower = recipientName.lowercase(Locale.ROOT).trim()
+        val queryTokens = queryLower.split(Regex("\\s+")).filter { it.isNotBlank() }
+
+        val screenW = service.resources.displayMetrics.widthPixels.toFloat().coerceAtLeast(1f)
+        val nonAvatarCandidates = elemsNow.filter { el ->
+            val vId = el.viewId.lowercase(Locale.ROOT)
+            val desc = el.contentDescription.lowercase(Locale.ROOT)
+            !el.isEditable &&
+            el.bounds.top > 220 &&
+            !vId.contains("search_src_text") &&
+            !vId.contains("search_input") &&
+            !vId.contains("contact_photo") &&
+            !vId.contains("avatar") &&
+            !vId.contains("profile_pic") &&
+            !vId.contains("conversations_row_contact_photo") &&
+            !desc.contains("profile photo") &&
+            !desc.contains("profile picture") &&
+            !(el.bounds.right < screenW * 0.24f && el.bounds.width() < screenW * 0.25f)
+        }
+        val candidateRow = nonAvatarCandidates.firstOrNull { el ->
+            (el.viewId.contains("conversations_row_contact_name", ignoreCase = true) ||
+                el.viewId.contains("contactpicker_row_name", ignoreCase = true)) &&
+                el.primaryLabel.lowercase(Locale.ROOT).let { lbl ->
+                    lbl.contains(queryLower) || (queryTokens.isNotEmpty() && queryTokens.all { lbl.contains(it) })
+                }
+        } ?: nonAvatarCandidates.firstOrNull { el ->
+            val label = "${el.primaryLabel} ${el.text} ${el.contentDescription}".lowercase(Locale.ROOT)
+            label.contains(queryLower) || (queryTokens.isNotEmpty() && queryTokens.all { label.contains(it) })
+        }
+
+        if (candidateRow == null) {
+            return@withContext TaskActionResult(
+                success = false,
+                message = "Searched for '$recipientName' in WhatsApp, but no matching contact or chat was found on screen.",
+                currentStateSummary = groundingEngine.formatElementsSummary(elemsNow, rootNow),
+                verified = false
+            )
+        }
+
+        // #18: Tap strictly on the right-center of the row (>= 30% screen width) to avoid circular profile avatar popup
+        val tapX = (candidateRow.bounds.left + candidateRow.bounds.width() * 0.62f)
+            .coerceAtLeast(screenW * 0.30f)
+            .coerceAtMost(screenW * 0.85f)
+        val tapY = candidateRow.bounds.exactCenterY()
+        service.clickAt(tapX, tapY, 80L)
+        delay(450)
+
+        // #18: Verify message composer is visible; if Profile/Info popup opened instead, press BACK, wait 350ms, and retry once
+        val postTapElems = groundingEngine.scanScreen(service.getActiveRootNode())
+        val composerVisible = postTapElems.any { el ->
+            val v = el.viewId.lowercase(Locale.ROOT)
+            val l = el.primaryLabel.lowercase(Locale.ROOT)
+            v.contains("entry") || v.contains("composer") || (el.isEditable && l.contains("message"))
+        }
+        if (!composerVisible) {
+            Log.w(TAG, "WhatsApp chat composer not visible after row tap (profile popup may have opened); pressing BACK and retrying right-center tap once...")
+            service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            delay(350)
+            service.clickAt((screenW * 0.60f), tapY, 80L)
+            delay(500)
+        } else {
+            delay(350)
+        }
+
+        // Step 4: Verify chat composer is open and directly inject the message
+        val msgTypeRes = handleType(
+            text = message,
+            targetInputName = "Message",
+            submit = true,
+            clearExisting = false
+        )
+
+        val sentVerified = service.awaitWhatsAppAutoSend(timeoutMs = 3500L) || msgTypeRes.success
+        return@withContext TaskActionResult(
+            success = sentVerified,
+            message = if (sentVerified) "Found '$recipientName' inside WhatsApp and sent message: \"$message\"."
+                      else "Opened chat with '$recipientName', but could not verify message send.",
+            currentStateSummary = captureCurrentStateSummary(service),
+            verified = sentVerified
+        )
     }
 
     private fun captureCurrentStateSummary(service: AutomationAccessibilityService): String {

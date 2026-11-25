@@ -320,6 +320,7 @@ class MainActivity : ComponentActivity() {
                                 ) {
                                     ChatScreen(
                                         viewModel = chatViewModel,
+                                        isScreenVisible = currentViewMode == AppViewMode.CHAT,
                                         onNavigateToIde = {
                                             previousViewMode = currentViewMode
                                             currentViewMode = AppViewMode.IDE

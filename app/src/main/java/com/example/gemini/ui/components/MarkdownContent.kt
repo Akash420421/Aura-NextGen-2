@@ -1365,19 +1365,27 @@ fun AgentErrorCard(
     onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val isStoppedByUser = error.title.contains("stopped", ignoreCase = true) ||
+    val isStoppedByUser = listOf(error.title, error.userMessage, error.shortError, error.fullError, error.rawJson).any { field ->
+        field.contains("stopped by user", ignoreCase = true) ||
+            field.contains("generation stopped", ignoreCase = true) ||
+            field.contains("user cancelled", ignoreCase = true) ||
+            field.contains("user canceled", ignoreCase = true) ||
+            field.contains("cancelled by user", ignoreCase = true) ||
+            field.contains("canceled by user", ignoreCase = true) ||
+            field.contains("CORTEX_STEP_STATUS_CANCELLED", ignoreCase = true) ||
+            field.contains("context canceled", ignoreCase = true) ||
+            field.contains("aborted by user", ignoreCase = true)
+    } || error.title.contains("stopped", ignoreCase = true) ||
         error.title.contains("cancel", ignoreCase = true) ||
-        error.userMessage.contains("stopped by user", ignoreCase = true) ||
-        error.userMessage.contains("cancelled", ignoreCase = true) ||
         error.shortError.contains("cancel", ignoreCase = true)
 
     if (isStoppedByUser) {
         Surface(
             modifier = modifier
                 .padding(vertical = 4.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
@@ -1387,11 +1395,11 @@ fun AgentErrorCard(
                     imageVector = Icons.Outlined.StopCircle,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(14.dp)
+                    modifier = Modifier.size(13.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Generation stopped",
+                    text = "Stopped",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

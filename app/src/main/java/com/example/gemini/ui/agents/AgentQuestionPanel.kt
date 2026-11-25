@@ -125,29 +125,49 @@ fun AgentQuestionPanel(
     }
 
     val configuration = LocalConfiguration.current
-    val maxScrollHeight = (configuration.screenHeightDp * 0.55f).coerceIn(240f, 420f).dp
+    val maxSheetHeight = (configuration.screenHeightDp * 0.65f).coerceAtLeast(260f).dp
+    val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
             .navigationBarsPadding()
-            .imePadding(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, accent.copy(alpha = 0.38f)),
-        shadowElevation = 6.dp
+            .imePadding()
+            .heightIn(max = maxSheetHeight),
+        shape = sheetShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 10.dp
     ) {
-        Column(Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 10.dp)) {
-            // header
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 14.dp)
+        ) {
+            // header (pinned)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(accent.copy(alpha = 0.14f)),
+                    Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.14f)),
                     contentAlignment = Alignment.Center
-                ) { Icon(Icons.AutoMirrored.Outlined.HelpOutline, null, tint = accent, modifier = Modifier.size(19.dp)) }
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.HelpOutline,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("${question.agent.label()} has ${if (questions.size > 1) "${questions.size} questions" else "a question"}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "${question.agent.label()} has ${if (questions.size > 1) "${questions.size} questions" else "a question"}",
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                     if (questions.size > 1) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 3.dp)) {
                             questions.forEachIndexed { i, q ->
@@ -166,102 +186,149 @@ fun AgentQuestionPanel(
                                 )
                             }
                             Spacer(Modifier.width(4.dp))
-                            Text("${page + 1} of ${questions.size}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
+                            Text(
+                                "${page + 1} of ${questions.size}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
-                IconButton(onClick = onCancel, modifier = Modifier.size(30.dp)) {
-                    Icon(Icons.Outlined.Close, "Dismiss question", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
+                IconButton(
+                    onClick = onCancel,
+                    modifier = Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.Close,
+                        contentDescription = "Dismiss question",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
 
             Spacer(Modifier.height(10.dp))
-            AnimatedContent(
-                targetState = page,
-                transitionSpec = {
-                    val forward = targetState > initialState
-                    (slideInHorizontally { if (forward) it / 3 else -it / 3 } + fadeIn()) togetherWith
-                        (slideOutHorizontally { if (forward) -it / 3 else it / 3 } + fadeOut())
-                },
-                label = "question_page"
-            ) { index ->
-                val q = questions[index.coerceIn(0, questions.lastIndex)]
-                Column(Modifier.heightIn(max = maxScrollHeight).verticalScroll(rememberScrollState())) {
-                    q.description?.takeIf { it.isNotBlank() }?.let { d ->
-                        if (d.length <= 28) {
+
+            // scrollable options body (constrained by sheet heightIn so 3rd/4th+ options never clip)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+            ) {
+                AnimatedContent(
+                    targetState = page,
+                    transitionSpec = {
+                        val forward = targetState > initialState
+                        (slideInHorizontally { if (forward) it / 3 else -it / 3 } + fadeIn()) togetherWith
+                            (slideOutHorizontally { if (forward) -it / 3 else it / 3 } + fadeOut())
+                    },
+                    label = "question_page"
+                ) { index ->
+                    val q = questions[index.coerceIn(0, questions.lastIndex)]
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(bottom = 4.dp)
+                    ) {
+                        q.description?.takeIf { it.isNotBlank() }?.let { d ->
+                            if (d.length <= 28) {
+                                Text(
+                                    d.uppercase(),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.8.sp,
+                                    color = accent,
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            q.prompt,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 21.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        q.description?.takeIf { it.length > 28 }?.let {
                             Text(
-                                d.uppercase(),
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.8.sp,
-                                color = accent,
-                                modifier = Modifier.padding(bottom = 4.dp)
+                                it,
+                                fontSize = 12.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 3.dp)
                             )
                         }
-                    }
-                    Text(q.prompt, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp)
-                    q.description?.takeIf { it.length > 28 }?.let {
-                        Text(it, fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), modifier = Modifier.padding(top = 2.dp))
-                    }
-                    Text(
-                        if (q.isMultiSelect) "Choose any" else "Choose one",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        q.options.forEach { opt ->
-                            val isOn = opt.id in selected[q.id].orEmpty()
-                            OptionCard(opt.label, opt.description, isOn, q.isMultiSelect, accent) {
-                                val cur = selected[q.id].orEmpty()
-                                if (q.isMultiSelect) {
-                                    selected[q.id] = if (isOn) cur - opt.id else cur + opt.id
-                                } else {
-                                    selected[q.id] = if (isOn) emptySet() else setOf(opt.id)
-                                    otherOn[q.id] = false
+                        Text(
+                            if (q.isMultiSelect) "Choose any" else "Choose one",
+                            fontSize = 11.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            q.options.forEach { opt ->
+                                val isOn = opt.id in selected[q.id].orEmpty()
+                                OptionCard(opt.label, opt.description, isOn, q.isMultiSelect, accent) {
+                                    val cur = selected[q.id].orEmpty()
+                                    if (q.isMultiSelect) {
+                                        selected[q.id] = if (isOn) cur - opt.id else cur + opt.id
+                                    } else {
+                                        selected[q.id] = if (isOn) emptySet() else setOf(opt.id)
+                                        otherOn[q.id] = false
+                                    }
                                 }
                             }
-                        }
-                        if (q.allowCustomAnswer) {
-                            val isOn = otherOn[q.id] == true
-                            OptionCard("Other…", null, isOn, q.isMultiSelect, accent) {
-                                otherOn[q.id] = !isOn
-                                if (!q.isMultiSelect && !isOn) selected[q.id] = emptySet()
-                            }
-                            AnimatedVisibility(isOn, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-                                OutlinedTextField(
-                                    value = otherText[q.id].orEmpty(),
-                                    onValueChange = { otherText[q.id] = it },
-                                    placeholder = { Text("Your answer", fontSize = 13.sp) },
-                                    shape = RoundedCornerShape(12.dp),
-                                    textStyle = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    maxLines = 4
-                                )
+                            if (q.allowCustomAnswer) {
+                                val isOn = otherOn[q.id] == true
+                                OptionCard("Other…", null, isOn, q.isMultiSelect, accent) {
+                                    otherOn[q.id] = !isOn
+                                    if (!q.isMultiSelect && !isOn) selected[q.id] = emptySet()
+                                }
+                                AnimatedVisibility(
+                                    isOn,
+                                    enter = expandVertically() + fadeIn(),
+                                    exit = shrinkVertically() + fadeOut()
+                                ) {
+                                    OutlinedTextField(
+                                        value = otherText[q.id].orEmpty(),
+                                        onValueChange = { otherText[q.id] = it },
+                                        placeholder = { Text("Your answer", fontSize = 13.sp) },
+                                        shape = RoundedCornerShape(12.dp),
+                                        textStyle = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        maxLines = 4
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // footer
-            Spacer(Modifier.height(8.dp))
+            // pinned footer with 48dp minimum touch targets
+            Spacer(Modifier.height(10.dp))
             val isLast = page >= questions.lastIndex
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 TextButton(
                     onClick = { onSkip(responses(skipAll = true)) },
                     modifier = Modifier.defaultMinSize(minWidth = 64.dp, minHeight = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
                 ) {
-                    Text(if (questions.size > 1) "Skip all" else "Skip", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Text(
+                        if (questions.size > 1) "Skip all" else "Skip",
+                        fontSize = 13.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Spacer(Modifier.weight(1f))
                 if (page > 0) {
                     TextButton(
                         onClick = { page-- },
                         modifier = Modifier.defaultMinSize(minWidth = 64.dp, minHeight = 48.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
-                    ) { Text("Back", fontSize = 13.sp) }
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+                    ) { Text("Back", fontSize = 13.5.sp) }
                     Spacer(Modifier.width(4.dp))
                 }
                 val canSubmit = questions.any { answered(it) }
@@ -276,15 +343,15 @@ fun AgentQuestionPanel(
                     enabled = !isLast || canSubmit,
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color.White),
-                    modifier = Modifier.defaultMinSize(minWidth = 88.dp, minHeight = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp)
+                    modifier = Modifier.defaultMinSize(minWidth = 96.dp, minHeight = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
                 ) {
                     Text(
                         when {
                             !isLast -> if (answered(current)) "Next" else "Skip question"
                             else -> "Submit"
                         },
-                        fontSize = 13.sp,
+                        fontSize = 13.5.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }

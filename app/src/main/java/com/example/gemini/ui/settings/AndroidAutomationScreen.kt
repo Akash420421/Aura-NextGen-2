@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gemini.data.adb.AdbConnectManager
 import com.example.gemini.data.automation.AndroidAutomation
+import com.example.gemini.data.automation.AutomationAccessibilityService
 import com.example.gemini.theme.QuotaGreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -40,17 +41,19 @@ fun AndroidAutomationScreen(cardBg: Color, cardBorder: BorderStroke, onOpenAdbCo
     LaunchedEffect(Unit) { AdbConnectManager.init(context); AdbConnectManager.refresh() }
     val adb by AdbConnectManager.state.collectAsState()
 
-    var running by remember { mutableStateOf(AndroidAutomation.isServiceRunning()) }
+    val serviceConnected by AutomationAccessibilityService.isConnected.collectAsState()
+    val activePkg by AutomationAccessibilityService.activePackage.collectAsState()
+    val running = serviceConnected || AndroidAutomation.isServiceRunning()
     var enabledInSettings by remember { mutableStateOf(AndroidAutomation.isServiceEnabledInSettings(context)) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(running) {
         while (true) {
-            running = AndroidAutomation.isServiceRunning()
             enabledInSettings = AndroidAutomation.isServiceEnabledInSettings(context)
-            delay(1000)
+            delay(1500)
         }
     }
     var enablingViaAdb by remember { mutableStateOf(false) }
     var adbError by remember { mutableStateOf<String?>(null) }
+    var screenPreview by remember { mutableStateOf<String?>(null) }
     val adbDevice = adb.connectedDevice
 
     Column(
@@ -90,7 +93,7 @@ fun AndroidAutomationScreen(cardBg: Color, cardBorder: BorderStroke, onOpenAdbCo
 
         // 1. Accessibility service (required)
         StepCard(1, "Accessibility service", if (running) "Allowed" else "Required", cardBg, cardBorder, badgeColor = if (running) QuotaGreen else Amber) {
-            Hint("Reads the screen, taps, swipes, types and takes screenshots. In Accessibility settings, open \"AntiGem Android Automation\" (it may be under Installed apps or Downloaded apps) and turn it on.")
+            Hint("Reads the screen, taps, swipes, pinches, drags, types, observes notifications and takes screenshots. In Accessibility settings, open \"AntiGem Android Automation\" (it may be under Installed apps or Downloaded apps) and turn it on.")
             CheckRow("AntiGem Android Automation", running)
             if (!running) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -124,7 +127,43 @@ fun AndroidAutomationScreen(cardBg: Color, cardBorder: BorderStroke, onOpenAdbCo
                     }
                 }
             } else {
-                OutlinedButton(onClick = { AndroidAutomation.openAccessibilitySettings(context) }) { Text("Turn off in Accessibility") }
+                activePkg?.let { pkg ->
+                    Text(
+                        "Active window: $pkg",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.5.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { AndroidAutomation.openAccessibilitySettings(context) }) { Text("Turn off in Accessibility") }
+                    FilledTonalButton(onClick = {
+                        val snap = AutomationAccessibilityService.instance?.readScreenContent(includeAllWindows = true, maxBlocks = 30)
+                        screenPreview = snap?.toFormattedString() ?: "Accessibility service returned no active window."
+                    }) { Text("Test screen read") }
+                }
+                screenPreview?.let { preview ->
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Live Screen Read Preview", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                TextButton(contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp), onClick = { screenPreview = null }) {
+                                    Text("Hide", fontSize = 11.5.sp)
+                                }
+                            }
+                            Text(
+                                preview.take(900),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.5.sp,
+                                lineHeight = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
             }
         }
 

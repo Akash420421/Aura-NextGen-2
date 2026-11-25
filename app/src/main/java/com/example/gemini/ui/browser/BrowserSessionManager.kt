@@ -718,6 +718,37 @@ class BrowserSessionManager private constructor() {
     }
 
     /**
+     * Cleanly closes/dismisses the active In-Built Browser view:
+     * pauses any playing HTML5 audio/video elements, stops page loading, cancels pending dialogs,
+     * exits fullscreen custom views, and pauses WebView timers without closing Aura itself.
+     */
+    fun closeActiveAndStopMedia() {
+        mainHandler.post {
+            try {
+                hideCustomView()
+                tabs.forEach { tab ->
+                    tab.pendingDialog?.answer(false)
+                    tab.pendingDialog = null
+                    tab.stopLoading(mainHandler)
+                    tab.isOnScreen = false
+                    tab.webView?.let { wv ->
+                        runCatching {
+                            wv.evaluateJavascript(
+                                "(function(){try{document.querySelectorAll('video,audio').forEach(function(m){m.pause();});}catch(e){}})();",
+                                null
+                            )
+                        }
+                        runCatching { wv.stopLoading() }
+                        runCatching { wv.onPause() }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "closeActiveAndStopMedia encountered error: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Wipes everything a site could use to recognise this browser again: cookies, local/session
      * storage, IndexedDB, service workers, HTTP cache, saved HTTP auth, site permissions, tabs and
      * typed history. Speed-dial shortcuts are kept. Ends with one fresh, empty tab.

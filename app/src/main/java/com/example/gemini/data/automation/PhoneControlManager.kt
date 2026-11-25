@@ -214,8 +214,13 @@ class PhoneControlManager(private val context: Context) {
             return Result.failure(IllegalArgumentException("Phone number cannot be empty."))
         }
 
-        val action = if (autoCall) Intent.ACTION_CALL else Intent.ACTION_DIAL
-        val intent = Intent(action, Uri.parse("tel:$cleanNumber")).apply {
+        val hasCallPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.CALL_PHONE
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val action = if (autoCall && hasCallPerm) Intent.ACTION_CALL else Intent.ACTION_DIAL
+        val telUri = Uri.parse("tel:${Uri.encode(cleanNumber)}")
+        val intent = Intent(action, telUri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
@@ -224,7 +229,7 @@ class PhoneControlManager(private val context: Context) {
             if (launched) {
                 Result.success(cleanNumber)
             } else {
-                val fallback = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleanNumber")).apply {
+                val fallback = Intent(Intent.ACTION_DIAL, telUri).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 if (ActivityLauncherHelper.startActivitySafely(context, fallback)) {

@@ -870,13 +870,20 @@ class TrajectoryEngine {
             val code = stepError?.error_code
             val errId = stepError?.error_id ?: ""
 
-            val isStoppedByUser = shortErr.contains("cancel", ignoreCase = true) ||
+            val isStoppedByUser = step.status == CortexStepStatus.CORTEX_STEP_STATUS_CANCELED ||
+                shortErr.contains("cancel", ignoreCase = true) ||
+                shortErr.contains("stopped", ignoreCase = true) ||
+                shortErr.contains("abort", ignoreCase = true) ||
                 userMsg.contains("cancel", ignoreCase = true) ||
                 userMsg.contains("stopped by user", ignoreCase = true) ||
-                userMsg.contains("generation stopped", ignoreCase = true)
+                userMsg.contains("generation stopped", ignoreCase = true) ||
+                fullErr.contains("stopped by user", ignoreCase = true) ||
+                fullErr.contains("context canceled", ignoreCase = true) ||
+                fullErr.contains("CORTEX_STEP_STATUS_CANCELED", ignoreCase = true) ||
+                fullErr.contains("CORTEX_STEP_STATUS_CANCELLED", ignoreCase = true)
 
             val title = when {
-                isStoppedByUser -> "Generation stopped"
+                isStoppedByUser -> "Stopped"
                 shortErr.contains("auth", ignoreCase = true) || userMsg.contains("auth", ignoreCase = true) -> "Authentication Required"
                 shortErr.contains("quota", ignoreCase = true) || shortErr.contains("credit", ignoreCase = true) || code == 429 -> "Quota / Usage Limit Exceeded"
                 shortErr.contains("model not found", ignoreCase = true) || shortErr.contains("unknown model", ignoreCase = true) -> "Model Configuration Error"

@@ -144,7 +144,8 @@ fun ChatScreen(
     onNavigateToBrowser: () -> Unit = {},
     // null where that screen doesn't exist (the floating chat window): its header icon is then hidden
     onNavigateToNotes: (() -> Unit)? = null,
-    onNavigateToFiles: (() -> Unit)? = null
+    onNavigateToFiles: (() -> Unit)? = null,
+    isScreenVisible: Boolean = true
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
@@ -328,6 +329,15 @@ fun ChatScreen(
                 }
             }
             com.example.gemini.data.live.ChatContextBridge.requestSwitchToChatTab.value = false
+        }
+    }
+    val requestCloseDrawer by com.example.gemini.data.live.ChatContextBridge.requestCloseDrawer.collectAsState()
+    LaunchedEffect(requestCloseDrawer) {
+        if (requestCloseDrawer) {
+            if (drawerState.isOpen || drawerState.targetValue == DrawerValue.Open) {
+                drawerState.close()
+            }
+            com.example.gemini.data.live.ChatContextBridge.requestCloseDrawer.value = false
         }
     }
     // The clean Aura UI is permanent across all conversations.
@@ -2098,6 +2108,12 @@ fun ChatScreen(
             containerColor = MaterialTheme.colorScheme.background,
             contentWindowInsets = if (isAuraHome) WindowInsets(0, 0, 0, 0) else WindowInsets.statusBars
         ) { paddingValues ->
+            val pendingQuestion = remember(messages, isClaudeChat, isOpenCodeChat, isCodexChat) {
+                com.example.gemini.ui.agents.findPendingQuestion(
+                    currentConv?.agent ?: com.example.gemini.domain.model.AgentKind.AGY,
+                    messages
+                )
+            }
             val chatFeedContent = @Composable { contentModifier: Modifier ->
                 Box(
                     modifier = contentModifier
@@ -2133,7 +2149,11 @@ fun ChatScreen(
                                 userName = agyAuthInfo.displayName,
                                 isPaused = isVoicePaused,
                                 onActionTap = onActionTapAuraJarvis,
-                                onActionDoubleTap = onActionDoubleTapAuraJarvis
+                                onActionDoubleTap = onActionDoubleTapAuraJarvis,
+                                modifier = Modifier
+                                    .statusBarsPadding()
+                                    .navigationBarsPadding()
+                                    .padding(top = 56.dp, bottom = 96.dp)
                             )
                         }
                     }
@@ -2433,10 +2453,10 @@ fun ChatScreen(
                                     contentPadding = if (isAuraHome) {
                                         PaddingValues(
                                             top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 58.dp,
-                                            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 130.dp + WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+                                            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 132.dp + WindowInsets.ime.asPaddingValues().calculateBottomPadding()
                                         )
                                     } else {
-                                        PaddingValues(top = 12.dp, bottom = 16.dp)
+                                        PaddingValues(top = 12.dp, bottom = 56.dp)
                                     }
                                 ) {
                                     items(
@@ -2741,11 +2761,29 @@ fun ChatScreen(
                     }
                 }
 
-                // Floating "Scroll to latest message" button anchored strictly inside Chat feed container
-                val isChatMode = !auraHomeVoice
-                val showScrollToBottom by remember {
+                // Floating "Scroll to latest message" button scoped strictly inside active Chat LazyColumn
+                val showScrollToBottom by remember(
+                    listState,
+                    isScreenVisible,
+                    auraHomeVoice,
+                    visibleMessages.size,
+                    feedItems.size,
+                    isDrawerOpen,
+                    showCustomizeScreen,
+                    showImagesGalleryScreen,
+                    pendingQuestion
+                ) {
                     derivedStateOf {
-                        isChatMode && feedItems.isNotEmpty() && !isAtBottom && !isDrawerOpen && !showCustomizeScreen && !showImagesGalleryScreen
+                        isScreenVisible &&
+                            !auraHomeVoice &&
+                            visibleMessages.isNotEmpty() &&
+                            feedItems.isNotEmpty() &&
+                            listState.canScrollForward &&
+                            !isAtBottom &&
+                            !isDrawerOpen &&
+                            !showCustomizeScreen &&
+                            !showImagesGalleryScreen &&
+                            pendingQuestion == null
                     }
                 }
 
@@ -2758,9 +2796,9 @@ fun ChatScreen(
                         .padding(
                             end = 16.dp,
                             bottom = if (isAuraHome) {
-                                WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 96.dp
+                                WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 92.dp
                             } else {
-                                16.dp
+                                14.dp
                             }
                         )
                 ) {
@@ -2982,26 +3020,7 @@ fun ChatScreen(
                     )
                 }
 
-                val pendingQuestion = remember(messages, isClaudeChat, isOpenCodeChat, isCodexChat) {
-                    com.example.gemini.ui.agents.findPendingQuestion(
-                        currentConv?.agent ?: com.example.gemini.domain.model.AgentKind.AGY,
-                        messages
-                    )
-                }
-                AnimatedVisibility(
-                    visible = pendingQuestion != null && approvalItems.isEmpty(),
-                    enter = slideInVertically { it } + fadeIn(),
-                    exit = slideOutVertically { it } + fadeOut()
-                ) {
-                    pendingQuestion?.let { q ->
-                        com.example.gemini.ui.agents.AgentQuestionPanel(
-                            question = q,
-                            onSubmit = { responses, summary -> viewModel.submitUserChoices(q.toolCall, q.messageId, responses, summary) },
-                            onSkip = { responses -> viewModel.skipUserChoices(q.toolCall, q.messageId, responses) },
-                            onCancel = { viewModel.cancelUserChoices(q.toolCall, q.messageId) }
-                        )
-                    }
-                }
+                // Question panel is anchored cleanly at Alignment.BottomCenter of the screen container below.
 
                 // Claude Code chat: status notice (the empty chat shows the full prompt instead) and chat controls
                 if (isClaudeChat) {
@@ -3167,6 +3186,7 @@ fun ChatScreen(
                     )
                 }
 
+                val showQuestionSheet = pendingQuestion != null && !auraHomeVoice
                 if (isAuraHome) {
                     if (auraHomeVoice) {
                         com.example.gemini.ui.home.AuraVoiceActions(
@@ -3189,10 +3209,10 @@ fun ChatScreen(
                             },
                             onToggleAuto = { com.example.gemini.data.jarvis.JarvisPreferences.autoSend.set(!auraAutoSend) }
                         )
-                    } else {
+                    } else if (!showQuestionSheet) {
                         chatInputBarComposable()
                     }
-                } else {
+                } else if (!showQuestionSheet) {
                     chatInputBarComposable()
                 }
             }
@@ -3289,12 +3309,14 @@ fun ChatScreen(
                         }
                     }
 
-                    // LAYER 3: Floating Bottom Input Overlay with Full-Width Translucent Gradient & Edge-to-Edge Scroll Pass-Through
+                    // LAYER 3: Floating Bottom Input / Voice Control Overlay
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .align(Alignment.BottomCenter)
-                            .windowInsetsPadding(WindowInsets.imeAnimationTarget)
+                            .then(
+                                if (auraHomeVoice) Modifier else Modifier.windowInsetsPadding(WindowInsets.imeAnimationTarget)
+                            )
                     ) {
                         // Soft, semi-transparent gradient extending all the way to the bottom edge behind navigation bar
                         Box(
@@ -3312,27 +3334,61 @@ fun ChatScreen(
                                 )
                         )
 
-                        // Floating bottom composer and buttons padded to float cleanly above system navigation bar
+                        // Floating bottom composer and buttons padded once above system navigation bar
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .navigationBarsPadding()
-                                .padding(bottom = 6.dp)
+                                .padding(bottom = if (auraHomeVoice) 0.dp else 6.dp)
                         ) {
                             chatBottomSection()
                         }
                     }
+
+                    // LAYER 4: Bottom-Docked Question Sheet (keyboard-aware & scrollable, never floating mid-screen)
+                    AnimatedVisibility(
+                        visible = pendingQuestion != null && !auraHomeVoice,
+                        enter = slideInVertically { it } + fadeIn(),
+                        exit = slideOutVertically { it } + fadeOut(),
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    ) {
+                        pendingQuestion?.let { q ->
+                            com.example.gemini.ui.agents.AgentQuestionPanel(
+                                question = q,
+                                onSubmit = { responses, summary -> viewModel.submitUserChoices(q.toolCall, q.messageId, responses, summary) },
+                                onSkip = { responses -> viewModel.skipUserChoices(q.toolCall, q.messageId, responses) },
+                                onCancel = { viewModel.cancelUserChoices(q.toolCall, q.messageId) }
+                            )
+                        }
+                    }
                 }
             } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-                        .navigationBarsPadding()
-                        .windowInsetsPadding(WindowInsets.imeAnimationTarget)
-                ) {
-                    chatFeedContent(Modifier.weight(1f).fillMaxWidth())
-                    chatBottomSection()
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(paddingValues)
+                            .navigationBarsPadding()
+                            .windowInsetsPadding(WindowInsets.imeAnimationTarget)
+                    ) {
+                        chatFeedContent(Modifier.weight(1f).fillMaxWidth())
+                        chatBottomSection()
+                    }
+                    AnimatedVisibility(
+                        visible = pendingQuestion != null && !auraHomeVoice,
+                        enter = slideInVertically { it } + fadeIn(),
+                        exit = slideOutVertically { it } + fadeOut(),
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    ) {
+                        pendingQuestion?.let { q ->
+                            com.example.gemini.ui.agents.AgentQuestionPanel(
+                                question = q,
+                                onSubmit = { responses, summary -> viewModel.submitUserChoices(q.toolCall, q.messageId, responses, summary) },
+                                onSkip = { responses -> viewModel.skipUserChoices(q.toolCall, q.messageId, responses) },
+                                onCancel = { viewModel.cancelUserChoices(q.toolCall, q.messageId) }
+                            )
+                        }
+                    }
                 }
             }
         }

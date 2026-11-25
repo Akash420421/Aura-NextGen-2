@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.example.gemini.data.automation.AndroidAutomation
 import com.example.gemini.data.automation.AutomationAccessibilityService
 import com.example.gemini.theme.AppColors
 
@@ -50,8 +51,10 @@ fun SystemAuthorizationsScreen(
     var hasMic by remember { mutableStateOf(hasPerm(context, Manifest.permission.RECORD_AUDIO)) }
     var hasLoc by remember { mutableStateOf(hasPerm(context, Manifest.permission.ACCESS_FINE_LOCATION) || hasPerm(context, Manifest.permission.ACCESS_COARSE_LOCATION)) }
     var hasNotif by remember { mutableStateOf(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) hasPerm(context, Manifest.permission.POST_NOTIFICATIONS) else true) }
+    val isA11yConnected by AutomationAccessibilityService.isConnected.collectAsState()
     var hasOverlay by remember { mutableStateOf(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(context) else true) }
-    var hasA11y by remember { mutableStateOf(AutomationAccessibilityService.instance != null || isA11yEnabled(context)) }
+    var hasA11ySetting by remember { mutableStateOf(AndroidAutomation.isServiceEnabledInSettings(context)) }
+    val hasA11y = isA11yConnected || AutomationAccessibilityService.instance != null || hasA11ySetting
     var hasContacts by remember { mutableStateOf(hasPerm(context, Manifest.permission.READ_CONTACTS)) }
     var hasPhone by remember { mutableStateOf(hasPerm(context, Manifest.permission.CALL_PHONE)) }
     var hasCamera by remember { mutableStateOf(hasPerm(context, Manifest.permission.CAMERA)) }
@@ -65,7 +68,7 @@ fun SystemAuthorizationsScreen(
         hasLoc = hasPerm(context, Manifest.permission.ACCESS_FINE_LOCATION) || hasPerm(context, Manifest.permission.ACCESS_COARSE_LOCATION)
         hasNotif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) hasPerm(context, Manifest.permission.POST_NOTIFICATIONS) else true
         hasOverlay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(context) else true
-        hasA11y = AutomationAccessibilityService.instance != null || isA11yEnabled(context)
+        hasA11ySetting = AndroidAutomation.isServiceEnabledInSettings(context)
         hasContacts = hasPerm(context, Manifest.permission.READ_CONTACTS)
         hasPhone = hasPerm(context, Manifest.permission.CALL_PHONE)
         hasCamera = hasPerm(context, Manifest.permission.CAMERA)
@@ -519,11 +522,8 @@ private fun isIgnoringBattery(context: Context): Boolean {
     return pm?.isIgnoringBatteryOptimizations(context.packageName) == true
 }
 
-private fun isA11yEnabled(context: Context): Boolean {
-    val serviceName = "${context.packageName}/${AutomationAccessibilityService::class.java.canonicalName}"
-    val enabledServices = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
-    return enabledServices.contains(serviceName)
-}
+private fun isA11yEnabled(context: Context): Boolean =
+    AndroidAutomation.isServiceEnabledInSettings(context)
 
 private fun isNotifListenerEnabled(context: Context): Boolean {
     val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners") ?: return false

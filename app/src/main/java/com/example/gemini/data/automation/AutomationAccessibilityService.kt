@@ -33,13 +33,56 @@ class AutomationAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "AutomationAccessibility"
+        private const val MAX_RECENT_NOTIFICATIONS = 20
 
         @Volatile var instance: AutomationAccessibilityService? = null
             private set
 
+        private val _isConnected = MutableStateFlow(false)
+        val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+        private val _activePackage = MutableStateFlow<String?>(null)
+        val activePackage: StateFlow<String?> = _activePackage.asStateFlow()
+
         data class ExtractedOtp(val code: String, val timestamp: Long, val senderPkg: String)
         @Volatile
         var latestExtractedOtp: ExtractedOtp? = null
+
+        data class CapturedNotification(
+            val packageName: String,
+            val text: String,
+            val timestamp: Long
+        )
+
+        private val notificationLock = Any()
+        private val recentNotifications = ArrayDeque<CapturedNotification>()
+
+        fun recordNotification(packageName: String, text: String) {
+            val cleaned = text.replace(Regex("\\s+"), " ").trim()
+            if (cleaned.isEmpty()) return
+            synchronized(notificationLock) {
+                if (recentNotifications.size >= MAX_RECENT_NOTIFICATIONS) {
+                    recentNotifications.removeFirst()
+                }
+                recentNotifications.addLast(
+                    CapturedNotification(
+                        packageName = packageName,
+                        text = cleaned.take(500),
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+
+        fun getRecentNotifications(limit: Int = 10, maxAgeMs: Long = 300_000L): List<CapturedNotification> {
+            val cutoff = System.currentTimeMillis() - maxAgeMs.coerceAtLeast(1_000L)
+            synchronized(notificationLock) {
+                return recentNotifications
+                    .filter { it.timestamp >= cutoff }
+                    .takeLast(limit.coerceIn(1, MAX_RECENT_NOTIFICATIONS))
+                    .reversed()
+            }
+        }
 
         fun getRecentOtp(): String? {
             val otp = latestExtractedOtp ?: return null
@@ -74,6 +117,7 @@ class AutomationAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        _isConnected.value = true
         Log.i(TAG, "AutomationAccessibilityService connected")
     }
 
@@ -81,41 +125,58 @@ class AutomationAccessibilityService : AccessibilityService() {
         event ?: return
         lastEventAt = System.currentTimeMillis()
         recordUiEvent()
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            event.packageName?.toString()?.let { foregroundPackage = it }
-            event.className?.toString()?.let { foregroundClass = it }
-            AuraScreenObserver.processAccessibilityEvent(event, getActiveRootNode())
-        } else if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-            event.packageName?.toString()?.let { foregroundPackage = it }
-            AuraScreenObserver.scheduleContentCheck(event.packageName?.toString())
-        } else if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
-            try {
-                val text = event.text?.joinToString(" ") ?: ""
-                val pkg = event.packageName?.toString() ?: ""
-                val lower = text.lowercase(Locale.ROOT)
-                if (lower.contains("otp") || lower.contains("code") || lower.contains("verification") || lower.contains("pin")) {
-                    val matcher = java.util.regex.Pattern.compile("\\b(\\d{4,8})\\b").matcher(text)
-                    if (matcher.find()) {
-                        val code = matcher.group(1)
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                event.packageName?.toString()?.let {
+                    foregroundPackage = it
+                    _activePackage.value = it
+                }
+                event.className?.toString()?.let { foregroundClass = it }
+                AuraScreenObserver.processAccessibilityEvent(event, getActiveRootNode())
+            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                event.packageName?.toString()?.let {
+                    foregroundPackage = it
+                    _activePackage.value = it
+                }
+                AuraScreenObserver.scheduleContentCheck(event.packageName?.toString())
+            }
+            AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
+                try {
+                    val text = event.text?.joinToString(" ") { it?.toString().orEmpty() }?.trim().orEmpty()
+                    val pkg = event.packageName?.toString().orEmpty()
+                    if (text.isNotBlank()) {
+                        recordNotification(pkg, text)
+                        val code = AccessibilityGestureMath.extractOtpCode(text)
                         if (code != null) {
                             latestExtractedOtp = ExtractedOtp(code, System.currentTimeMillis(), pkg)
-                            Log.i(TAG, "Captured OTP from notification ($pkg): $code")
+                            Log.i(TAG, "Captured OTP from notification ($pkg)")
                         }
                     }
-                }
-            } catch (_: Exception) {}
+                } catch (_: Exception) {}
+            }
         }
     }
 
     override fun onInterrupt() {}
 
+    private fun releaseServiceResources() {
+        stopContinuousScroll("service_disconnected")
+        mainHandler.removeCallbacksAndMessages(null)
+        if (instance === this) {
+            instance = null
+            _isConnected.value = false
+            _activePackage.value = null
+        }
+    }
+
     override fun onDestroy() {
-        if (instance === this) instance = null
+        releaseServiceResources()
         super.onDestroy()
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
-        if (instance === this) instance = null
+        releaseServiceResources()
         return super.onUnbind(intent)
     }
 
@@ -224,6 +285,11 @@ class AutomationAccessibilityService : AccessibilityService() {
     fun clickContactOrGroupName(targetName: String): Boolean {
         val root = getActiveRootNode() ?: return false
         val cleanTarget = targetName.trim().lowercase(Locale.ROOT)
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels.toFloat().coerceAtLeast(1f)
+
+        val preferredMatches = mutableListOf<AccessibilityNodeInfo>()
+        val fallbackMatches = mutableListOf<AccessibilityNodeInfo>()
 
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
@@ -232,37 +298,53 @@ class AutomationAccessibilityService : AccessibilityService() {
             val node = queue.removeFirst()
             // Strictly skip any profile avatar or image node
             if (!isProfileAvatarOrIcon(node)) {
+                val resId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
                 val text = node.text?.toString()?.lowercase(Locale.ROOT) ?: ""
                 val desc = node.contentDescription?.toString()?.lowercase(Locale.ROOT) ?: ""
 
                 if (text.contains(cleanTarget) || desc.contains(cleanTarget)) {
-                    // Try direct ACTION_CLICK first
-                    if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                        Log.i(TAG, "Clicked contact name via ACTION_CLICK: '$targetName'")
-                        return true
-                    }
-                    val parent = node.parent
-                    if (parent != null && parent.isClickable && !isProfileAvatarOrIcon(parent) && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                        Log.i(TAG, "Clicked contact name parent via ACTION_CLICK: '$targetName'")
-                        return true
-                    }
-
-                    // Coordinate fallback: land on the text portion (60% width), safely avoiding the left avatar
-                    val bounds = Rect()
-                    node.getBoundsInScreen(bounds)
-                    if (bounds.width() > 0 && bounds.height() > 0) {
-                        val cx = bounds.left + bounds.width() * 0.60f
-                        val cy = bounds.exactCenterY()
-                        if (clickAt(cx, cy, durationMs = 80L)) {
-                            Log.i(TAG, "Clicked contact name safely at ($cx, $cy) (avoided avatar): '$targetName'")
-                            return true
-                        }
+                    val isWhatsAppContactTitle = resId.contains("conversations_row_contact_name") ||
+                        resId.contains("contactpicker_row_name") ||
+                        resId.contains("row_contact_name")
+                    if (isWhatsAppContactTitle) {
+                        preferredMatches.add(node)
+                    } else {
+                        fallbackMatches.add(node)
                     }
                 }
             }
 
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+
+        val orderedCandidates = preferredMatches + fallbackMatches
+        for (node in orderedCandidates) {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            // Skip tiny or left-edge avatar-only bounds (< 22% screen width)
+            if (bounds.right < screenW * 0.22f && bounds.width() < screenW * 0.25f) continue
+
+            // Prefer tapping the text/right-center portion of the chat row (strictly avoiding left 25% avatar)
+            if (bounds.width() > 0 && bounds.height() > 0) {
+                val safeLeft = maxOf(bounds.left.toFloat(), screenW * 0.28f)
+                val cx = (bounds.left + bounds.width() * 0.60f).coerceAtLeast(safeLeft).coerceAtMost(screenW * 0.85f)
+                val cy = bounds.exactCenterY()
+                if (clickAt(cx, cy, durationMs = 80L)) {
+                    Log.i(TAG, "Clicked contact name safely at ($cx, $cy) (avoided left avatar): '$targetName'")
+                    return true
+                }
+            }
+
+            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                Log.i(TAG, "Clicked contact name via ACTION_CLICK: '$targetName'")
+                return true
+            }
+            val parent = node.parent
+            if (parent != null && parent.isClickable && !isProfileAvatarOrIcon(parent) && parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                Log.i(TAG, "Clicked contact name parent via ACTION_CLICK: '$targetName'")
+                return true
             }
         }
         return false
@@ -1082,8 +1164,8 @@ class AutomationAccessibilityService : AccessibilityService() {
                 break
             }
         }
-        // Wait 300ms settling delay for task card entry animations to finish
-        delay(300)
+        // Wait 520ms settling delay for task card entry animations to finish cleanly (#20)
+        delay(520)
         return true
     }
 
@@ -1341,30 +1423,46 @@ class AutomationAccessibilityService : AccessibilityService() {
 
         if (isCloseCurrent) {
             Log.i(TAG, "executeRecentsAction: Running close_current_app (targetPackage: $foregroundPkgBefore)")
-            val cards = findVisibleTaskCards()
-            val targetCard = cards.firstOrNull { it.node.packageName?.toString() == foregroundPkgBefore && !it.isAura }
-                ?: cards.firstOrNull { !it.isAura }
+            val cardsBefore = findVisibleTaskCards()
+            val targetCard = cardsBefore.firstOrNull { it.node.packageName?.toString() == foregroundPkgBefore && !it.isAura }
+                ?: cardsBefore.firstOrNull { !it.isAura }
 
             if (targetCard != null) {
+                val targetTitleBefore = targetCard.title
                 dismissCardUpward(targetCard.node, targetCard.bounds, w, h)
-                delay(400)
-                // Verify post-swipe: check if app accidentally reopened
+                delay(450)
+                // Verify post-swipe: check if app accidentally reopened or card is still present (#20)
                 val currentPkg = getActiveRootNode()?.packageName?.toString() ?: ""
-                if (foregroundPkgBefore.isNotBlank() && currentPkg == foregroundPkgBefore) {
-                    Log.w(TAG, "App $foregroundPkgBefore was accidentally reopened during recents dismissal! Retrying with steeper upward flick...")
-                    openRecentsAndWait()
+                val stillPresentAfterFirst = findVisibleTaskCards().any {
+                    !it.isAura && (
+                        (foregroundPkgBefore.isNotBlank() && it.node.packageName?.toString() == foregroundPkgBefore) ||
+                        (targetTitleBefore.isNotBlank() && it.title.equals(targetTitleBefore, ignoreCase = true))
+                    )
+                }
+                if ((foregroundPkgBefore.isNotBlank() && currentPkg == foregroundPkgBefore) || stillPresentAfterFirst) {
+                    Log.w(TAG, "Target card '$targetTitleBefore' ($foregroundPkgBefore) still present/reopened; retrying steeper upward fling...")
+                    if (foregroundPkgBefore.isNotBlank() && currentPkg == foregroundPkgBefore) {
+                        openRecentsAndWait()
+                    }
                     val steeperPath = Path().apply {
-                        moveTo(w * 0.5f, h * 0.68f)
-                        lineTo(w * 0.5f, h * 0.05f)
+                        moveTo(w * 0.50f, h * 0.68f)
+                        lineTo(w * 0.50f, h * 0.05f)
                     }
                     gesture(steeperPath, 130L)
-                    delay(350)
+                    delay(450)
+                }
+                val stillPresentFinal = findVisibleTaskCards().any {
+                    !it.isAura && targetTitleBefore.isNotBlank() && it.title.equals(targetTitleBefore, ignoreCase = true)
                 }
                 performGlobalAction(GLOBAL_ACTION_HOME)
-                return RecentsActionResult("SUCCESS", "Closed foreground app ($foregroundPkgBefore) and returned home.")
+                return if (!stillPresentFinal) {
+                    RecentsActionResult("SUCCESS", "Closed foreground app (${targetTitleBefore.ifBlank { foregroundPkgBefore }}) and verified dismissal from Recents.", clearedCount = 1)
+                } else {
+                    RecentsActionResult("FAILED", "Could not verify dismissal of ${targetTitleBefore.ifBlank { foregroundPkgBefore }} from Recents; card may still be present.", remainingCardsCount = 1)
+                }
             } else {
                 performGlobalAction(GLOBAL_ACTION_HOME)
-                return RecentsActionResult("SUCCESS", "Closed foreground app and returned home.")
+                return RecentsActionResult("FAILED", "No dismissible foreground app card found in Recents (returned home safely).")
             }
         }
 
@@ -1497,18 +1595,15 @@ class AutomationAccessibilityService : AccessibilityService() {
             horizontalSwipes++
         }
 
-        val cardNode = targetNode ?: findVisibleTaskCards().firstOrNull { it.title.lowercase(Locale.ROOT).contains(cleanTarget) }?.node
+        val cardNode = targetNode ?: findVisibleTaskCards().firstOrNull { !it.isAura && it.title.lowercase(Locale.ROOT).contains(cleanTarget) }?.node
         if (cardNode != null) {
             val rect = Rect()
             cardNode.getBoundsInScreen(rect)
             dismissCardUpward(cardNode, rect, w, h)
             delay(450)
         } else {
-            val visible = findVisibleTaskCards().firstOrNull { !it.isAura }
-            if (visible != null) {
-                dismissCardUpward(visible.node, visible.bounds, w, h)
-                delay(450)
-            }
+            // #20: Never swipe away an unrelated app if the specifically requested app wasn't found!
+            Log.w(TAG, "closeSpecificAppFromRecents: '$appName' card not found in Recents; skipping unrelated cards.")
         }
     }
 
@@ -1521,8 +1616,8 @@ class AutomationAccessibilityService : AccessibilityService() {
             moveTo(startX, startY)
             lineTo(startX, endY)
         }
-        // Decisive high-velocity upward fling (150ms) to ensure the Android launcher dismisses the task card
-        gesture(path, 150L)
+        // Decisive high-velocity upward fling (155ms) so launcher dismisses task card without opening it (#20)
+        gesture(path, 155L)
     }
 
     private suspend fun verifyRecentsState(targetAppName: String? = null, wasClearAll: Boolean = false): RecentsActionResult {
@@ -1705,6 +1800,52 @@ class AutomationAccessibilityService : AccessibilityService() {
         }, 500)
     }
 
+    /**
+     * Synchronously waits for WhatsApp's chat composer to open, triggers the verified Send button
+     * (or ACTION_IME_ENTER), and waits for the message to dispatch before returning.
+     * Essential for multi-step workflows (e.g., "WhatsApp kholo, Rahul ko message karo Hi, aur WhatsApp close kar do").
+     */
+    suspend fun awaitWhatsAppAutoSend(timeoutMs: Long = 5500L): Boolean = withContext(Dispatchers.IO) {
+        val start = System.currentTimeMillis()
+        delay(650) // Allow WhatsApp activity transition to settle
+        var sent = false
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            val root = getActiveRootNode()
+            val pkg = root?.packageName?.toString()?.lowercase(Locale.ROOT) ?: ""
+            if (root != null && pkg.contains("whatsapp")) {
+                val sendNode = findVerifiedWhatsAppSendButton(root)
+                if (sendNode != null) {
+                    clickNodeAndTap(sendNode)
+                    Log.i(TAG, "awaitWhatsAppAutoSend: Clicked verified WhatsApp Send button.")
+                    sent = true
+                    break
+                }
+                val inputField = findEditableInputField(root)
+                if (inputField != null && !inputField.text.isNullOrBlank()) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        val enterOk = inputField.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+                        if (enterOk) {
+                            delay(250)
+                            val refreshedRoot = getActiveRootNode()
+                            val refreshedSend = if (refreshedRoot != null) findVerifiedWhatsAppSendButton(refreshedRoot) else null
+                            if (refreshedSend != null) {
+                                clickNodeAndTap(refreshedSend)
+                            }
+                            Log.i(TAG, "awaitWhatsAppAutoSend: Dispatched ACTION_IME_ENTER on WhatsApp input field.")
+                            sent = true
+                            break
+                        }
+                    }
+                }
+            }
+            delay(250)
+        }
+        if (sent) {
+            delay(650) // Let WhatsApp commit the outgoing message bubble before any subsequent close_app step
+        }
+        sent
+    }
+
     private fun findEditableInputField(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         if (node.isEditable) return node
         val viewId = node.viewIdResourceName?.lowercase(Locale.ROOT) ?: ""
@@ -1812,6 +1953,447 @@ class AutomationAccessibilityService : AccessibilityService() {
             override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(false) }
         }, null)
         if (!dispatched && cont.isActive) cont.resume(false)
+    }
+
+    suspend fun multiStrokeGesture(strokes: List<GestureDescription.StrokeDescription>): Boolean {
+        if (strokes.isEmpty()) return false
+        return suspendCancellableCoroutine { cont ->
+            val builder = GestureDescription.Builder()
+            for (stroke in strokes) {
+                builder.addStroke(stroke)
+            }
+            val dispatched = dispatchGesture(builder.build(), object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(true) }
+                override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(false) }
+            }, null)
+            if (!dispatched && cont.isActive) cont.resume(false)
+        }
+    }
+
+    /**
+     * Dispatches two consecutive verified taps at ([x], [y]) separated by [gapMs].
+     */
+    suspend fun doubleTapAt(
+        x: Float,
+        y: Float,
+        tapDurationMs: Long = 50L,
+        gapMs: Long = 90L
+    ): Boolean {
+        val dm = resources.displayMetrics
+        val safe = AccessibilityGestureMath.clampPoint(x, y, dm.widthPixels, dm.heightPixels)
+        val firstPath = Path().apply { moveTo(safe.x, safe.y) }
+        if (!gesture(firstPath, tapDurationMs.coerceIn(20L, 250L))) return false
+        delay(gapMs.coerceIn(40L, 300L))
+        val secondPath = Path().apply { moveTo(safe.x, safe.y) }
+        return gesture(secondPath, tapDurationMs.coerceIn(20L, 250L))
+    }
+
+    /**
+     * Performs a two-finger pinch gesture (zoom in or zoom out) centered around ([centerX], [centerY]).
+     */
+    suspend fun pinchGesture(
+        centerX: Float? = null,
+        centerY: Float? = null,
+        zoomIn: Boolean = true,
+        scale: Float = 0.45f,
+        durationMs: Long = 400L
+    ): Boolean {
+        val dm = resources.displayMetrics
+        val cx = centerX ?: (dm.widthPixels / 2f)
+        val cy = centerY ?: (dm.heightPixels / 2f)
+        val vectors = AccessibilityGestureMath.computePinchVectors(
+            centerX = cx,
+            centerY = cy,
+            screenWidth = dm.widthPixels,
+            screenHeight = dm.heightPixels,
+            zoomIn = zoomIn,
+            scale = scale
+        )
+        val dur = durationMs.coerceIn(100L, 3_000L)
+        val path1 = Path().apply {
+            moveTo(vectors.finger1Start.x, vectors.finger1Start.y)
+            lineTo(vectors.finger1End.x, vectors.finger1End.y)
+        }
+        val path2 = Path().apply {
+            moveTo(vectors.finger2Start.x, vectors.finger2Start.y)
+            lineTo(vectors.finger2End.x, vectors.finger2End.y)
+        }
+        val stroke1 = GestureDescription.StrokeDescription(path1, 0L, dur)
+        val stroke2 = GestureDescription.StrokeDescription(path2, 0L, dur)
+        return multiStrokeGesture(listOf(stroke1, stroke2))
+    }
+
+    /**
+     * Performs a long-press-and-drag gesture from ([startX], [startY]) to ([endX], [endY]).
+     * On Android 8+ (API 26+), uses continued strokes so the finger genuinely holds before dragging.
+     */
+    suspend fun dragGesture(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        holdMs: Long = 350L,
+        moveDurationMs: Long = 450L
+    ): Boolean {
+        val dm = resources.displayMetrics
+        val start = AccessibilityGestureMath.clampPoint(startX, startY, dm.widthPixels, dm.heightPixels)
+        val end = AccessibilityGestureMath.clampPoint(endX, endY, dm.widthPixels, dm.heightPixels)
+        val clampedHold = holdMs.coerceIn(0L, 3_000L)
+        val clampedMove = moveDurationMs.coerceIn(80L, 5_000L)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && clampedHold > 0L) {
+            val holdPath = Path().apply { moveTo(start.x, start.y) }
+            val holdStroke = GestureDescription.StrokeDescription(holdPath, 0L, clampedHold, true)
+            if (!multiStrokeGesture(listOf(holdStroke))) return false
+            val dragPath = Path().apply {
+                moveTo(start.x, start.y)
+                lineTo(end.x, end.y)
+            }
+            val moveStroke = holdStroke.continueStroke(dragPath, 0L, clampedMove, false)
+            return multiStrokeGesture(listOf(moveStroke))
+        }
+
+        val path = Path().apply {
+            moveTo(start.x, start.y)
+            lineTo(end.x, end.y)
+        }
+        return gesture(path, (clampedHold + clampedMove).coerceIn(120L, 8_000L))
+    }
+
+    /**
+     * Dispatches a single continuous multi-waypoint path gesture across [points].
+     */
+    suspend fun multiPointGesture(
+        points: List<Pair<Float, Float>>,
+        durationMs: Long = 500L
+    ): Boolean {
+        if (points.size < 2) return false
+        val dm = resources.displayMetrics
+        val clamped = points.map { (x, y) ->
+            AccessibilityGestureMath.clampPoint(x, y, dm.widthPixels, dm.heightPixels)
+        }
+        val path = Path().apply {
+            moveTo(clamped[0].x, clamped[0].y)
+            for (i in 1 until clamped.size) {
+                lineTo(clamped[i].x, clamped[i].y)
+            }
+        }
+        return gesture(path, durationMs.coerceIn(60L, 10_000L))
+    }
+
+    data class EditableFieldSnapshot(
+        val label: String,
+        val value: String,
+        val hint: String,
+        val isFocused: Boolean,
+        val isPassword: Boolean,
+        val bounds: Rect
+    )
+
+    data class ScreenContentSnapshot(
+        val packageName: String,
+        val activityClass: String,
+        val readableLines: List<String>,
+        val editableFields: List<EditableFieldSnapshot>,
+        val interactiveLabels: List<String>,
+        val isKeyboardVisible: Boolean
+    ) {
+        fun toFormattedString(): String {
+            val out = StringBuilder()
+            out.append("App: ").append(packageName.ifBlank { "unknown" })
+            if (activityClass.isNotBlank()) out.append(" (").append(activityClass.substringAfterLast('.')).append(')')
+            out.append(" | Keyboard: ").append(if (isKeyboardVisible) "open" else "closed").append('\n')
+
+            if (readableLines.isNotEmpty()) {
+                out.append("\nScreen Content:\n")
+                for (line in readableLines) {
+                    out.append("- ").append(line).append('\n')
+                }
+            } else {
+                out.append("\nScreen Content: (no readable text nodes found; try android_screenshot)\n")
+            }
+
+            if (editableFields.isNotEmpty()) {
+                out.append("\nEditable Fields:\n")
+                for (field in editableFields) {
+                    val valueShown = if (field.isPassword && field.value.isNotEmpty()) "••••" else field.value
+                    out.append("- ").append(field.label.ifBlank { "Text field" })
+                    if (valueShown.isNotEmpty()) out.append(" = \"").append(valueShown.take(120)).append('"')
+                    if (field.hint.isNotEmpty()) out.append(" (hint: \"").append(field.hint.take(60)).append("\")")
+                    if (field.isFocused) out.append(" [focused]")
+                    out.append(" @").append(field.bounds.centerX()).append(',').append(field.bounds.centerY()).append('\n')
+                }
+            }
+
+            if (interactiveLabels.isNotEmpty()) {
+                out.append("\nKey Actions: ").append(interactiveLabels.joinToString(" | ")).append('\n')
+            }
+
+            return out.toString().trim()
+        }
+    }
+
+    /**
+     * Reads structured, deduplicated screen content in top-to-bottom visual reading order,
+     * masking password inputs and summarizing editable fields and key interactive controls.
+     */
+    fun readScreenContent(
+        includeAllWindows: Boolean = false,
+        maxBlocks: Int = 250
+    ): ScreenContentSnapshot {
+        val roots = if (includeAllWindows) {
+            getAllRootNodes()
+        } else {
+            listOfNotNull(getForegroundAppRootNode() ?: rootInActiveWindow)
+        }
+
+        val activeRoot = roots.firstOrNull()
+        val pkg = activeRoot?.packageName?.toString() ?: foregroundPackage.orEmpty()
+        val act = foregroundClass.orEmpty()
+
+        val rawBlocks = mutableListOf<AccessibilityGestureMath.RawTextBlock>()
+        val editableFields = mutableListOf<EditableFieldSnapshot>()
+        val interactiveSet = LinkedHashSet<String>()
+        var visited = 0
+        val maxNodes = (maxBlocks * 4).coerceIn(200, 2000)
+
+        fun walk(node: AccessibilityNodeInfo, depth: Int) {
+            if (visited >= maxNodes || depth > 35) return
+            visited++
+            if (!node.isVisibleToUser) return
+
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            val text = node.text?.toString()?.trim().orEmpty()
+            val desc = node.contentDescription?.toString()?.trim().orEmpty()
+            val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                node.hintText?.toString()?.trim().orEmpty()
+            } else ""
+            val isHeading = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) node.isHeading else false
+            val isPassword = node.isPassword
+            val isEditable = node.isEditable || node.className?.toString()?.contains("EditText", true) == true
+
+            val displayText = when {
+                text.isNotBlank() -> text
+                desc.isNotBlank() -> desc
+                else -> ""
+            }
+
+            if (displayText.isNotBlank() && bounds.width() > 0 && bounds.height() > 0 && rawBlocks.size < maxBlocks) {
+                rawBlocks.add(
+                    AccessibilityGestureMath.RawTextBlock(
+                        text = displayText.take(300),
+                        top = bounds.top,
+                        left = bounds.left,
+                        isPassword = isPassword,
+                        isHeading = isHeading,
+                        isEditable = isEditable
+                    )
+                )
+            }
+
+            if (isEditable && editableFields.size < 25) {
+                val resName = node.viewIdResourceName?.substringAfter(":id/").orEmpty()
+                val label = desc.ifBlank { hint.ifBlank { resName } }
+                editableFields.add(
+                    EditableFieldSnapshot(
+                        label = label,
+                        value = text,
+                        hint = hint,
+                        isFocused = node.isFocused,
+                        isPassword = isPassword,
+                        bounds = Rect(bounds)
+                    )
+                )
+            }
+
+            if ((node.isClickable || node.isCheckable) && !isEditable && displayText.isNotBlank() && interactiveSet.size < 40) {
+                val stateTag = if (node.isCheckable) (if (node.isChecked) " [ON]" else " [OFF]") else ""
+                interactiveSet.add(displayText.take(60) + stateTag)
+            }
+
+            for (i in 0 until node.childCount) {
+                if (visited >= maxNodes) break
+                node.getChild(i)?.let { walk(it, depth + 1) }
+            }
+        }
+
+        for (root in roots) {
+            walk(root, 0)
+        }
+
+        val orderedLines = AccessibilityGestureMath.organizeReadableBlocks(rawBlocks)
+        return ScreenContentSnapshot(
+            packageName = pkg,
+            activityClass = act,
+            readableLines = orderedLines.take(maxBlocks),
+            editableFields = editableFields,
+            interactiveLabels = interactiveSet.toList(),
+            isKeyboardVisible = isKeyboardVisible()
+        )
+    }
+
+    data class ScrollFindResult(
+        val found: Boolean,
+        val tapped: Boolean,
+        val scrollsPerformed: Int,
+        val matchedLabel: String = "",
+        val bounds: Rect? = null,
+        val reason: String
+    )
+
+    /**
+     * Scrolls in [direction] until a visible node matching [query] (by text, description, hint, or resource id)
+     * appears, or until the screen stops changing / [maxScrolls] is reached. Optionally taps the match.
+     */
+    suspend fun scrollToFind(
+        query: String,
+        direction: String = "down",
+        maxScrolls: Int = 8,
+        tapWhenFound: Boolean = false
+    ): ScrollFindResult {
+        val cleanQuery = query.trim().lowercase(Locale.ROOT)
+        if (cleanQuery.isEmpty()) {
+            return ScrollFindResult(false, false, 0, reason = "Search query cannot be empty.")
+        }
+
+        fun findMatch(root: AccessibilityNodeInfo?): Pair<AccessibilityNodeInfo, String>? {
+            root ?: return null
+            val queue = ArrayDeque<AccessibilityNodeInfo>()
+            queue.add(root)
+            var visited = 0
+            while (queue.isNotEmpty() && visited < 600) {
+                val node = queue.removeFirst()
+                visited++
+                if (!node.isVisibleToUser) continue
+                val text = node.text?.toString()?.trim().orEmpty()
+                val desc = node.contentDescription?.toString()?.trim().orEmpty()
+                val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) node.hintText?.toString()?.trim().orEmpty() else ""
+                val resId = node.viewIdResourceName?.substringAfter(":id/").orEmpty()
+                if (text.lowercase(Locale.ROOT).contains(cleanQuery) ||
+                    desc.lowercase(Locale.ROOT).contains(cleanQuery) ||
+                    hint.lowercase(Locale.ROOT).contains(cleanQuery) ||
+                    resId.lowercase(Locale.ROOT).contains(cleanQuery)
+                ) {
+                    return node to (text.ifBlank { desc.ifBlank { hint.ifBlank { resId } } })
+                }
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { queue.add(it) }
+                }
+            }
+            return null
+        }
+
+        val boundedScrolls = maxScrolls.coerceIn(0, 20)
+        var previousSig: com.example.gemini.data.automation.agent.ScreenSignature? = null
+        var unchangedCount = 0
+
+        for (step in 0..boundedScrolls) {
+            val root = getForegroundAppRootNode() ?: rootInActiveWindow
+            val hit = findMatch(root)
+            if (hit != null) {
+                val (node, label) = hit
+                val rect = Rect().also { node.getBoundsInScreen(it) }
+                val tapped = if (tapWhenFound) {
+                    val ok = clickNodeAndTap(node)
+                    if (ok) awaitIdle()
+                    ok
+                } else false
+                return ScrollFindResult(
+                    found = true,
+                    tapped = tapped,
+                    scrollsPerformed = step,
+                    matchedLabel = label,
+                    bounds = rect,
+                    reason = if (tapped) "Found and tapped '$label' after $step scroll(s)."
+                    else "Found '$label' after $step scroll(s)."
+                )
+            }
+
+            if (step == boundedScrolls) break
+
+            val currentSig = ScreenSignatureCalculator.computeSignature(root)
+            if (previousSig != null && currentSig.isEquivalentTo(previousSig)) {
+                unchangedCount++
+                if (unchangedCount >= 2) {
+                    return ScrollFindResult(
+                        found = false,
+                        tapped = false,
+                        scrollsPerformed = step,
+                        reason = "Reached end of scrollable content after $step scroll(s) without finding '$query'."
+                    )
+                }
+            } else {
+                unchangedCount = 0
+                previousSig = currentSig
+            }
+
+            val scrolled = performSmartScroll(direction, "medium")
+            if (!scrolled) {
+                return ScrollFindResult(
+                    found = false,
+                    tapped = false,
+                    scrollsPerformed = step,
+                    reason = "Scroll gesture was rejected at step $step."
+                )
+            }
+            awaitIdle(quietMs = 450, maxMs = 2_000)
+        }
+
+        return ScrollFindResult(
+            found = false,
+            tapped = false,
+            scrollsPerformed = boundedScrolls,
+            reason = "'$query' not found after $boundedScrolls scroll(s)."
+        )
+    }
+
+    /**
+     * Executes a semantic accessibility action on [node].
+     */
+    fun performNodeAction(node: AccessibilityNodeInfo, action: String, arg: String? = null): Boolean {
+        return when (action.trim().lowercase(Locale.ROOT)) {
+            "click" -> node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            "long_click" -> node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            "focus" -> node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            "clear_focus" -> node.performAction(AccessibilityNodeInfo.ACTION_CLEAR_FOCUS)
+            "select" -> node.performAction(AccessibilityNodeInfo.ACTION_SELECT)
+            "copy" -> node.performAction(AccessibilityNodeInfo.ACTION_COPY)
+            "paste" -> node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            "cut" -> node.performAction(AccessibilityNodeInfo.ACTION_CUT)
+            "expand" -> node.performAction(AccessibilityNodeInfo.ACTION_EXPAND)
+            "collapse" -> node.performAction(AccessibilityNodeInfo.ACTION_COLLAPSE)
+            "dismiss" -> node.performAction(AccessibilityNodeInfo.ACTION_DISMISS)
+            "clear_text" -> node.performAction(
+                AccessibilityNodeInfo.ACTION_SET_TEXT,
+                Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
+            )
+            "set_progress" -> {
+                val value = arg?.toFloatOrNull() ?: return false
+                node.performAction(
+                    AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
+                    Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, value) }
+                )
+            }
+            else -> false
+        }
+    }
+
+    suspend fun readClipboardText(): String? = withContext(Dispatchers.Main.immediate) {
+        runCatching {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val clip = clipboard?.primaryClip ?: return@runCatching null
+            if (clip.itemCount == 0) return@runCatching null
+            clip.getItemAt(0)?.coerceToText(this@AutomationAccessibilityService)?.toString()
+        }.getOrNull()
+    }
+
+    suspend fun writeClipboardText(text: String): Boolean = withContext(Dispatchers.Main.immediate) {
+        runCatching {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return@runCatching false
+            clipboard.setPrimaryClip(ClipData.newPlainText("AntiGemAutomation", text))
+            true
+        }.getOrDefault(false)
     }
 
     suspend fun awaitIdle(quietMs: Long = 350, maxMs: Long = 2_000) {

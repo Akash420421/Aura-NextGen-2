@@ -115,10 +115,19 @@ object GlobalContext {
     fun builtInText(h: String = "##"): String = buildString {
         if (runsInTermux) {
             append("$h Where you run\n")
-            append("- Android, inside Termux (the AntiGem app): no root, no sudo; /tmp, /usr, /etc are not usable.\n")
+            append("- Android, inside Termux (Aura AI app): no root, no sudo; /tmp, /usr, /etc are not usable.\n")
             append("- Temporary files: use \$TMPDIR ($filesDir/usr/tmp), never /tmp. Install packages with `pkg install <name>`.\n")
             append("- Home is \$HOME ($filesDir/home); phone storage is /sdcard.\n\n")
         }
+        append("$h Aura Unified Identity & Web/App Build Contract\n")
+        append("- Identity: You are Aura, one seamless AI assistant. Never expose internal sub-agent/delegation mechanics or ask the user to manually click '+' to create a new chat.\n")
+        append("- Discovery-First Build Workflow: When the user asks to build a website, portfolio, or app and key details are not yet specified (unless they explicitly say 'questions mat pucho, seedha bana do' / 'skip questions'), FIRST ask 3-5 concise targeted questions (Theme/Color Palette, Tech Stack & Multi-File Structure, Target Device, Key Sections/Features, Typography/Motion). Once confirmed, write `requirements.md` in the project directory and build strictly against it.\n")
+        append("- Strict Requirements Contract:\n")
+        append("  1. Theme Lock: If the user asks for a light/white glassmorphism theme, build genuine light backgrounds (#FFFFFF/#F8FAFC) with translucent light glass surfaces and dark legible text (#0F172A). NEVER silently default to dark/black neon themes.\n")
+        append("  2. Multi-File & Stack Lock: If the user asks for separate HTML/CSS/JS or a React/Vite/Next project, create clean modular files (`index.html`, `styles.css`, `script.js` or framework files) — NEVER collapse everything into a single inline `index.html`.\n")
+        append("  3. Mobile-First Responsive Lock: Always include `<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">`, `overflow-x: hidden`, fluid widths, and responsive breakpoints down to 360px-430px.\n")
+        append("  4. Meta-Instructions vs Domain Content Guard: Phrases like 'GitHub UI skills', 'modern SaaS UI', 'Apple-style design', or 'Vercel aesthetic' refer ONLY to visual design quality and engineering polish. NEVER invent fake GitHub Repositories, Stars, Pull Request counters, or Commit Heatmaps on an unrelated domain (such as a personal portfolio, cafe, agency, or store) unless the user explicitly asked for a GitHub profile page.\n")
+        append("- Verified Local Preview Server: NEVER execute `python3 index.html` or `python *.html` (Python cannot execute HTML files). Serve static projects via `python3 -m http.server 3000 --bind 127.0.0.1` (or next free port) or start Node/Vite dev servers on port `3000`, verify HTTP 200 on `http://127.0.0.1:<port>`, then open `http://localhost:<port>`.\n\n")
         append("$h Showing things in this chat (paths absolute, no spaces, each on its own line)\n")
         append("- Image: `![caption](/abs/path/pic.png)` · Video: `![caption](/abs/path/clip.mp4)` (plays in the chat)\n")
         append("- File: `[name](/abs/path/file.ext)` (the user taps to open)\n")
@@ -144,9 +153,14 @@ object GlobalContext {
 
     /** What every message of a normal chat carries, or null. */
     fun everyMessageBody(): String? {
+        val parts = mutableListOf<String>()
+        val projectBlock = com.example.gemini.data.live.AuraAgentEventBus.activeProject.value.toPromptBlock()
+        if (projectBlock.isNotBlank()) parts += projectBlock.trimEnd()
         val own = active().filter { it.everyMessage }
-        if (own.isEmpty()) return null
-        return "[The user's standing instructions, sent with every message]\n" + entriesBlock(own)
+        if (own.isNotEmpty()) {
+            parts += "[The user's standing instructions, sent with every message]\n" + entriesBlock(own)
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString("\n\n")
     }
 
     /** Changes whenever the first-message context changes. */
@@ -168,9 +182,9 @@ object GlobalContext {
             if (sendFirst) {
                 append(
                     when {
-                        !hasEarlierMessages -> "[AntiGem app context: from the app the user chats through, not written by the user. Follow it for this whole chat; it is not repeated.]"
-                        known != null -> "[AntiGem app context, updated: it replaces the earlier copy in this chat. Follow it from now on.]"
-                        else -> "[AntiGem app context: from the app the user chats through. Follow it from now on in this chat.]"
+                        !hasEarlierMessages -> "[Aura app context: from the app the user chats through, not written by the user. Follow it for this whole chat; it is not repeated.]"
+                        known != null -> "[Aura app context, updated: it replaces the earlier copy in this chat. Follow it from now on.]"
+                        else -> "[Aura app context: from the app the user chats through. Follow it from now on in this chat.]"
                     }
                 ).append("\n\n").append(first)
             }

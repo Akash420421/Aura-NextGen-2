@@ -96,7 +96,7 @@ android {
         }
         create("termux") {
             dimension = "mode"
-            applicationId = "com.termux"
+            applicationId = if (isAiStudioContainer) "com.aura.ai" else "com.termux"
             buildConfigField("int", "BRIDGE_PORT", "1244")
             buildConfigField("int", "HUB_PORT", "1245")
             buildConfigField("int", "BROWSER_MCP_PORT", "8769")
@@ -494,9 +494,19 @@ abstract class SyncAiStudioDebugApkTask : DefaultTask() {
             File(root, "standard/debug/antiGem-standard-debug.apk")
         )
         val sourceApk = candidates.firstOrNull { it.exists() } ?: return
-        val targetApk = File(root, "debug/app-debug.apk")
-        targetApk.parentFile.mkdirs()
+        val targetDir = File(root, "debug")
+        targetDir.mkdirs()
+        val targetApk = File(targetDir, "app-debug.apk")
         sourceApk.copyTo(targetApk, overwrite = true)
+
+        val sourceMeta = File(sourceApk.parentFile, "output-metadata.json")
+        if (sourceMeta.exists()) {
+            val updatedMeta = sourceMeta.readText()
+                .replace(sourceApk.name, "app-debug.apk")
+                .replace("\"termuxDebug\"", "\"debug\"")
+                .replace("\"standardDebug\"", "\"debug\"")
+            File(targetDir, "output-metadata.json").writeText(updatedMeta)
+        }
     }
 }
 

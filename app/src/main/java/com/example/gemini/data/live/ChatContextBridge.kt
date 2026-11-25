@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -27,9 +28,16 @@ object ChatContextBridge {
     private const val MAX_MESSAGES_IN_CONTEXT = 15
 
     var viewModel: ChatViewModel? = null
+    @Volatile private var currentViewMode: String = "CHAT"
+    @Volatile private var previousNonBrowserMode: String = "CHAT"
 
     fun requestViewMode(mode: String) {
-        viewModel?.requestViewMode(mode)
+        val upper = mode.trim().uppercase(Locale.ROOT)
+        if (upper != "BROWSER") {
+            previousNonBrowserMode = upper
+        }
+        currentViewMode = upper
+        viewModel?.requestViewMode(upper)
     }
 
     private val _lastActiveChatTitle = MutableStateFlow("")
@@ -37,6 +45,7 @@ object ChatContextBridge {
 
     var activeVoiceConvId: String? = null
     val requestSwitchToChatTab = MutableStateFlow(false)
+    val requestCloseDrawer = MutableStateFlow(false)
     var isNewChatDraft: Boolean = false
 
     fun attach(vm: ChatViewModel) {
@@ -210,7 +219,9 @@ object ChatContextBridge {
 
         return if (matched != null) {
             isNewChatDraft = false
+            closeOverlaysForChatNavigation()
             vm.selectConversation(matched.id)
+            syncActiveProjectFromConversation(matched)
             requestViewMode("CHAT")
             requestSwitchToChatTab.value = true
             "Opened chat '${matched.title}' on screen."
@@ -224,6 +235,97 @@ object ChatContextBridge {
 
     fun getCurrentMessages(): List<ChatMessage> = viewModel?.messages?.value ?: emptyList()
 
+    fun clearPromptCache() {
+        lastSentPrompt = ""
+        lastSentTime = 0L
+    }
+
+    /**
+     * Strips accidental hardcoded wrapper prefixes (e.g. "Ek new chat create karo aur...") so
+     * ONLY the clean user intent reaches the agent.
+     */
+    fun sanitizeTaskPrompt(raw: String): String {
+        var cleaned = raw.trim()
+        val stalePrefixPatterns = listOf(
+            Regex("""(?i)^\s*(?:ek\s+)?new\s+chat\s+(?:create|shuru|start|open)\s+kar(?:o|ke)\s*(?:aur|and|mein|,|:|-)?\s*"""),
+            Regex("""(?i)^\s*(?:ek\s+)?nayi\s+chat\s+(?:banao|banake|shuru\s+karo|shuru\s+karke|open\s+karo)\s*(?:aur|and|mein|,|:|-)?\s*"""),
+            Regex("""(?i)^\s*(?:create|start|open)\s+a?\s*new\s+chat\s*(?:and|then|,|:|-)?\s*"""),
+            Regex("""(?i)^\s*send\s+(?:this\s+)?to\s+(?:a\s+)?new\s+chat\s*[:,-]?\s*""")
+        )
+        for (pattern in stalePrefixPatterns) {
+            val next = pattern.replaceFirst(cleaned, "").trim()
+            if (next.isNotBlank()) cleaned = next
+        }
+        return cleaned
+    }
+
+    private fun closeOverlaysForChatNavigation() {
+        requestCloseDrawer.value = true
+        if (currentViewMode == "BROWSER") {
+            try {
+                com.example.gemini.ui.browser.BrowserSessionManager.instance.closeActiveAndStopMedia()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun syncActiveProjectFromConversation(conv: Conversation?, fallbackSummary: String = "") {
+        conv ?: return
+        val wsPath = conv.workspaceUri.removePrefix("file://").trim()
+        val inferredName = wsPath.trimEnd('/').substringAfterLast('/').ifBlank {
+            if (conv.title != "New Chat" && !conv.title.startsWith("Voice Session", true)) conv.title else ""
+        }
+        val summaryText = conv.summary?.takeIf { it.isNotBlank() } ?: fallbackSummary.take(280)
+        if (inferredName.isNotBlank() || wsPath.isNotBlank() || summaryText.isNotBlank()) {
+            AuraAgentEventBus.updateActiveProject { prev ->
+                val sameSession = prev.sessionId == conv.id
+                prev.copy(
+                    sessionId = conv.id,
+                    projectName = if (sameSession && prev.projectName.isNotBlank()) prev.projectName else inferredName,
+                    workspaceDir = wsPath.ifBlank { if (sameSession) prev.workspaceDir else "" },
+                    requirementsSummary = summaryText.ifBlank { if (sameSession) prev.requirementsSummary else "" }
+                )
+            }
+        }
+    }
+
+    fun persistConversationMetadata(conv: Conversation, fallbackSummary: String = "") {
+        val wsPath = conv.workspaceUri.removePrefix("file://").trim()
+        val inferredName = wsPath.trimEnd('/').substringAfterLast('/').ifBlank {
+            if (conv.title != "New Chat" && !conv.title.startsWith("Voice Session", true)) conv.title else ""
+        }
+        persistConversationMetadata(
+            sessionId = conv.id,
+            title = conv.title,
+            projectName = inferredName.takeIf { it.isNotBlank() },
+            projectPath = wsPath.takeIf { it.isNotBlank() },
+            summary = (conv.summary?.takeIf { it.isNotBlank() } ?: fallbackSummary.take(200)).takeIf { it.isNotBlank() }
+        )
+    }
+
+    fun persistConversationMetadata(
+        sessionId: String,
+        title: String,
+        projectName: String? = null,
+        projectType: String? = null,
+        projectPath: String? = null,
+        summary: String? = null
+    ) {
+        val ctx = viewModel?.getApplication<android.app.Application>() ?: return
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                com.example.gemini.data.database.ChatDatabase.getInstance(ctx).updateSessionMetadata(
+                    sessionId = sessionId,
+                    title = title,
+                    sessionType = "CHAT",
+                    projectName = projectName,
+                    projectType = projectType,
+                    projectPath = projectPath,
+                    summary = summary
+                )
+            }
+        }
+    }
+
     fun getActiveChatPromptContext(): String {
         val vm = viewModel ?: return ""
         val conv = vm.currentConversation.value
@@ -231,13 +333,25 @@ object ChatContextBridge {
 
         val sb = StringBuilder()
 
-        // 1. Dynamic Recent Chats Memory Index (prevents hallucination about past chats/projects)
-        val all = vm.allConversations.value.sortedByDescending { it.updatedAt }.take(8)
-        if (all.isNotEmpty()) {
-            sb.append("\n## Saved Conversations & Projects Index in Memory:\n")
-            all.forEach { c ->
-                val proj = if (c.workspaceUri.isNotBlank()) " [Project: ${c.workspaceUri.trimEnd('/').substringAfterLast('/')}]" else ""
-                val sum = if (!c.summary.isNullOrBlank()) " - ${c.summary.take(60)}" else ""
+        // 0. Active Project Context (Cross-Screen Memory for Voice, Vision/Screen Share, and Chat)
+        val projectBlock = AuraAgentEventBus.activeProject.value.toPromptBlock()
+        if (projectBlock.isNotBlank()) {
+            sb.append("\n").append(projectBlock)
+        }
+
+        // 1. Dynamic Recent Chats Memory Index (Top 10 sessions — prevents hallucination about past chats/projects)
+        val dbSessions = try {
+            com.example.gemini.data.database.ChatDatabase.getInstance(vm.getApplication()).sessions.value
+        } catch (_: Exception) { emptyList() }
+        val merged = (vm.allConversations.value + dbSessions)
+            .distinctBy { it.id }
+            .sortedByDescending { it.updatedAt }
+            .take(10)
+        if (merged.isNotEmpty()) {
+            sb.append("\n## Saved Conversations & Projects Index in Memory (Top ${merged.size}):\n")
+            merged.forEach { c ->
+                val proj = if (c.workspaceUri.isNotBlank()) " [Project: ${c.workspaceUri.removePrefix("file://").trimEnd('/').substringAfterLast('/')}]" else ""
+                val sum = if (!c.summary.isNullOrBlank()) " - ${c.summary.take(70)}" else ""
                 sb.append("- ID: \"${c.id}\" | Title: \"${c.title}\"$proj$sum\n")
             }
         }
@@ -266,7 +380,7 @@ object ChatContextBridge {
                     sb.append("$roleName: $text\n")
                 }
             }
-            sb.append("Instructions: If the user asks about previous discussion, use this context immediately!\n\n")
+            sb.append("Instructions: If the user asks about previous discussion or an older project/website chat, use this memory index immediately or call list_recent_chats / open_chat_by_id!\n\n")
         }
 
         return sb.toString()
@@ -308,7 +422,7 @@ object ChatContextBridge {
      */
     suspend fun startNewChatTask(prompt: String): String = withContext(Dispatchers.Main) {
         val vm = viewModel ?: return@withContext "Error: App chat is not connected. Open the chat screen first."
-        val cleanPrompt = prompt.trim()
+        val cleanPrompt = sanitizeTaskPrompt(prompt)
         if (cleanPrompt.isBlank()) return@withContext "Error: Task prompt cannot be empty."
 
         val lowerPrompt = cleanPrompt.lowercase()
@@ -323,21 +437,23 @@ object ChatContextBridge {
         val now = System.currentTimeMillis()
         if (cleanPrompt == lastSentPrompt && (now - lastSentTime < 25_000L)) {
             Log.w(TAG, "Duplicate prompt blocked by guard: $cleanPrompt")
-            return@withContext "Ye task already app me chal raha hai aur agent kaam kar raha hai. Aap 'status kya hai' poochh sakte hain."
+            return@withContext "Ye task already chal raha hai. Aap 'status kya hai' poochh sakte hain."
         }
 
-        // Guard against queue storm: if agent is currently streaming, don't spam sendMessage into queue
+        // Guard against queue storm: if currently streaming, don't spam sendMessage into queue
         if (vm.isStreaming.value) {
-            Log.w(TAG, "Agent is currently streaming, blocking duplicate task prompt from queueing")
-            return@withContext "Agent abhi ek task pe actively kaam kar raha hai. Kripya thoda wait karein ya 'status kya hai' poochhein."
+            Log.w(TAG, "Currently streaming, blocking duplicate task prompt from queueing")
+            return@withContext "Abhi ek task actively chal raha hai. Kripya thoda wait karein ya 'status kya hai' poochhein."
         }
 
         lastSentPrompt = cleanPrompt
         lastSentTime = now
 
         try {
-            // 1. Natively create a fresh new chat session in Kotlin FIRST
+            // 1. Natively create a fresh new chat session in Kotlin FIRST (no wrapper text injected)
             isNewChatDraft = false
+            closeOverlaysForChatNavigation()
+            AuraAgentEventBus.resetQuestionDedupe()
             vm.startNewChat()
             requestViewMode("CHAT")
             requestSwitchToChatTab.value = true
@@ -345,13 +461,35 @@ object ChatContextBridge {
 
             delay(350L) // Allow new conversation session to bind
 
+            val conv = vm.currentConversation.value
             val initialMsgCount = vm.messages.value.size
             Log.i(TAG, "Sending clean task prompt directly to new chat: $cleanPrompt")
 
-            // 2. Dispatch the exact user prompt directly without any hardcoded wrapper prefixes
-            vm.sendMessage(cleanPrompt)
+            // Update active project context immediately for cross-screen continuity
+            if (conv != null) {
+                val inferredProj = cleanPrompt.take(48).trim()
+                AuraAgentEventBus.updateActiveProject { prev ->
+                    prev.copy(
+                        sessionId = conv.id,
+                        projectName = inferredProj,
+                        requirementsSummary = cleanPrompt.take(280),
+                        workspaceDir = conv.workspaceUri.removePrefix("file://")
+                    )
+                }
+                persistConversationMetadata(
+                    sessionId = conv.id,
+                    title = inferredProj,
+                    projectName = inferredProj,
+                    projectPath = conv.workspaceUri.removePrefix("file://"),
+                    summary = cleanPrompt.take(200)
+                )
+            }
 
-            // Wait up to 6s for initial acknowledgment from the agent
+            // 2. Dispatch the exact clean user prompt directly without any hardcoded wrapper prefixes
+            vm.sendMessage(cleanPrompt)
+            clearPromptCache()
+
+            // Wait up to 6s for initial acknowledgment
             val waitStart = System.currentTimeMillis()
             while (System.currentTimeMillis() - waitStart < 6000L) {
                 val currentMsgs = vm.messages.value
@@ -362,8 +500,9 @@ object ChatContextBridge {
                 delay(200L)
             }
 
-            return@withContext "Maine ek nayi chat shuru karke aapka task initiate kar diya hai. Agent is par actively kaam kar raha hai."
+            return@withContext "Kaam shuru kar diya hai. Jaise hi agla step ya sawaal aayega, main aapko turant update kar dunga."
         } catch (e: Exception) {
+            clearPromptCache()
             Log.e(TAG, "Error starting new chat task: ${e.message}", e)
             return@withContext "Error: ${e.message}"
         }
@@ -379,12 +518,14 @@ object ChatContextBridge {
         autoSend: Boolean = true
     ): String = withContext(Dispatchers.Main) {
         val vm = viewModel ?: return@withContext "Error: App chat is not connected."
-        val text = message.trim()
+        val text = sanitizeTaskPrompt(message)
         if (text.isBlank()) return@withContext "Error: Message cannot be empty."
 
         when (target.trim().uppercase()) {
             "NEW" -> {
                 isNewChatDraft = false
+                closeOverlaysForChatNavigation()
+                AuraAgentEventBus.resetQuestionDedupe()
                 vm.startNewChat()
                 requestViewMode("CHAT")
                 requestSwitchToChatTab.value = true
@@ -392,19 +533,22 @@ object ChatContextBridge {
                 if (autoSend) {
                     delay(350L)
                     vm.sendMessage(text)
-                    "Nayi chat start karke message bhej diya gaya hai."
+                    clearPromptCache()
+                    "Message bhej diya gaya hai."
                 } else {
-                    "Nayi chat start kar di gayi hai."
+                    "Nayi chat ready hai."
                 }
             }
             "CURRENT", "" -> {
                 isNewChatDraft = false
+                closeOverlaysForChatNavigation()
                 ensureConversationExists(vm)
                 requestViewMode("CHAT")
                 requestSwitchToChatTab.value = true
                 if (autoSend) {
                     vm.sendMessage(text)
-                    "Current chat mein message send kar diya hai."
+                    clearPromptCache()
+                    "Message bhej diya hai."
                 } else {
                     "Switched to current chat."
                 }
@@ -417,24 +561,29 @@ object ChatContextBridge {
                     ?: all.firstOrNull { it.title.contains(query, ignoreCase = true) }
                 if (matched != null) {
                     isNewChatDraft = false
+                    closeOverlaysForChatNavigation()
                     vm.selectConversation(matched.id)
+                    syncActiveProjectFromConversation(matched)
                     requestViewMode("CHAT")
                     requestSwitchToChatTab.value = true
                     if (autoSend) {
                         delay(350L)
                         vm.sendMessage(text)
+                        clearPromptCache()
                         "Chat '${matched.title}' open karke message bhej diya hai."
                     } else {
                         "Chat '${matched.title}' open kar di hai."
                     }
                 } else {
                     isNewChatDraft = false
+                    closeOverlaysForChatNavigation()
                     ensureConversationExists(vm)
                     requestViewMode("CHAT")
                     requestSwitchToChatTab.value = true
                     if (autoSend) {
                         vm.sendMessage(text)
-                        "Message send kar diya hai."
+                        clearPromptCache()
+                        "Message bhej diya hai."
                     } else {
                         "Switched to chat."
                     }
@@ -444,99 +593,137 @@ object ChatContextBridge {
     }
 
     /**
-     * Lists recent saved conversations and projects with metadata (ID, title, summary, project path).
+     * Lists recent saved conversations and projects with metadata (ID, title, project name/path, summary)
+     * across both live ViewModel sessions and persistent SQLite ChatDatabase (including message content search).
      */
-    fun listRecentChats(query: String? = null, limit: Int = 10): String {
-        val vm = viewModel ?: return "Chat system is not available."
-        val all = vm.allConversations.value
-        if (all.isEmpty()) return "No conversations found in the app."
+    suspend fun listRecentChats(query: String? = null, limit: Int = 15): String = withContext(Dispatchers.IO) {
+        val vm = viewModel ?: return@withContext "Chat system is not available."
+        val boundedLimit = limit.coerceIn(1, 30)
+        val db = runCatching { com.example.gemini.data.database.ChatDatabase.getInstance(vm.getApplication()) }.getOrNull()
+        val dbMatches = runCatching { db?.searchSessions(query, boundedLimit) ?: emptyList() }.getOrDefault(emptyList())
+        val dbById = dbMatches.associateBy { it.id }
 
+        val allMem = vm.allConversations.value
         val q = query?.trim()?.lowercase()
-        val filtered = if (!q.isNullOrBlank()) {
-            all.filter { conv ->
+        val memMatches = if (!q.isNullOrBlank()) {
+            allMem.filter { conv ->
                 conv.title.lowercase().contains(q) ||
                 conv.summary?.lowercase()?.contains(q) == true ||
                 conv.workspaceUri.lowercase().contains(q) ||
                 conv.id.lowercase().contains(q)
             }
         } else {
-            all
+            allMem
         }
 
-        val results = filtered.sortedByDescending { it.updatedAt }.take(limit.coerceIn(1, 30))
+        val combinedIds = LinkedHashSet<String>()
+        val combinedConvs = mutableListOf<Conversation>()
+        for (c in memMatches) {
+            if (combinedIds.add(c.id)) combinedConvs.add(c)
+        }
+        for (meta in dbMatches) {
+            if (combinedIds.add(meta.id)) combinedConvs.add(meta.toConversation())
+        }
+
+        val results = combinedConvs.sortedByDescending { it.updatedAt }.take(boundedLimit)
         if (results.isEmpty()) {
-            return "No chats found matching '$query'."
+            return@withContext if (query.isNullOrBlank()) "No conversations found in the app."
+            else "No chats found matching '$query'."
         }
 
         val timeFormat = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
         val sb = StringBuilder("Found ${results.size} recent chats:\n")
         results.forEachIndexed { idx, c ->
+            val meta = dbById[c.id]
             val dateStr = timeFormat.format(Date(c.updatedAt))
             sb.append("${idx + 1}. [${c.id}] \"${c.title}\"")
-            if (!c.summary.isNullOrBlank()) {
-                sb.append(" - Summary: ${c.summary.take(80)}")
+            val projectLabel = meta?.projectName?.takeIf { it.isNotBlank() }
+                ?: c.workspaceUri.removePrefix("file://").trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() }
+            if (!projectLabel.isNullOrBlank()) {
+                sb.append(" [Project: $projectLabel]")
             }
-            if (c.workspaceUri.isNotBlank()) {
-                val projName = c.workspaceUri.trimEnd('/').substringAfterLast('/')
-                if (projName.isNotBlank()) sb.append(" [Project: $projName]")
+            val summaryText = c.summary?.takeIf { it.isNotBlank() } ?: meta?.summary.orEmpty()
+            if (summaryText.isNotBlank()) {
+                sb.append(" - Summary: ${summaryText.take(90)}")
             }
             sb.append(" ($dateStr)\n")
         }
-        return sb.toString().trim()
+        sb.toString().trim()
     }
 
     /**
-     * Opens a specific chat on screen by its exact or partial conversation ID.
+     * Opens a specific chat on screen by its exact/partial ID, title, project name, or message keyword.
+     * Closes the Drawer and In-Built Browser cleanly while keeping Voice active.
      */
-    fun openChatById(chatId: String): String {
-        val vm = viewModel ?: return "Chat system is not available."
+    suspend fun openChatById(chatId: String): String = withContext(Dispatchers.Main) {
+        val vm = viewModel ?: return@withContext "Chat system is not available."
         val query = chatId.trim()
-        if (query.isBlank()) return "Please specify a chat ID to open."
+        if (query.isBlank()) return@withContext "Please specify a chat ID to open."
 
         val all = vm.allConversations.value
-        val matched = all.firstOrNull { it.id == query || it.id.startsWith(query) }
+        var matched = all.firstOrNull { it.id == query || it.id.startsWith(query) }
             ?: all.firstOrNull { it.title.equals(query, ignoreCase = true) }
+            ?: all.firstOrNull { it.title.contains(query, ignoreCase = true) || it.workspaceUri.contains(query, ignoreCase = true) }
 
-        return if (matched != null) {
+        if (matched == null) {
+            val dbHit = withContext(Dispatchers.IO) {
+                runCatching {
+                    val db = com.example.gemini.data.database.ChatDatabase.getInstance(vm.getApplication())
+                    db.getSessionMetadata(query) ?: db.searchSessions(query, 1).firstOrNull()
+                }.getOrNull()
+            }
+            if (dbHit != null) {
+                matched = dbHit.toConversation()
+            }
+        }
+
+        if (matched != null) {
             isNewChatDraft = false
+            closeOverlaysForChatNavigation()
             vm.selectConversation(matched.id)
+            syncActiveProjectFromConversation(matched)
             requestViewMode("CHAT")
             requestSwitchToChatTab.value = true
             "Opened chat '${matched.title}' on screen."
         } else {
-            "Could not find a chat with ID '$chatId'."
+            "Could not find a chat matching '$chatId'."
         }
     }
 
     /**
-     * Programmatically closes the In-Built Browser and pauses WebView media/timers.
+     * Programmatically closes the In-Built Browser, stops WebView media/timers cleanly,
+     * and returns to the previous Aura screen without triggering Android Recents or Accessibility Back.
      */
     fun closeInAppBrowser(): String {
         try {
-            val browserSession = com.example.gemini.ui.browser.BrowserSessionManager.instance
-            browserSession.getActiveTab()?.webView?.let { wv ->
-                wv.post {
-                    try {
-                        wv.onPause()
-                        wv.stopLoading()
-                    } catch (_: Exception) {}
-                }
-            }
+            com.example.gemini.ui.browser.BrowserSessionManager.instance.closeActiveAndStopMedia()
         } catch (_: Exception) {}
 
-        requestViewMode("CHAT")
-        return "In-Built Browser closed and returned to chat screen."
+        val returnMode = if (previousNonBrowserMode.isNotBlank() && previousNonBrowserMode != "BROWSER") {
+            previousNonBrowserMode
+        } else {
+            "CHAT"
+        }
+        requestViewMode(returnMode)
+        return "In-Built Browser closed cleanly."
     }
 
     /**
      * Checks real-time progress of active background tasks, websites, and apps.
-     * Reads JarvisTasks, checks localhost web servers (8080, 3000, 5173), and checks chat stream.
+     * Checks localhost web servers (port 3000 first, then 3001, 5173, 8080, 8000) and active chat stream.
      * Zero screen share required.
      */
     suspend fun checkActiveTaskStatus(): String = withContext(Dispatchers.IO) {
         val sb = StringBuilder()
 
-        // 1. Check Jarvis background tasks
+        val activeProj = AuraAgentEventBus.activeProject.value
+        if (activeProj.isActive) {
+            sb.append("Active project: \"${activeProj.projectName.ifBlank { "Current Project" }}\"")
+            if (activeProj.previewUrl.isNotBlank()) sb.append(" (Preview: ${activeProj.previewUrl})")
+            sb.append("\n")
+        }
+
+        // 1. Check background tasks
         val tasks = com.example.gemini.data.jarvis.JarvisTasks.tasks.value
         val activeTasks = tasks.filter { it.active }
         val recentTasks = if (activeTasks.isNotEmpty()) activeTasks else tasks.take(2)
@@ -549,8 +736,8 @@ object ChatContextBridge {
             }
         }
 
-        // 2. Check Localhost Servers
-        val commonPorts = listOf(8080, 3000, 5173, 8000)
+        // 2. Check Localhost Servers (port 3000 first)
+        val commonPorts = listOf(3000, 3001, 5173, 8080, 8000)
         val openPorts = commonPorts.filter { isPortOpen(it) }
         if (openPorts.isNotEmpty()) {
             sb.append("Localhost servers running: ")
@@ -565,17 +752,17 @@ object ChatContextBridge {
             val msgs = vm.messages.value
             val lastMsg = msgs.lastOrNull { it.role == MessageRole.ASSISTANT && it.content.isNotBlank() }
             if (isStreaming) {
-                sb.append("Agent is actively writing and generating code right now.\n")
+                sb.append("Currently generating and updating files right now.\n")
                 if (lastMsg != null) {
-                    sb.append("Latest text: ${lastMsg.content.takeLast(180)}\n")
+                    sb.append("Latest progress: ${lastMsg.content.takeLast(180)}\n")
                 }
             } else if (lastMsg != null && sb.isEmpty()) {
-                sb.append("Latest chat output: ${lastMsg.content.take(250)}\n")
+                sb.append("Latest output: ${lastMsg.content.take(250)}\n")
             }
         }
 
         if (sb.isEmpty()) {
-            return@withContext "No active tasks or background builds are running currently."
+            return@withContext "No active tasks or builds are running currently."
         }
         return@withContext sb.toString().trim()
     }

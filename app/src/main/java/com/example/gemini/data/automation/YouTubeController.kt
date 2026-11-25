@@ -41,11 +41,23 @@ object YouTubeController {
             return playInBackgroundBrowser(context, query)
         }
 
-        var cleanQ = cleanQuery(query)
-        if (cleanQ.isBlank() || cleanQ.equals("video", ignoreCase = true) || cleanQ.equals("song", ignoreCase = true) ||
-            cleanQ.equals("a video", ignoreCase = true) || cleanQ.equals("a song", ignoreCase = true) ||
-            cleanQ.equals("music", ignoreCase = true) || cleanQ.equals("songs", ignoreCase = true)) {
-            cleanQ = "Trending music"
+        val cleanQ = cleanQuery(query)
+        val isJustOpenYouTube = cleanQ.isBlank() ||
+            cleanQ.equals("youtube", ignoreCase = true) ||
+            cleanQ.equals("yt", ignoreCase = true) ||
+            cleanQ.equals("youtube app", ignoreCase = true)
+        if (isJustOpenYouTube) {
+            // #21: If user only asked to open YouTube, launch native YouTube app directly without auto-searching!
+            val launchIntent = context.packageManager.getLaunchIntentForPackage("com.google.android.youtube")?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            if (launchIntent != null && ActivityLauncherHelper.startActivitySafely(context, launchIntent)) {
+                return PlayResult(true, null, "Opened native YouTube app.")
+            }
+            // Fallback to Aura In-Built Browser only if YouTube app is genuinely not installed
+            com.example.gemini.ui.browser.BrowserSessionManager.instance.openUrl("https://m.youtube.com", newTab = true)
+            com.example.gemini.data.live.ChatContextBridge.requestViewMode("BROWSER")
+            return PlayResult(true, null, "YouTube app not installed; opened YouTube in Aura In-Built Browser.")
         }
 
         val apiKey = explicitApiKey ?: ""
@@ -96,6 +108,14 @@ object YouTubeController {
 
     fun searchYouTube(context: Context, query: String): PlayResult {
         val cleanQ = cleanQuery(query)
+        if (cleanQ.isBlank() || cleanQ.equals("youtube", ignoreCase = true)) {
+            val launchIntent = context.packageManager.getLaunchIntentForPackage("com.google.android.youtube")?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            if (launchIntent != null && ActivityLauncherHelper.startActivitySafely(context, launchIntent)) {
+                return PlayResult(true, null, "Opened native YouTube app.")
+            }
+        }
         return try {
             val encoded = Uri.encode(cleanQ)
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$encoded&gl=IN&hl=en")).apply {
@@ -106,11 +126,11 @@ object YouTubeController {
             if (ok) {
                 PlayResult(true, null, "Showing YouTube search results for \"$cleanQ\".")
             } else {
-                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$encoded&gl=IN&hl=en")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                ActivityLauncherHelper.startActivitySafely(context, webIntent)
-                PlayResult(true, null, "Showing YouTube search results for \"$cleanQ\".")
+                // #21: Native YouTube not installed -> fallback cleanly to Aura In-Built Browser
+                val browserUrl = if (cleanQ.isBlank()) "https://m.youtube.com" else "https://m.youtube.com/results?search_query=$encoded"
+                com.example.gemini.ui.browser.BrowserSessionManager.instance.openUrl(browserUrl, newTab = true)
+                com.example.gemini.data.live.ChatContextBridge.requestViewMode("BROWSER")
+                PlayResult(true, null, "YouTube app not installed; showing results for \"$cleanQ\" in Aura In-Built Browser.")
             }
         } catch (e: Exception) {
             android.util.Log.e("YouTubeController", "YouTube search intent failed", e)

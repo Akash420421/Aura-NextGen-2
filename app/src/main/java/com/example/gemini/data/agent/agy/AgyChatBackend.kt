@@ -1162,6 +1162,7 @@ class AgyChatBackend(
                 ?: Conversation(id = id, title = "Antigravity Chat", sessionId = id)
             Log.d("CHAT_OPEN_DEBUG", "👉 [ChatViewModel.selectConversation] Launching stream for conv: title='${conv.title}', id=${conv.id}")
             _currentConversation.value = conv
+            com.example.gemini.data.live.ChatContextBridge.syncActiveProjectFromConversation(conv)
             // this app's pending queued sends for the chat (the daemon's queue arrives with the first frame)
             refreshQueuedMessages(id)
             chatModels[id]?.let { _selectedModelId.value = it }
@@ -1329,6 +1330,49 @@ class AgyChatBackend(
                                         if (historyChunk) adoptChatModelFromHistory(conversationId, msgs)
                                         if (msgs.isNotEmpty()) {
                                             com.example.gemini.ui.chat.ChatFeedCache.prewarm(msgs)
+                                            // Emit proactive structured events for Voice announcements (#8)
+                                            val latestAssistant = msgs.lastOrNull { it.role == MessageRole.ASSISTANT }
+                                            val pendingAsk = latestAssistant?.toolCalls?.lastOrNull {
+                                                it.toolType == com.example.gemini.domain.model.ToolType.ASK_CHOICE &&
+                                                    it.status == "AWAITING_CHOICE"
+                                            }
+                                            if (pendingAsk != null && !historyChunk) {
+                                                val firstQ = pendingAsk.questionnaire?.questions?.firstOrNull()
+                                                val qText = firstQ?.prompt?.takeIf { it.isNotBlank() } ?: pendingAsk.title
+                                                val qOpts = firstQ?.options?.map { it.label } ?: emptyList()
+                                                val qKey = "${conversationId}:${pendingAsk.stepIndex}:${firstQ?.id ?: qText.hashCode()}"
+                                                com.example.gemini.data.live.AuraAgentEventBus.emit(
+                                                    com.example.gemini.data.live.AuraAgentEvent.QuestionAsked(
+                                                        conversationId = conversationId,
+                                                        questionKey = qKey,
+                                                        promptSummary = qText,
+                                                        options = qOpts
+                                                    )
+                                                )
+                                            }
+                                            val failedTool = latestAssistant?.toolCalls?.lastOrNull { tc ->
+                                                (tc.status.equals("ERROR", ignoreCase = true) || tc.status.equals("FAILED", ignoreCase = true)) &&
+                                                    tc.output.isNotBlank() &&
+                                                    !tc.output.contains("Stopped", ignoreCase = true) &&
+                                                    !tc.output.contains("cancel", ignoreCase = true) &&
+                                                    !tc.output.contains("abort", ignoreCase = true)
+                                            }
+                                            if (failedTool != null && !historyChunk && !isRunning) {
+                                                com.example.gemini.data.live.AuraAgentEventBus.emit(
+                                                    com.example.gemini.data.live.AuraAgentEvent.RealError(
+                                                        conversationId = conversationId,
+                                                        errorTitle = failedTool.title.ifBlank { "Execution Error" },
+                                                        errorMessage = failedTool.output
+                                                    )
+                                                )
+                                            }
+                                            _currentConversation.value?.let { activeConv ->
+                                                val latestText = msgs.lastOrNull { it.content.isNotBlank() }?.content.orEmpty()
+                                                com.example.gemini.data.live.ChatContextBridge.syncActiveProjectFromConversation(activeConv, latestText)
+                                                if (!isRunning) {
+                                                    com.example.gemini.data.live.ChatContextBridge.persistConversationMetadata(activeConv, latestText)
+                                                }
+                                            }
 
                                             msgs.flatMap { it.toolCalls }.filter {
                                                 it.toolType == com.example.gemini.domain.model.ToolType.GENERATE_IMAGE && it.output.isNotBlank()
@@ -1678,6 +1722,8 @@ class AgyChatBackend(
 
         updatedConv = updatedConv.copy(updatedAt = System.currentTimeMillis())
         _currentConversation.value = updatedConv
+        com.example.gemini.data.live.ChatContextBridge.syncActiveProjectFromConversation(updatedConv, finalPrompt)
+        com.example.gemini.data.live.ChatContextBridge.persistConversationMetadata(updatedConv, finalPrompt)
 
         // Like the hub web UI: a fully idle chat runs the message now; otherwise it is queued and the daemon sends it
         // when the agent is done (it was always WHEN_IDLE before, so a message sent while the chat was "idle" with
@@ -2363,6 +2409,7 @@ class AgyChatBackend(
     }
 
     override fun stopStreaming() {
+        com.example.gemini.data.live.ChatContextBridge.clearPromptCache()
         val conv = _currentConversation.value
         streamingJob?.cancel()
         isPromptInFlight = false

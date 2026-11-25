@@ -32,9 +32,11 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object AndroidAutomation {
 
-    const val INSTRUCTIONS = "Controls this Android phone. Look first: android_get_ui_tree lists on-screen elements with ids like e12 and their centers; " +
-        "android_screenshot shows what it looks like. Then act on element ids (android_tap, android_type_text, android_scroll), or on screen-pixel " +
-        "coordinates when an element has no id. Ids are only valid for the latest tree, so read it again after the screen changes. " +
+    const val INSTRUCTIONS = "Controls this Android phone via the Accessibility Service. Look first: android_read_screen gives clean readable text & form fields; " +
+        "android_get_ui_tree lists on-screen elements with ids like e12 and their centers; android_screenshot shows what it looks like. " +
+        "Then act on element ids, visible text, or screen-pixel coordinates (android_tap, android_double_tap, android_type_text, android_scroll, android_scroll_to_text, " +
+        "android_swipe, android_drag, android_pinch, android_multi_path_gesture, android_node_action, android_clipboard, android_recent_notifications). " +
+        "Ids are only valid for the latest tree, so read it again after the screen changes. " +
         "For anything the tools don't cover, use android_adb_shell (or adb in the terminal). Ask the user before anything destructive or " +
         "outward-facing: uninstalling, deleting, sending messages, payments, changing security settings. " +
         "If a tool says a permission or ADB is missing, tell the user exactly what to do and stop."
@@ -115,6 +117,13 @@ object AndroidAutomation {
             emptyList(),
             "sections" to prop("string", "Comma-separated subset: battery, device, memory, storage, display, network, audio, system (default: all)")
         ))
+        put(tool("android_read_screen",
+            "Read clean, structured visible screen text in top-to-bottom reading order, plus editable input fields (passwords masked) and key interactive actions. " +
+                "Prefer this for reading articles, messages, emails, or page summaries; use android_get_ui_tree when you need element ids.",
+            emptyList(),
+            "all_windows" to prop("boolean", "Include all interactive windows (dialogs, keyboard, split screen). Default false"),
+            "max_blocks" to prop("integer", "Maximum readable text blocks to return (default 250)")
+        ))
         put(tool("android_get_ui_tree",
             "List the on-screen elements (text, description, resource id, type, center point, bounds, and clickable/editable/scrollable/checked flags), " +
                 "each with an id like e12 for the other tools. Ids are replaced on every call.",
@@ -129,11 +138,19 @@ object AndroidAutomation {
             "max_width" to prop("integer", "Scale down to at most this width in pixels (default 1080)"),
             "quality" to prop("integer", "JPEG quality 10-100 (default 70)")
         ))
-        put(tool("android_tap", "Tap (or long-press) an element by id, or a point in screen pixels.", emptyList(),
+        put(tool("android_tap", "Tap (or long-press) an element by id, by visible text/description, or at a point in screen pixels.", emptyList(),
             elementId,
-            "x" to prop("number", "Screen x in pixels, when no element_id"),
-            "y" to prop("number", "Screen y in pixels, when no element_id"),
+            "text" to prop("string", "Visible text or content description to locate and tap when element_id is omitted"),
+            "x" to prop("number", "Screen x in pixels, when no element_id or text"),
+            "y" to prop("number", "Screen y in pixels, when no element_id or text"),
             "long_press" to prop("boolean", "Long-press instead of tap")
+        ))
+        put(tool("android_double_tap", "Double-tap an element by id, visible text, or screen-pixel coordinates (useful for liking posts, zooming, or video seek).", emptyList(),
+            elementId,
+            "text" to prop("string", "Visible text or content description to double-tap"),
+            "x" to prop("number", "Screen x in pixels"),
+            "y" to prop("number", "Screen y in pixels"),
+            "gap_ms" to prop("integer", "Delay between the two taps in milliseconds (default 90)")
         ))
         put(tool("android_type_text", "Type into a text field: the given element, or the focused field. Replaces its text unless append is true.",
             listOf("text"),
@@ -148,15 +165,73 @@ object AndroidAutomation {
             elementId.first to prop("string", "Scrollable element (or a child of one) from the latest tree; omit to swipe across the middle of the screen"),
             "distance" to prop("number", "When swiping: fraction of the screen to move, 0.1-0.9 (default 0.5)")
         ))
+        put(tool("android_scroll_to_text", "Scroll repeatedly until text, description, hint, or resource id appears on screen (or end of list is reached).",
+            listOf("text"),
+            "text" to prop("string", "Text, content description, hint, or resource id to find"),
+            "direction" to prop("string", "Scroll direction (default down)", listOf("down", "up", "left", "right")),
+            "max_scrolls" to prop("integer", "Maximum scroll gestures to attempt (default 8, max 20)"),
+            "tap_when_found" to prop("boolean", "Automatically tap the matched element once found (default false)")
+        ))
         put(tool("android_swipe", "Swipe from one point to another in screen pixels (drag, pull to refresh, sliders).",
             listOf("x1", "y1", "x2", "y2"),
             "x1" to prop("number", "Start x"), "y1" to prop("number", "Start y"),
             "x2" to prop("number", "End x"), "y2" to prop("number", "End y"),
             "duration_ms" to prop("integer", "How long the swipe takes (default 300; longer = slower drag)")
         ))
-        put(tool("android_global_action", "System navigation: back, home, recent apps, notification shade, quick settings, power menu, lock screen, split screen.",
+        put(tool("android_drag", "Long-press and drag from a start element/point to a target element/point (reordering items, moving icons, drag-and-drop).",
+            emptyList(),
+            "from_element_id" to prop("string", "Start element id from the latest UI tree"),
+            "to_element_id" to prop("string", "Destination element id from the latest UI tree"),
+            "x1" to prop("number", "Start x in pixels (if from_element_id omitted)"),
+            "y1" to prop("number", "Start y in pixels (if from_element_id omitted)"),
+            "x2" to prop("number", "End x in pixels (if to_element_id omitted)"),
+            "y2" to prop("number", "End y in pixels (if to_element_id omitted)"),
+            "hold_ms" to prop("integer", "Hold duration before dragging in ms (default 350)"),
+            "duration_ms" to prop("integer", "Drag motion duration in ms (default 450)")
+        ))
+        put(tool("android_pinch", "Two-finger pinch gesture to zoom in or zoom out on maps, photos, web pages, or documents.",
+            listOf("direction"),
+            "direction" to prop("string", "Zoom direction: 'in' spreads fingers apart to zoom in, 'out' pinches fingers together to zoom out", listOf("in", "out")),
+            "x" to prop("number", "Center x in pixels (default screen center)"),
+            "y" to prop("number", "Center y in pixels (default screen center)"),
+            "scale" to prop("number", "Pinch span as fraction of screen width, 0.15-0.85 (default 0.45)"),
+            "duration_ms" to prop("integer", "Gesture duration in ms (default 400)")
+        ))
+        put(tool("android_multi_path_gesture", "Trace a continuous single-finger gesture through 2 or more waypoints (curved swipes, gestures, drawing).",
+            listOf("points"),
+            "points" to JSONObject().apply {
+                put("type", "array")
+                put("description", "Ordered list of {x, y} screen-pixel waypoints (at least 2)")
+                put("items", JSONObject().apply {
+                    put("type", "object")
+                    put("properties", JSONObject().apply {
+                        put("x", prop("number", "Screen x in pixels"))
+                        put("y", prop("number", "Screen y in pixels"))
+                    })
+                    put("required", JSONArray(listOf("x", "y")))
+                })
+            },
+            "duration_ms" to prop("integer", "Total gesture duration in ms (default 500)")
+        ))
+        put(tool("android_node_action", "Perform a semantic accessibility action on an element from the latest UI tree (copy, paste, cut, select, clear_text, expand, collapse, dismiss, focus, clear_focus, set_progress).",
+            listOf("element_id", "action"),
+            elementId,
+            "action" to prop("string", "Semantic node action", listOf("click", "long_click", "focus", "clear_focus", "select", "copy", "paste", "cut", "clear_text", "expand", "collapse", "dismiss", "set_progress")),
+            "value" to prop("string", "Optional numeric value when action is set_progress")
+        ))
+        put(tool("android_clipboard", "Read or write plain text on the Android clipboard for cross-app copy/paste automation.",
             listOf("action"),
-            "action" to prop("string", "Action", listOf("back", "home", "recents", "notifications", "quick_settings", "power_dialog", "lock_screen", "split_screen"))
+            "action" to prop("string", "Clipboard operation", listOf("read", "write")),
+            "text" to prop("string", "Text to copy to clipboard when action is write")
+        ))
+        put(tool("android_recent_notifications", "List recent notifications and extracted OTP codes observed by the Accessibility Service.",
+            emptyList(),
+            "limit" to prop("integer", "Maximum notifications to return (default 10, max 20)"),
+            "max_age_seconds" to prop("integer", "Only include notifications newer than this many seconds (default 300)")
+        ))
+        put(tool("android_global_action", "System navigation: back, home, recent apps, notification shade, quick settings, power menu, lock screen, split screen, take_screenshot, dismiss_notifications.",
+            listOf("action"),
+            "action" to prop("string", "Action", listOf("back", "home", "recents", "notifications", "quick_settings", "power_dialog", "lock_screen", "split_screen", "take_screenshot", "dismiss_notifications"))
         ))
         put(tool("android_clear_recent_apps", "Clears all recent/minimized apps from the Android Recents overview with multi-OEM button matching, gesture fallbacks, and real post-action verification."))
         put(tool("android_close_recent_app", "Closes a specific app from Android Recents overview by finding its card, centering it, and dismissing it with post-action verification.",
@@ -218,11 +293,17 @@ object AndroidAutomation {
             when (name) {
                 "android_get_status" -> status(context, svc)
                 "android_get_device_info" -> text(deviceInfo(context, args.optString("sections")).toString(2))
+                "android_read_screen" -> text(svc.readScreenContent(
+                    includeAllWindows = args.optBoolean("all_windows", false),
+                    maxBlocks = args.optInt("max_blocks", 250).coerceIn(10, 1000)
+                ).toFormattedString())
                 "android_get_ui_tree" -> text(uiTree(svc, args.optString("filter").ifBlank { null }, args.optBoolean("all_windows"), args.optInt("max_elements", 300).coerceIn(10, 2000)))
                 "android_screenshot" -> screenshot(context, svc, args.optInt("max_width", 1080).coerceIn(200, 4000), args.optInt("quality", 70).coerceIn(10, 100))
                 "android_tap" -> tap(svc, args)
+                "android_double_tap" -> doubleTap(svc, args)
                 "android_type_text" -> typeText(svc, args)
                 "android_scroll" -> scroll(context, svc, args)
+                "android_scroll_to_text" -> scrollToText(svc, args)
                 "android_swipe" -> {
                     val path = Path().apply {
                         moveTo(args.getDouble("x1").toFloat(), args.getDouble("y1").toFloat())
@@ -232,6 +313,12 @@ object AndroidAutomation {
                     svc.awaitIdle()
                     text("Swiped. ${foreground(svc)}")
                 }
+                "android_drag" -> drag(svc, args)
+                "android_pinch" -> pinch(svc, args)
+                "android_multi_path_gesture" -> multiPathGesture(svc, args)
+                "android_node_action" -> nodeAction(svc, args)
+                "android_clipboard" -> clipboardAction(svc, args)
+                "android_recent_notifications" -> recentNotifications(args)
                 "android_global_action" -> globalAction(svc, args.getString("action"))
                 "android_clear_recent_apps" -> {
                     val mode = args.optString("mode", "clear_all")
@@ -291,7 +378,7 @@ object AndroidAutomation {
     }
 
     private fun foreground(svc: AutomationAccessibilityService): String {
-        val pkg = svc.rootInActiveWindow?.packageName ?: svc.foregroundPackage
+        val pkg = svc.getForegroundAppRootNode()?.packageName ?: svc.rootInActiveWindow?.packageName ?: svc.foregroundPackage
         return "In front: ${pkg ?: "unknown"}"
     }
 
@@ -306,7 +393,8 @@ object AndroidAutomation {
             put("screen_px", "${w}x$h")
             put("screen_on", power.isInteractive)
             put("locked", keyguard.isKeyguardLocked)
-            put("foreground_package", svc.rootInActiveWindow?.packageName ?: svc.foregroundPackage ?: JSONObject.NULL)
+            put("keyboard_visible", svc.isKeyboardVisible())
+            put("foreground_package", svc.getForegroundAppRootNode()?.packageName ?: svc.rootInActiveWindow?.packageName ?: svc.foregroundPackage ?: JSONObject.NULL)
             put("foreground_activity", svc.foregroundClass ?: JSONObject.NULL)
             put("screenshots", if (canTakeScreenshots()) "yes" else if (adb != null) "via ADB" else "no (needs Android 11+ or ADB)")
             put("adb", adb?.serial ?: "not connected (adb-only tools will fail)")
@@ -482,7 +570,7 @@ object AndroidAutomation {
     private fun uiTree(svc: AutomationAccessibilityService, filter: String?, allWindows: Boolean, max: Int): String {
         elements.clear()
         val roots = if (allWindows) svc.windows.mapNotNull { w -> w.root?.let { "${w.title ?: it.packageName} (${windowType(w.type)})" to it } }
-        else listOfNotNull(svc.rootInActiveWindow?.let { "${it.packageName}" to it })
+        else listOfNotNull((svc.getForegroundAppRootNode() ?: svc.rootInActiveWindow)?.let { "${it.packageName}" to it })
         if (roots.isEmpty()) return "No window content available (the screen may be off, or showing a secure lock screen)."
         val out = StringBuilder()
         var count = 0
@@ -743,6 +831,161 @@ object AndroidAutomation {
         return text("Scrolled $direction.")
     }
 
+    private suspend fun doubleTap(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
+        val gapMs = args.optLong("gap_ms", 90L).coerceIn(40L, 300L)
+        val (id, node) = element(args)
+        val (x, y, what) = when {
+            id != null -> {
+                node ?: return staleElement(id)
+                val r = Rect().also { node.getBoundsInScreen(it) }
+                Triple(r.exactCenterX(), r.exactCenterY(), id)
+            }
+            args.has("text") || args.has("label") -> {
+                val query = args.optString("text").ifBlank { args.optString("label") }.trim()
+                if (query.isBlank()) return error("Give element_id, text, or x and y.")
+                val matched = findNodeByText(svc, query)
+                    ?: return error("Could not find any element matching '$query' on the screen.")
+                val r = Rect().also { matched.getBoundsInScreen(it) }
+                Triple(r.exactCenterX(), r.exactCenterY(), "'$query'")
+            }
+            args.has("x") && args.has("y") -> {
+                val px = args.getDouble("x").toFloat()
+                val py = args.getDouble("y").toFloat()
+                Triple(px, py, "${px.toInt()},${py.toInt()}")
+            }
+            else -> return error("Give element_id, text, or x and y.")
+        }
+        if (!svc.doubleTapAt(x, y, gapMs = gapMs)) {
+            return error("Double-tap was cancelled (the screen may be off or locked).")
+        }
+        svc.awaitIdle()
+        return text("Double-tapped $what. ${foreground(svc)}")
+    }
+
+    private suspend fun scrollToText(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
+        val query = args.getString("text").trim()
+        val direction = args.optString("direction", "down").lowercase()
+        val maxScrolls = args.optInt("max_scrolls", 8).coerceIn(0, 20)
+        val tapWhenFound = args.optBoolean("tap_when_found", false)
+        val res = svc.scrollToFind(query, direction, maxScrolls, tapWhenFound)
+        return if (res.found) {
+            val coords = res.bounds?.let { " @${it.centerX()},${it.centerY()} [${it.left},${it.top},${it.right},${it.bottom}]" }.orEmpty()
+            text("${res.reason}$coords. ${foreground(svc)}")
+        } else {
+            error("${res.reason} ${foreground(svc)}")
+        }
+    }
+
+    private suspend fun drag(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
+        val fromId = args.optString("from_element_id").trim().ifBlank { null }
+        val toId = args.optString("to_element_id").trim().ifBlank { null }
+        val (x1, y1) = if (fromId != null) {
+            val n = elements[fromId]?.takeIf { it.refresh() } ?: return staleElement(fromId)
+            val r = Rect().also { n.getBoundsInScreen(it) }
+            r.exactCenterX() to r.exactCenterY()
+        } else {
+            if (!args.has("x1") || !args.has("y1")) return error("Give from_element_id or x1 and y1.")
+            args.getDouble("x1").toFloat() to args.getDouble("y1").toFloat()
+        }
+        val (x2, y2) = if (toId != null) {
+            val n = elements[toId]?.takeIf { it.refresh() } ?: return staleElement(toId)
+            val r = Rect().also { n.getBoundsInScreen(it) }
+            r.exactCenterX() to r.exactCenterY()
+        } else {
+            if (!args.has("x2") || !args.has("y2")) return error("Give to_element_id or x2 and y2.")
+            args.getDouble("x2").toFloat() to args.getDouble("y2").toFloat()
+        }
+        val holdMs = args.optLong("hold_ms", 350L)
+        val durationMs = args.optLong("duration_ms", 450L)
+        if (!svc.dragGesture(x1, y1, x2, y2, holdMs, durationMs)) {
+            return error("The drag gesture was cancelled (the screen may be off or locked).")
+        }
+        svc.awaitIdle()
+        return text("Dragged from (${x1.toInt()},${y1.toInt()}) to (${x2.toInt()},${y2.toInt()}). ${foreground(svc)}")
+    }
+
+    private suspend fun pinch(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
+        val direction = args.getString("direction").trim().lowercase()
+        val zoomIn = when (direction) {
+            "in", "zoom_in", "expand" -> true
+            "out", "zoom_out", "shrink" -> false
+            else -> return error("direction must be 'in' or 'out'.")
+        }
+        val cx = if (args.has("x")) args.getDouble("x").toFloat() else null
+        val cy = if (args.has("y")) args.getDouble("y").toFloat() else null
+        val scale = args.optDouble("scale", 0.45).toFloat()
+        val durationMs = args.optLong("duration_ms", 400L)
+        if (!svc.pinchGesture(cx, cy, zoomIn, scale, durationMs)) {
+            return error("The pinch gesture was cancelled (the screen may be off or locked).")
+        }
+        svc.awaitIdle()
+        return text("Pinched ${if (zoomIn) "in (zoomed in)" else "out (zoomed out)"}. ${foreground(svc)}")
+    }
+
+    private suspend fun multiPathGesture(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
+        val arr = args.optJSONArray("points") ?: return error("points array is required.")
+        if (arr.length() < 2) return error("points must contain at least 2 waypoints.")
+        val pts = mutableListOf<Pair<Float, Float>>()
+        for (i in 0 until arr.length()) {
+            val pt = arr.optJSONObject(i) ?: return error("Invalid waypoint at index $i.")
+            pts.add(pt.getDouble("x").toFloat() to pt.getDouble("y").toFloat())
+        }
+        val durationMs = args.optLong("duration_ms", 500L)
+        if (!svc.multiPointGesture(pts, durationMs)) {
+            return error("The multi-point gesture was cancelled (the screen may be off or locked).")
+        }
+        svc.awaitIdle()
+        return text("Executed path gesture across ${pts.size} points. ${foreground(svc)}")
+    }
+
+    private suspend fun nodeAction(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
+        val (id, node) = element(args)
+        if (id == null) return error("element_id is required.")
+        if (node == null) return staleElement(id)
+        val action = args.getString("action").trim()
+        val value = args.optString("value").ifBlank { null }
+        val ok = svc.performNodeAction(node, action, value)
+        if (!ok) return error("Element $id rejected action '$action'.")
+        svc.awaitIdle()
+        return text("Performed '$action' on $id. ${foreground(svc)}")
+    }
+
+    private suspend fun clipboardAction(svc: AutomationAccessibilityService, args: JSONObject): JSONObject {
+        return when (args.getString("action").trim().lowercase()) {
+            "read" -> {
+                val clip = svc.readClipboardText()
+                if (clip == null) text("Clipboard is empty or unavailable in the background.")
+                else text(clip)
+            }
+            "write" -> {
+                val content = args.optString("text", "")
+                if (svc.writeClipboardText(content)) text("Copied ${content.length} character(s) to clipboard.")
+                else error("Failed to write to clipboard.")
+            }
+            else -> error("action must be 'read' or 'write'.")
+        }
+    }
+
+    private fun recentNotifications(args: JSONObject): JSONObject {
+        val limit = args.optInt("limit", 10).coerceIn(1, 20)
+        val maxAgeMs = args.optLong("max_age_seconds", 300L).coerceIn(5L, 3_600L) * 1_000L
+        val list = AutomationAccessibilityService.getRecentNotifications(limit, maxAgeMs)
+        val otp = AutomationAccessibilityService.getRecentOtp()
+        val out = JSONObject().apply {
+            if (otp != null) put("recent_otp", otp)
+            put("notifications", JSONArray().apply {
+                for (item in list) {
+                    put(JSONObject().apply {
+                        put("package", item.packageName)
+                        put("text", item.text)
+                        put("age_seconds", ((System.currentTimeMillis() - item.timestamp) / 1000L).coerceAtLeast(0L))
+                    })
+                }
+            })
+        }
+        return text(out.toString(2))
+    }
+
     private suspend fun globalAction(svc: AutomationAccessibilityService, action: String): JSONObject {
         val code = when (action) {
             "back" -> AccessibilityService.GLOBAL_ACTION_BACK
@@ -754,6 +997,10 @@ object AndroidAutomation {
             "split_screen" -> AccessibilityService.GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN
             "lock_screen" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN
                 else return error("lock_screen needs Android 9+")
+            "take_screenshot" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT
+                else return error("take_screenshot needs Android 9+")
+            "dismiss_notifications" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) AccessibilityService.GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE
+                else return error("dismiss_notifications needs Android 12+")
             else -> return error("Unknown action $action")
         }
         if (!svc.performGlobalAction(code)) return error("Android refused $action.")

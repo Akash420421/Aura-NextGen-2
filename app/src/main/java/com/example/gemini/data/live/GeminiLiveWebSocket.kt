@@ -18,6 +18,12 @@ class GeminiLiveWebSocket(
     private val systemPrompt: String,
     private val listener: Listener
 ) {
+    data class ToolCallItem(
+        val id: String,
+        val name: String,
+        val args: JSONObject
+    )
+
     interface Listener {
         fun onConnectionStateChanged(status: String)
         fun onAudioDataReceived(pcmData: ByteArray)
@@ -27,6 +33,11 @@ class GeminiLiveWebSocket(
         fun onTurnCompleted()
         fun onError(message: String, isFatal: Boolean = false, errorCode: String? = null)
         fun onToolCall(callId: String, name: String, args: JSONObject)
+        fun onToolCallsBatch(calls: List<ToolCallItem>) {
+            for (c in calls) {
+                onToolCall(c.id, c.name, c.args)
+            }
+        }
     }
 
     companion object {
@@ -746,7 +757,7 @@ class GeminiLiveWebSocket(
                         })
                         put("distance", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Scroll distance: 'small', 'medium', or 'large'. Defaults to 'small'.")
+                            put("description", "Scroll distance: 'small' (~35% screen), 'medium' (~65% screen, DEFAULT), or 'large' (~85% screen). Defaults to 'medium'.")
                         })
                     })
                     put("required", JSONArray().put("direction"))
@@ -792,7 +803,7 @@ class GeminiLiveWebSocket(
             // 19. request_screen_share
             put(JSONObject().apply {
                 put("name", "request_screen_share")
-                put("description", "Prompts the user with the screen share dialog so Jarvis can see their screen live in real-time.")
+                put("description", "Prompts the user with the screen share dialog so Aura can see their screen live in real-time (only for external apps or when visual design inspection is needed — NEVER needed for Aura's own chat or projects).")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject())
@@ -848,7 +859,7 @@ class GeminiLiveWebSocket(
             // 23. execute_terminal_command
             put(JSONObject().apply {
                 put("name", "execute_terminal_command")
-                put("description", "Executes a shell command in the local environment/workspace (e.g. 'python3 -m http.server 8080', 'git status', 'ls -la', 'npm start').")
+                put("description", "Executes a shell command in the local environment/workspace (e.g. 'git status', 'ls -la', 'npm run build'). NEVER run 'python3 index.html' or execute an HTML file with python; to serve or preview any web project use start_local_preview_server (port 3000 default).")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -917,7 +928,7 @@ class GeminiLiveWebSocket(
                     put("properties", JSONObject().apply {
                         put("url", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "The website URL, shorthand, or query to open (e.g. 'youtube', 'm.youtube.com', 'https://github.com', 'localhost:8080').")
+                            put("description", "The website URL, shorthand, or query to open (e.g. 'youtube', 'm.youtube.com', 'https://github.com', 'http://localhost:3000').")
                         })
                     })
                     put("required", JSONArray().put("url"))
@@ -1039,6 +1050,126 @@ class GeminiLiveWebSocket(
                     put("properties", JSONObject())
                 })
             })
+
+            // 33. execute_app_workflow
+            put(JSONObject().apply {
+                put("name", "execute_app_workflow")
+                put("description", "Executes a multi-step phone automation workflow end-to-end in sequence with UI verification between each step and automatic status updates (e.g., 'WhatsApp kholo, Rahul ka contact dhundho, usko message karo Hi, uske baad WhatsApp close kar do, Instagram open karke Reels laga do'). Provide the ordered 'steps' array.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("workflow_goal", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "High-level summary of the user's multi-step command.")
+                        })
+                        put("steps", JSONObject().apply {
+                            put("type", "ARRAY")
+                            put("description", "Ordered list of automation steps to execute sequentially. Each item is an object with 'action' ('open_app', 'send_whatsapp_message', 'click_ui_element', 'type_text', 'scroll_screen', 'swipe_reel', 'close_app', 'close_current_app', 'press_key', 'wait', 'inspect_screen') and parameters ('app_name', 'target_name', 'text', 'recipient_name', 'message', 'direction', 'submit', 'key', 'wait_ms').")
+                            put("items", JSONObject().apply {
+                                put("type", "OBJECT")
+                                put("properties", JSONObject().apply {
+                                    put("action", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Step action type: 'open_app', 'send_whatsapp_message', 'click_ui_element', 'type_text', 'scroll_screen', 'swipe_reel', 'close_app', 'close_current_app', 'press_key', 'wait', 'inspect_screen'.")
+                                    })
+                                    put("app_name", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Target app name for open_app or close_app.")
+                                    })
+                                    put("target_name", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Target UI element text/label for click_ui_element or target_input_name for type_text.")
+                                    })
+                                    put("text", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Text to directly inject for type_text.")
+                                    })
+                                    put("submit", JSONObject().apply {
+                                        put("type", "BOOLEAN")
+                                        put("description", "True to press Enter/Search/Send after type_text.")
+                                    })
+                                    put("recipient_name", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Contact or chat name for send_whatsapp_message.")
+                                    })
+                                    put("message", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Message content for send_whatsapp_message.")
+                                    })
+                                    put("direction", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Direction for scroll_screen or swipe_reel ('up', 'down').")
+                                    })
+                                    put("key", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "System key for press_key ('back', 'home', 'recents').")
+                                    })
+                                    put("wait_ms", JSONObject().apply {
+                                        put("type", "INTEGER")
+                                        put("description", "Milliseconds to wait for 'wait' action.")
+                                    })
+                                })
+                                put("required", JSONArray().put("action"))
+                            })
+                        })
+                    })
+                    put("required", JSONArray().apply { put("steps") })
+                })
+            })
+
+            // 34. start_local_preview_server (#13)
+            put(JSONObject().apply {
+                put("name", "start_local_preview_server")
+                put("description", "Starts a verified local HTTP preview server for a web project on port 3000 (auto-detecting Vite/Next/Node vs static HTML via python3 -m http.server), waits for HTTP 200 readiness, and opens http://localhost:<port> inside Aura's In-Built Browser. ALWAYS use this instead of running 'python3 index.html' or manually guessing ports.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("project_dir", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Absolute or workspace-relative path to the project directory (defaults to active project path).")
+                        })
+                        put("port", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Preferred port number (defaults to 3000; auto-falls back to next free port if busy).")
+                        })
+                        put("open_in_browser", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Whether to automatically open the verified localhost URL in Aura's In-Built Browser (default true).")
+                        })
+                    })
+                })
+            })
+
+            // 35. close_specific_app (#20)
+            put(JSONObject().apply {
+                put("name", "close_specific_app")
+                put("description", "Closes ONLY a single named app by opening Android Recents, finding its card, and swiping only that card away (leaving other apps untouched). Use when user says 'WhatsApp band karo', 'YouTube close karo', 'Instagram hata do'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("app_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Name of the single app to close from Recents (e.g. 'WhatsApp', 'Instagram', 'YouTube').")
+                        })
+                    })
+                    put("required", JSONArray().put("app_name"))
+                })
+            })
+
+            // 36. clear_all_recent_apps (#20)
+            put(JSONObject().apply {
+                put("name", "clear_all_recent_apps")
+                put("description", "Clears ALL open recent apps from Android Recents ONLY when the user explicitly asks to close all apps (e.g. 'saare apps close karo', 'clear all recent apps', 'sab apps hata do'). Never call this when the user only wants to close one app.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("use_swipe_only", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "True to swipe cards away one by one instead of tapping Clear All / Close All.")
+                        })
+                    })
+                })
+            })
         }
     }
 
@@ -1089,15 +1220,19 @@ class GeminiLiveWebSocket(
             if (topToolCall != null) {
                 val functionCalls = topToolCall.optJSONArray("functionCalls")
                 if (functionCalls != null) {
+                    val batch = mutableListOf<ToolCallItem>()
                     for (i in 0 until functionCalls.length()) {
                         val call = functionCalls.getJSONObject(i)
                         val name = call.optString("name", "")
                         val id = call.optString("id", "")
                         val args = call.optJSONObject("args") ?: JSONObject()
                         if (name.isNotEmpty()) {
-                            Log.i(TAG, "Tool call: $name (id=$id)")
-                            listener.onToolCall(id, name, args)
+                            Log.i(TAG, "Tool call [${i + 1}/${functionCalls.length()}]: $name (id=$id)")
+                            batch.add(ToolCallItem(id = id, name = name, args = args))
                         }
+                    }
+                    if (batch.isNotEmpty()) {
+                        listener.onToolCallsBatch(batch)
                     }
                 }
                 return
@@ -1109,15 +1244,19 @@ class GeminiLiveWebSocket(
                 if (scToolCall != null) {
                     val functionCalls = scToolCall.optJSONArray("functionCalls")
                     if (functionCalls != null) {
+                        val batch = mutableListOf<ToolCallItem>()
                         for (i in 0 until functionCalls.length()) {
                             val call = functionCalls.getJSONObject(i)
                             val name = call.optString("name", "")
                             val id = call.optString("id", "")
                             val args = call.optJSONObject("args") ?: JSONObject()
                             if (name.isNotEmpty()) {
-                                Log.i(TAG, "Tool call (serverContent): $name (id=$id)")
-                                listener.onToolCall(id, name, args)
+                                Log.i(TAG, "Tool call (serverContent) [${i + 1}/${functionCalls.length()}]: $name (id=$id)")
+                                batch.add(ToolCallItem(id = id, name = name, args = args))
                             }
+                        }
+                        if (batch.isNotEmpty()) {
+                            listener.onToolCallsBatch(batch)
                         }
                     }
                 }
@@ -1215,19 +1354,54 @@ class GeminiLiveWebSocket(
 
     fun sendToolResponse(callId: String, functionName: String, result: JSONObject) {
         try {
+            val responses = JSONArray().put(JSONObject().apply {
+                put("id", callId)
+                put("name", functionName)
+                put("response", result)
+            })
+            sendToolResponses(responses)
+        } catch (e: Exception) {
+            Log.e(TAG, "sendToolResponse failed: ${e.message}", e)
+        }
+    }
+
+    fun sendToolResponses(functionResponses: JSONArray) {
+        try {
             val msg = JSONObject().apply {
                 put("tool_response", JSONObject().apply {
-                    put("function_responses", JSONArray().put(JSONObject().apply {
-                        put("id", callId)
-                        put("name", functionName)
-                        put("response", result)
-                    }))
+                    put("function_responses", functionResponses)
                 })
             }
             webSocket?.send(msg.toString())
-            Log.d(TAG, "Sent tool_response for $functionName: $result")
+            Log.d(TAG, "Sent batched tool_response (${functionResponses.length()} items)")
         } catch (e: Exception) {
-            Log.e(TAG, "sendToolResponse failed: ${e.message}", e)
+            Log.e(TAG, "sendToolResponses failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Pushes a proactive system status update into the active Gemini Live Bidi session
+     * so the assistant announces live progress or completion to the user without waiting
+     * for the user to ask "ab kya status hai?".
+     */
+    fun sendSystemStatusUpdate(statusMessage: String, turnComplete: Boolean = true) {
+        if (!isConnected.get() || !isSetupComplete.get() || statusMessage.isBlank()) return
+        try {
+            val msg = JSONObject().apply {
+                put("client_content", JSONObject().apply {
+                    put("turns", JSONArray().put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().put(JSONObject().apply {
+                            put("text", "[PROACTIVE_STATUS_UPDATE - Speak a brief 1-sentence Hindi/Hinglish status update to the user right now]: $statusMessage")
+                        }))
+                    }))
+                    put("turn_complete", turnComplete)
+                })
+            }
+            webSocket?.send(msg.toString())
+            Log.i(TAG, "Sent proactive status update to Gemini Live: $statusMessage")
+        } catch (e: Exception) {
+            Log.e(TAG, "sendSystemStatusUpdate failed: ${e.message}", e)
         }
     }
 

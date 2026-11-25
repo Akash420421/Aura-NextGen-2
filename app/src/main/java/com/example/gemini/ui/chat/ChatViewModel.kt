@@ -628,11 +628,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _showArchivedChats = MutableStateFlow(false)
     val showArchivedChats: StateFlow<Boolean> = _showArchivedChats.asStateFlow()
     fun setShowArchivedChats(on: Boolean) { _showArchivedChats.value = on }
-    fun stopStreaming() = when {
-        isClaudeActive -> claudeBackend.stopStreaming()
-        isOpenCodeActive -> openCodeBackend.stopStreaming()
-        isCodexActive -> codexBackend.stopStreaming()
-        else -> agyBackend.stopStreaming()
+    fun stopStreaming() {
+        com.example.gemini.data.live.ChatContextBridge.clearPromptCache()
+        when {
+            isClaudeActive -> claudeBackend.stopStreaming()
+            isOpenCodeActive -> openCodeBackend.stopStreaming()
+            isCodexActive -> codexBackend.stopStreaming()
+            else -> agyBackend.stopStreaming()
+        }
     }
 
     /** Messages sent while the agent was working, waiting to be delivered (queued-messages card). */

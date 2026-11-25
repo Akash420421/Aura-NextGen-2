@@ -218,10 +218,19 @@ object AppLauncher {
     }
 
     fun openAppResult(context: Context, spokenName: String, appNumber: Int? = null): OpenAppResult {
+        val pm = context.packageManager
+        // #23: Recognize Aura / Aura Pro spoken aliases directly
+        if (com.example.gemini.data.live.AuraBrandAliasNormalizer.isAuraAppAlias(spokenName)) {
+            val ownIntent = pm.getLaunchIntentForPackage(context.packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            if (ownIntent != null && ActivityLauncherHelper.startActivitySafely(context, ownIntent)) {
+                return OpenAppResult.Success(InstalledApp(label = "Aura AI", packageName = context.packageName))
+            }
+        }
         val matches = findMatchingApps(context, spokenName)
         if (matches.isEmpty()) {
             val lower = spokenName.lowercase().trim()
-            val pm = context.packageManager
 
             // Check if spokenName is a direct package name
             if (spokenName.contains(".") && !spokenName.contains(" ")) {
@@ -256,6 +265,12 @@ object AppLauncher {
             }
 
             if (lower in listOf("youtube", "yt", "youtube app", "com.google.android.youtube")) {
+                val ytLaunch = pm.getLaunchIntentForPackage("com.google.android.youtube")?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }
+                if (ytLaunch != null && ActivityLauncherHelper.startActivitySafely(context, ytLaunch)) {
+                    return OpenAppResult.Success(InstalledApp(label = "YouTube", packageName = "com.google.android.youtube"))
+                }
                 val ytIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com")).apply {
                     setPackage("com.google.android.youtube")
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

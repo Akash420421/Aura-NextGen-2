@@ -839,13 +839,19 @@ object TrajectoryParser {
         val errorCode = if (target.has("errorCode")) target.optInt("errorCode") else if (target.has("code")) target.optInt("code") else null
         val errorId = target.optString("errorId", "")
 
-        val isStoppedByUser = shortError.contains("cancel", ignoreCase = true) ||
+        val stepStatus = step.optString("status", "")
+        val isStoppedByUser = stepStatus.contains("CANCEL", ignoreCase = true) ||
+            shortError.contains("cancel", ignoreCase = true) ||
+            shortError.contains("stopped", ignoreCase = true) ||
+            shortError.contains("abort", ignoreCase = true) ||
             userError.contains("cancel", ignoreCase = true) ||
             userError.contains("stopped by user", ignoreCase = true) ||
-            userError.contains("generation stopped", ignoreCase = true)
+            userError.contains("generation stopped", ignoreCase = true) ||
+            fullError.contains("stopped by user", ignoreCase = true) ||
+            fullError.contains("context canceled", ignoreCase = true)
 
         val title = when {
-            isStoppedByUser -> "Generation stopped"
+            isStoppedByUser -> "Stopped"
             shortError.contains("auth", ignoreCase = true) || userError.contains("auth", ignoreCase = true) -> "Authentication Required"
             shortError.contains("quota", ignoreCase = true) || shortError.contains("credit", ignoreCase = true) || errorCode == 429 -> "Quota / Usage Limit Exceeded"
             shortError.contains("model not found", ignoreCase = true) || shortError.contains("unknown model", ignoreCase = true) -> "Model Configuration Error"
