@@ -497,13 +497,13 @@ class GeminiLiveWebSocket(
             // 4. search_and_play_youtube
             put(JSONObject().apply {
                 put("name", "search_and_play_youtube")
-                put("description", "Searches YouTube and IMMEDIATELY OPENS AND PLAYS the requested video or song. Use whenever the user commands you to play a video or song (e.g. \"play Tum Hi Ho\", \"play Believer on YouTube\", \"YouTube pe Arijit Singh chalao\").")
+                put("description", "Resolves a specific OR vague song/video request (e.g. 'play Tum Hi Ho', 'koi apni marzi se accha gaana laga do', 'in-built browser mein gaana chalao') directly to a video and IMMEDIATELY PLAYS IT with auto ad-skip armed. Never scrolls endlessly.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("query", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "What video/song to search for and immediately play, e.g. \"Tum Hi Ho Arijit Singh\".")
+                            put("description", "Song/video name, or user's mood/request if they asked Aura to pick a good song.")
                         })
                     })
                     put("required", JSONArray().put("query"))
@@ -513,7 +513,7 @@ class GeminiLiveWebSocket(
             // 5. search_youtube
             put(JSONObject().apply {
                 put("name", "search_youtube")
-                put("description", "Opens YouTube and searches for a topic/query, displaying search results without auto-playing.")
+                put("description", "Opens YouTube search results page for a query without auto-playing.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -529,14 +529,32 @@ class GeminiLiveWebSocket(
             // 6. media_playback_control
             put(JSONObject().apply {
                 put("name", "media_playback_control")
-                put("description", "Controls whatever video/audio is currently playing: play, pause, next, previous, stop.")
+                put("description", "Controls active playback (in-built browser video/audio OR phone media player): play, pause, toggle, next, previous, stop.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("action", JSONObject().apply {
                             put("type", "STRING")
                             put("enum", JSONArray().apply {
-                                put("play"); put("pause"); put("next"); put("previous"); put("stop")
+                                put("play"); put("pause"); put("toggle"); put("next"); put("previous"); put("stop")
+                            })
+                        })
+                    })
+                    put("required", JSONArray().put("action"))
+                })
+            })
+
+            // 6b. youtube_action
+            put(JSONObject().apply {
+                put("name", "youtube_action")
+                put("description", "Controls smart YouTube actions (in native YouTube app OR in-built browser): skip visible Skip Ad button ('skip_ad'), play first visible video card ('play_first'), 'like', 'subscribe', 'fullscreen', 'play', 'pause', 'next', 'previous'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply {
+                                put("skip_ad"); put("play_first"); put("like"); put("subscribe"); put("fullscreen"); put("play"); put("pause"); put("next"); put("previous")
                             })
                         })
                     })
@@ -615,17 +633,24 @@ class GeminiLiveWebSocket(
             // 10. set_volume
             put(JSONObject().apply {
                 put("name", "set_volume")
-                put("description", "Adjusts media volume on device: 'increase', 'decrease', or 'set'.")
+                put("description", "Instantly controls device volume across streams ('music'/'media', 'ring', 'alarm', 'notification', 'call', 'all'): 'set', 'increase', 'decrease', 'mute', 'unmute', or 'get'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("action", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Action to perform: 'increase', 'decrease', or 'set'.")
+                            put("enum", JSONArray().apply {
+                                put("set"); put("increase"); put("decrease"); put("mute"); put("unmute"); put("get")
+                            })
+                            put("description", "Action: 'set', 'increase', 'decrease', 'mute', 'unmute', or 'get'.")
                         })
                         put("percentage", JSONObject().apply {
                             put("type", "INTEGER")
-                            put("description", "Target percentage level from 0 to 100 if specified.")
+                            put("description", "Target volume percentage (0-100) for 'set'.")
+                        })
+                        put("stream", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional stream: 'music' (default), 'ring', 'alarm', 'notification', 'call', or 'all'.")
                         })
                     })
                     put("required", JSONArray().put("action"))
@@ -635,33 +660,36 @@ class GeminiLiveWebSocket(
             // 11. set_brightness
             put(JSONObject().apply {
                 put("name", "set_brightness")
-                put("description", "Adjusts screen brightness on device: 'increase', 'decrease', or 'set'.")
+                put("description", "Controls screen brightness: 'set', 'increase', 'decrease', 'auto_on', or 'auto_off'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("action", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Action to perform: 'increase', 'decrease', or 'set'.")
+                            put("enum", JSONArray().apply {
+                                put("set"); put("increase"); put("decrease"); put("auto_on"); put("auto_off")
+                            })
+                            put("description", "Action: 'set', 'increase', 'decrease', 'auto_on', or 'auto_off'.")
                         })
                         put("percentage", JSONObject().apply {
                             put("type", "INTEGER")
-                            put("description", "Target percentage level from 0 to 100 if specified.")
+                            put("description", "Target percentage level from 0 to 100 for 'set'.")
                         })
                     })
                     put("required", JSONArray().put("action"))
                 })
             })
 
-            // 12. builtin_chrome_search
+            // 12. quick_web_research (plus builtin_chrome_search legacy name)
             put(JSONObject().apply {
                 put("name", "builtin_chrome_search")
-                put("description", "Performs invisible, background web research using the built-in search engine for real-time factual questions, news, or weather.")
+                put("description", "Silent factual web Q&A lookup ONLY (weather, facts, scores). NEVER call this to open a website or interact with Aura's In-Built Browser (always use open_in_app_browser, browser_find, browser_click, browser_type instead).")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("query", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Search query or topic to look up on the web.")
+                            put("description", "Factual search query for quick background summary.")
                         })
                     })
                     put("required", JSONArray().put("query"))
@@ -671,16 +699,104 @@ class GeminiLiveWebSocket(
             // 13. set_flashlight
             put(JSONObject().apply {
                 put("name", "set_flashlight")
-                put("description", "Turns the phone's torch or flashlight on or off.")
+                put("description", "Turns the phone's torch/flashlight on, off, or toggles it.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("enabled", JSONObject().apply {
                             put("type", "BOOLEAN")
-                            put("description", "True to turn on the flashlight, false to turn it off.")
+                            put("description", "True for on, false for off (omit or set toggle=true to toggle).")
+                        })
+                        put("toggle", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "True to toggle the current flashlight state.")
                         })
                     })
-                    put("required", JSONArray().put("enabled"))
+                })
+            })
+
+            // 13b. get_device_status
+            put(JSONObject().apply {
+                put("name", "get_device_status")
+                put("description", "Instantly reads real-time phone hardware status: battery percentage, charging status & temperature, all volume levels (media/ring/alarm/call), ringer mode, DND, screen brightness, RAM, storage, Wi-Fi/cellular network, and flashlight state.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("sections", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Comma-separated sections (default all): 'battery,audio,display,network,memory,storage,system'.")
+                        })
+                    })
+                })
+            })
+
+            // 13c. set_ringer_mode
+            put(JSONObject().apply {
+                put("name", "set_ringer_mode")
+                put("description", "Switches phone ringer mode between 'normal', 'vibrate', and 'silent'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("mode", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply { put("normal"); put("vibrate"); put("silent") })
+                        })
+                    })
+                    put("required", JSONArray().put("mode"))
+                })
+            })
+
+            // 13d. set_device_setting
+            put(JSONObject().apply {
+                put("name", "set_device_setting")
+                put("description", "Controls or opens quick device settings/panels: Do Not Disturb ('dnd' with enabled=true/false), 'wifi', 'internet', 'bluetooth', 'mobile_data', 'location', 'airplane', 'hotspot', 'battery_saver', 'dark_mode', 'display', 'volume_panel', 'settings'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("setting", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Target setting name: 'dnd', 'wifi', 'internet', 'bluetooth', 'location', 'airplane', 'hotspot', 'battery_saver', 'display', 'volume_panel', etc.")
+                        })
+                        put("enabled", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Optional true/false toggle (supported directly for DND).")
+                        })
+                    })
+                    put("required", JSONArray().put("setting"))
+                })
+            })
+
+            // 13e. system_action
+            put(JSONObject().apply {
+                put("name", "system_action")
+                put("description", "Performs global Android system actions: open notification shade ('notifications'), control center ('quick_settings'), 'lock_screen', 'take_screenshot', 'split_screen', 'power_dialog', 'dismiss_notifications', 'recents', 'home', 'back'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply {
+                                put("notifications"); put("quick_settings"); put("lock_screen"); put("take_screenshot")
+                                put("split_screen"); put("power_dialog"); put("dismiss_notifications"); put("recents"); put("home"); put("back")
+                            })
+                        })
+                    })
+                    put("required", JSONArray().put("action"))
+                })
+            })
+
+            // 13f. read_notifications
+            put(JSONObject().apply {
+                put("name", "read_notifications")
+                put("description", "Reads recent Android notifications and automatically extracts incoming OTP verification codes.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("limit", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Maximum notifications (default 10).")
+                        })
+                    })
                 })
             })
 
@@ -922,16 +1038,203 @@ class GeminiLiveWebSocket(
             // 26. open_in_app_browser (Primary)
             put(JSONObject().apply {
                 put("name", "open_in_app_browser")
-                put("description", "Opens any website, URL, or webpage inside Aura AI's own In-Built Web Browser. Use this tool when the user asks to open a website, browse a webpage, visit a link, or explicitly asks for YouTube in browser (e.g. 'in-built browser mein YouTube open karo', 'open github.com', 'google kholo', 'wikipedia open karo') UNLESS the user explicitly demands external Chrome. NOTE: For standard app requests like 'YouTube open karo' or 'open YouTube', ALWAYS use open_app(app_name=\"YouTube\") instead!")
+                put("description", "Opens ANY website, URL, or Google search inside Aura's own In-Built Browser and waits for the page to load cleanly so you can immediately read or control it with browser_read_page/browser_find/browser_click/browser_type.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("url", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "The website URL, shorthand, or query to open (e.g. 'youtube', 'm.youtube.com', 'https://github.com', 'http://localhost:3000').")
+                            put("description", "Website URL, shorthand ('youtube', 'github', 'vercel'), localhost:3000, or search query.")
+                        })
+                        put("new_tab", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Open in a new tab (default false so existing tab is reused unless new tab is requested).")
+                        })
+                        put("desktop_mode", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Optional desktop view toggle.")
                         })
                     })
                     put("required", JSONArray().put("url"))
+                })
+            })
+
+            // 26b-26j: Complete In-Built Browser DOM Control Suite (powered by BrowserMcp)
+            put(JSONObject().apply {
+                put("name", "browser_read_page")
+                put("description", "Reads the current page inside Aura's In-Built Browser: returns URL, title, interactive element refs (like ref_12 for buttons/links/inputs), OR full readable article/search text when mode='text'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("mode", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply { put("interactive"); put("all"); put("text") })
+                            put("description", "'interactive' (default: clickable links/buttons/inputs with refs), 'all' (full structure), or 'text' (article/plain text).")
+                        })
+                        put("tab_id", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional tab_id; defaults to active tab.")
+                        })
+                    })
+                })
+            })
+
+            put(JSONObject().apply {
+                put("name", "browser_find")
+                put("description", "Finds elements on the current In-Built Browser page by plain description (e.g. 'search box', 'login button', 'first video', 'add to cart'), returning element refs (ref_X).")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Plain description of what to look for.")
+                        })
+                        put("tab_id", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional tab_id.")
+                        })
+                    })
+                    put("required", JSONArray().put("query"))
+                })
+            })
+
+            put(JSONObject().apply {
+                put("name", "browser_click")
+                put("description", "Clicks ANY button, link, menu item, checkbox, or element inside Aura's In-Built Browser using real DOM/touch input! Pass either 'ref' (from browser_find/browser_read_page) OR 'target_name' (e.g. 'Sign in button', 'first result link', 'Videos tab').")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("ref", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Element ref like 'ref_12'.")
+                        })
+                        put("target_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Plain description/text of the link or button to click when ref is unknown.")
+                        })
+                        put("tab_id", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional tab_id.")
+                        })
+                    })
+                })
+            })
+
+            put(JSONObject().apply {
+                put("name", "browser_type")
+                put("description", "Types text into ANY input field, search box, login box, or form inside Aura's In-Built Browser and optionally submits/presses Enter! Pass 'text' and optional 'ref' or 'target_name' (e.g. 'search box', 'email input').")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("text", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Text to type or search for.")
+                        })
+                        put("ref", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional element ref (e.g. 'ref_5').")
+                        })
+                        put("target_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Description of input field (defaults to search/input box).")
+                        })
+                        put("submit", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Press Enter / submit after typing (default true).")
+                        })
+                        put("tab_id", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional tab_id.")
+                        })
+                    })
+                    put("required", JSONArray().put("text"))
+                })
+            })
+
+            put(JSONObject().apply {
+                put("name", "browser_scroll")
+                put("description", "Scrolls the webpage inside Aura's In-Built Browser up, down, left, or right.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("direction", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply { put("down"); put("up"); put("left"); put("right") })
+                        })
+                        put("amount", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Scroll ticks 1-10 (default 5).")
+                        })
+                        put("tab_id", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional tab_id.")
+                        })
+                    })
+                    put("required", JSONArray().put("direction"))
+                })
+            })
+
+            put(JSONObject().apply {
+                put("name", "browser_navigate")
+                put("description", "Navigates inside Aura's In-Built Browser tab history: 'back', 'forward', 'reload', or 'stop'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply { put("back"); put("forward"); put("reload"); put("stop") })
+                        })
+                        put("tab_id", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional tab_id.")
+                        })
+                    })
+                    put("required", JSONArray().put("action"))
+                })
+            })
+
+            put(JSONObject().apply {
+                put("name", "browser_tabs")
+                put("description", "Manages tabs and view mode in Aura's In-Built Browser: 'list', 'new', 'switch', 'close', 'desktop', 'mobile'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply { put("list"); put("new"); put("switch"); put("close"); put("desktop"); put("mobile") })
+                        })
+                        put("tab_id", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Target tab_id for switch/close/desktop/mobile.")
+                        })
+                        put("url", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional URL when action='new'.")
+                        })
+                    })
+                    put("required", JSONArray().put("action"))
+                })
+            })
+
+            put(JSONObject().apply {
+                put("name", "browser_media_control")
+                put("description", "Controls HTML5 video/audio or skips ads directly inside Aura's In-Built Browser: 'play', 'pause', 'toggle', 'mute', 'unmute', 'forward', 'rewind', 'skip_ad', 'next', 'fullscreen'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply {
+                                put("play"); put("pause"); put("toggle"); put("mute"); put("unmute")
+                                put("forward"); put("rewind"); put("skip_ad"); put("next"); put("fullscreen")
+                            })
+                        })
+                        put("seek_seconds", JSONObject().apply {
+                            put("type", "NUMBER")
+                            put("description", "Optional seconds for forward/rewind (default 10).")
+                        })
+                    })
+                    put("required", JSONArray().put("action"))
                 })
             })
 
@@ -1070,7 +1373,7 @@ class GeminiLiveWebSocket(
                                 put("properties", JSONObject().apply {
                                     put("action", JSONObject().apply {
                                         put("type", "STRING")
-                                        put("description", "Step action type: 'open_app', 'send_whatsapp_message', 'click_ui_element', 'type_text', 'scroll_screen', 'swipe_reel', 'close_app', 'close_current_app', 'press_key', 'wait', 'inspect_screen'.")
+                                        put("description", "Step action type: 'open_app', 'send_whatsapp_message', 'click_ui_element', 'type_text', 'scroll_screen', 'swipe_reel', 'youtube_action', 'close_app', 'close_current_app', 'press_key', 'wait', 'inspect_screen'.")
                                     })
                                     put("app_name", JSONObject().apply {
                                         put("type", "STRING")
@@ -1078,7 +1381,11 @@ class GeminiLiveWebSocket(
                                     })
                                     put("target_name", JSONObject().apply {
                                         put("type", "STRING")
-                                        put("description", "Target UI element text/label for click_ui_element or target_input_name for type_text.")
+                                        put("description", "Target UI element text/label for click_ui_element, target_input_name for type_text, or sub-action ('skip_ad', 'like', 'subscribe', 'fullscreen', 'play_first') for youtube_action.")
+                                    })
+                                    put("player_action", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "YouTube sub-action for youtube_action step: 'skip_ad', 'play_first', 'like', 'subscribe', 'fullscreen', 'play', 'pause', 'next'.")
                                     })
                                     put("text", JSONObject().apply {
                                         put("type", "STRING")

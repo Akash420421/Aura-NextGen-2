@@ -1,5 +1,6 @@
 package com.example.gemini.data.automation
 
+import java.net.URLEncoder
 import java.util.Locale
 
 object DomainNormalizer {
@@ -23,7 +24,8 @@ object DomainNormalizer {
         "google" to "google.com",
         "gmail" to "mail.google.com",
         "maps" to "maps.google.com",
-        "youtube" to "youtube.com",
+        "youtube" to "m.youtube.com",
+        "yt" to "m.youtube.com",
         "instagram" to "instagram.com",
         "facebook" to "facebook.com",
         "twitter" to "x.com",
@@ -33,29 +35,48 @@ object DomainNormalizer {
         "amazon" to "amazon.in",
         "flipkart" to "flipkart.com",
         "netflix" to "netflix.com",
-        "wikipedia" to "wikipedia.org"
+        "wikipedia" to "en.wikipedia.org"
     )
 
     fun normalizeToUrl(spokenText: String): String {
-        val trimmed = spokenText.trim().lowercase(Locale.ROOT)
-        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-            return spokenText.trim()
+        val raw = spokenText.trim()
+        if (raw.isBlank()) return ""
+        val trimmed = raw.lowercase(Locale.ROOT)
+
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://") ||
+            trimmed.startsWith("file://") || trimmed.startsWith("about:") || trimmed.startsWith("data:")
+        ) {
+            return raw
         }
 
+        // Exact shortcut match (e.g. "vercel", "github", "chatgpt", "x")
         KNOWN_DOMAINS[trimmed]?.let { domain ->
             return "https://$domain"
         }
 
-        for ((key, domain) in KNOWN_DOMAINS) {
-            if (trimmed.contains(key)) {
-                return "https://$domain"
-            }
+        // Explicit open-site phrasing (e.g. "open vercel", "github website", "flipkart kholo")
+        val stripped = trimmed
+            .replace(Regex("""^(open|visit|go\s+to|launch)\s+"""), "")
+            .replace(Regex("""\s+(website|site|dot\s*com|kholo|open\s+karo)$"""), "")
+            .trim()
+        KNOWN_DOMAINS[stripped]?.let { domain ->
+            return "https://$domain"
         }
 
-        if (trimmed.contains(".") && !trimmed.contains(" ")) {
-            return "https://$trimmed"
+        if (trimmed.startsWith("localhost") || trimmed.startsWith("127.0.0.1") ||
+            trimmed.startsWith("192.168.") || trimmed.startsWith("10.0.")
+        ) {
+            return "http://$raw"
         }
 
-        return "https://www.google.com/search?q=" + java.net.URLEncoder.encode(spokenText.trim(), "UTF-8")
+        if (trimmed.matches(Regex("^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(/.*)?$"))) {
+            return "https://$raw"
+        }
+
+        if (raw.contains(":") && raw.substringBefore(":").all { it.isLetterOrDigit() || it == '.' }) {
+            return "http://$raw"
+        }
+
+        return "https://www.google.com/search?q=" + URLEncoder.encode(raw, "UTF-8")
     }
 }

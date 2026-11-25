@@ -403,6 +403,28 @@ object AndroidAutomation {
 
     // ---------------- device info ----------------
 
+    fun getDeviceInfoJson(
+        context: Context,
+        sections: String = "battery,device,memory,storage,display,network,audio,system"
+    ): JSONObject = deviceInfo(context, sections)
+
+    fun readRecentNotificationsJson(limit: Int = 10, maxAgeSeconds: Long = 300L): JSONObject {
+        val list = AutomationAccessibilityService.getRecentNotifications(limit.coerceIn(1, 20), maxAgeSeconds.coerceIn(5L, 3_600L) * 1_000L)
+        val otp = AutomationAccessibilityService.getRecentOtp()
+        return JSONObject().apply {
+            if (otp != null) put("recent_otp", otp)
+            put("notifications", JSONArray().apply {
+                for (item in list) {
+                    put(JSONObject().apply {
+                        put("package", item.packageName)
+                        put("text", item.text)
+                        put("age_seconds", ((System.currentTimeMillis() - item.timestamp) / 1000L).coerceAtLeast(0L))
+                    })
+                }
+            })
+        }
+    }
+
     private fun deviceInfo(context: Context, sections: String): JSONObject {
         val wanted = sections.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
         fun want(name: String) = wanted.isEmpty() || name in wanted
@@ -415,7 +437,8 @@ object AndroidAutomation {
             val bm = context.getSystemService(android.os.BatteryManager::class.java)
             val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
             val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
-            put("level_percent", if (level >= 0) level * 100 / scale.coerceAtLeast(1) else bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY))
+            val rawPct = if (level >= 0) level * 100 / scale.coerceAtLeast(1) else bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            put("level_percent", rawPct.coerceIn(0, 100))
             put("status", when (intent?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)) {
                 android.os.BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
                 android.os.BatteryManager.BATTERY_STATUS_FULL -> "full"
@@ -968,22 +991,8 @@ object AndroidAutomation {
 
     private fun recentNotifications(args: JSONObject): JSONObject {
         val limit = args.optInt("limit", 10).coerceIn(1, 20)
-        val maxAgeMs = args.optLong("max_age_seconds", 300L).coerceIn(5L, 3_600L) * 1_000L
-        val list = AutomationAccessibilityService.getRecentNotifications(limit, maxAgeMs)
-        val otp = AutomationAccessibilityService.getRecentOtp()
-        val out = JSONObject().apply {
-            if (otp != null) put("recent_otp", otp)
-            put("notifications", JSONArray().apply {
-                for (item in list) {
-                    put(JSONObject().apply {
-                        put("package", item.packageName)
-                        put("text", item.text)
-                        put("age_seconds", ((System.currentTimeMillis() - item.timestamp) / 1000L).coerceAtLeast(0L))
-                    })
-                }
-            })
-        }
-        return text(out.toString(2))
+        val maxAgeSec = args.optLong("max_age_seconds", 300L).coerceIn(5L, 3_600L)
+        return text(readRecentNotificationsJson(limit, maxAgeSec).toString(2))
     }
 
     private suspend fun globalAction(svc: AutomationAccessibilityService, action: String): JSONObject {

@@ -87,19 +87,49 @@ class UiGroundingEngine {
     }
 
     /**
-     * Extracts all interactive or descriptive elements currently visible on the screen.
+     * Extracts all visible, interactive, or descriptive elements currently on the screen.
      */
     fun scanScreen(root: AccessibilityNodeInfo?): List<UiElementInfo> {
         if (root == null) return emptyList()
         val elements = mutableListOf<UiElementInfo>()
-        var nextId = 1
+        traverseSubtree(root, elements) { elements.size + 1 }
+        return elements
+    }
 
+    /**
+     * Scans multiple interactive windows (e.g. main app window + PopupWindow menus, dialogs,
+     * floating action sheets) into one unified grounded list with continuous [#id] numbering.
+     */
+    fun scanAllWindows(roots: List<AccessibilityNodeInfo>): List<UiElementInfo> {
+        if (roots.isEmpty()) return emptyList()
+        val elements = mutableListOf<UiElementInfo>()
+        val seenKeys = HashSet<String>()
+        var nextId = 1
+        for (root in roots) {
+            val windowElements = mutableListOf<UiElementInfo>()
+            traverseSubtree(root, windowElements) { nextId++ }
+            for (el in windowElements) {
+                val key = "${el.viewId}|${el.text}|${el.contentDescription}|${el.bounds.left},${el.bounds.top},${el.bounds.right},${el.bounds.bottom}"
+                if (seenKeys.add(key)) {
+                    elements.add(el)
+                }
+            }
+        }
+        return elements
+    }
+
+    private fun traverseSubtree(
+        root: AccessibilityNodeInfo,
+        elements: MutableList<UiElementInfo>,
+        idProvider: () -> Int
+    ) {
         fun traverse(node: AccessibilityNodeInfo) {
+            if (!node.isVisibleToUser) return
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
 
             var text = node.text?.toString()?.trim() ?: ""
-            var desc = node.contentDescription?.toString()?.trim() ?: ""
+            val desc = node.contentDescription?.toString()?.trim() ?: ""
             val cls = node.className?.toString() ?: ""
             val vid = node.viewIdResourceName ?: ""
             var p = node.parent
@@ -115,13 +145,13 @@ class UiGroundingEngine {
             }
             val isClickable = node.isClickable || parentClickable
             val isCheckable = node.isCheckable
-            val hasSetTextAction = node.actionList.any { 
-                it.id == AccessibilityNodeInfo.ACTION_SET_TEXT || it.id == AccessibilityNodeInfo.ACTION_PASTE 
+            val hasSetTextAction = node.actionList.any {
+                it.id == AccessibilityNodeInfo.ACTION_SET_TEXT || it.id == AccessibilityNodeInfo.ACTION_PASTE
             }
             val isEditable = node.isEditable || cls.contains("EditText", ignoreCase = true) || hasSetTextAction
             val isScrollable = node.isScrollable
 
-            // If a row/card has no direct text, extract combined text from its descendants (vital for chat apps like Telegram/WhatsApp)
+            // If a row/card has no direct text, extract combined text from its descendants
             if (text.isBlank() && desc.isBlank() && node.childCount > 0) {
                 val childTexts = collectNodeText(node)
                 if (childTexts.isNotEmpty()) {
@@ -129,18 +159,16 @@ class UiGroundingEngine {
                 }
             }
 
-            // Filter out 0-sized or offscreen invisible elements
             val isVisible = bounds.width() > 5 && bounds.height() > 5
-
             val isInteractiveOrMeaningful = isVisible && (
                 isClickable || isCheckable || isEditable || isScrollable ||
-                text.isNotBlank() || desc.isNotBlank()
-            )
+                    text.isNotBlank() || desc.isNotBlank()
+                )
 
             if (isInteractiveOrMeaningful) {
                 elements.add(
                     UiElementInfo(
-                        id = nextId++,
+                        id = idProvider(),
                         text = text,
                         contentDescription = desc,
                         className = cls,
@@ -166,19 +194,35 @@ class UiGroundingEngine {
         } catch (e: Exception) {
             Log.e(TAG, "Error traversing accessibility tree: ${e.message}")
         }
+    }
 
-        return elements
+    private fun normalizeSynonymTokens(queryLower: String): List<String> {
+        val extras = mutableListOf<String>()
+        if (Regex("\\b(3|three|teen)\\s*(dot|dots|point|line|lines|bindu|menu)\\b").containsMatchIn(queryLower) ||
+            queryLower.contains("overflow") || queryLower.contains("kebab") || queryLower.contains("hamburger") ||
+            queryLower.contains("three dot") || queryLower.contains("3 dot") || queryLower.contains("3 line")
+        ) {
+            extras += listOf("more options", "customize and control", "menu_button", "overflow", "more_menu", "menu", "options", "open navigation")
+        }
+        if (queryLower.contains("incognito") || queryLower.contains("inkinido") || queryLower.contains("in cognito") ||
+            queryLower.contains("private tab") || queryLower.contains("private mode")
+        ) {
+            extras += listOf("new incognito tab", "incognito", "new private tab", "private")
+        }
+        if (queryLower.contains("close") || queryLower.contains("cross") || queryLower == "x" || queryLower.contains("band")) {
+            extras += listOf("close", "dismiss", "cancel", "close_button", "close_btn")
+        }
+        if (queryLower.contains("skip") || queryLower.contains("ad skip")) {
+            extras += listOf("skip ad", "skip ads", "skip", "skip_ad_button")
+        }
+        if (queryLower.contains("setting")) {
+            extras += listOf("settings", "preferences", "menu_item_settings")
+        }
+        return extras
     }
 
     /**
-     * Resolves the target element with 100% precision:
-     * 1. If explicit element ID is supplied, finds that element.
-     * 2. If target is a toggle/switch for a specific setting (e.g. "Wireless Debugging"),
-     *    locates the label first and snaps to the adjacent switch on the same row.
-     * 3. Performs fuzzy semantic match across text, content description, and view IDs.
-     */
-    /**
-     * True when the element's visible label plausibly matches what the model asked for.
+     * True when the element's visible label or viewId plausibly matches what the model asked for.
      * A blank label (icon-only button) cannot be disproven, so it is accepted.
      */
     private fun labelMatchesName(el: UiElementInfo, queryLower: String): Boolean {
@@ -186,11 +230,13 @@ class UiGroundingEngine {
             .map { it.lowercase(Locale.ROOT).trim() }
             .filter { it.isNotBlank() }
         if (labels.isEmpty()) return true
+        val synonymTerms = normalizeSynonymTokens(queryLower)
         val qTokens = queryLower.split(Regex("[^a-z0-9]+")).filter { it.length >= 3 }
         return labels.any { label ->
             label.contains(queryLower) ||
                 (label.length >= 3 && queryLower.contains(label)) ||
-                qTokens.any { t -> label.contains(t) }
+                qTokens.any { t -> label.contains(t) } ||
+                synonymTerms.any { syn -> label.contains(syn) }
         }
     }
 
@@ -228,13 +274,15 @@ class UiGroundingEngine {
             .trim()
         val cleanStrippedQuery = strippedQuery.replace("[^a-zA-Z0-9]".toRegex(), "")
 
-        // Ordinal matching (1st, 2nd, 3rd, pehli, dusri, teesri, etc.) for videos/cards
-        val ordinalIndex = when {
-            query.contains("pehli") || query.contains("first") || query.contains("1st") || query == "1" || query.startsWith("1 ") -> 1
-            query.contains("dusri") || query.contains("doosri") || query.contains("second") || query.contains("2nd") || query == "2" || query.startsWith("2 ") -> 2
-            query.contains("teesri") || query.contains("tisri") || query.contains("third") || query.contains("3rd") || query == "3" || query.startsWith("3 ") -> 3
-            query.contains("chauthi") || query.contains("fourth") || query.contains("4th") || query == "4" || query.startsWith("4 ") -> 4
-            query.contains("paanchvi") || query.contains("fifth") || query.contains("5th") || query == "5" || query.startsWith("5 ") -> 5
+        // Ordinal matching (1st, 2nd, 3rd, pehli, dusri, teesri, etc.) — ONLY for card/list ordinals,
+        // NEVER hijack icon queries like "3 dots", "3 line menu", "3 bar" onto card #3!
+        val isIconCountPhrase = Regex("\\b(dot|dots|line|lines|bar|bars|dash|bindu|menu)\\b").containsMatchIn(query)
+        val ordinalIndex = if (isIconCountPhrase) null else when {
+            query.contains("pehli") || query.contains("first") || query.contains("1st") || query == "1" || Regex("""^(1|item\s+1|result\s+1|video\s+1|option\s+1)\b""").containsMatchIn(query) -> 1
+            query.contains("dusri") || query.contains("doosri") || query.contains("second") || query.contains("2nd") || query == "2" || Regex("""^(2|item\s+2|result\s+2|video\s+2|option\s+2)\b""").containsMatchIn(query) -> 2
+            query.contains("teesri") || query.contains("tisri") || query.contains("third") || query.contains("3rd") || query == "3" || Regex("""^(3|item\s+3|result\s+3|video\s+3|option\s+3)\b""").containsMatchIn(query) -> 3
+            query.contains("chauthi") || query.contains("fourth") || query.contains("4th") || query == "4" || Regex("""^(4|item\s+4|result\s+4|video\s+4|option\s+4)\b""").containsMatchIn(query) -> 4
+            query.contains("paanchvi") || query.contains("fifth") || query.contains("5th") || query == "5" || Regex("""^(5|item\s+5|result\s+5|video\s+5|option\s+5)\b""").containsMatchIn(query) -> 5
             else -> null
         }
         if (ordinalIndex != null) {
@@ -245,6 +293,24 @@ class UiGroundingEngine {
                 val card = cards[ordinalIndex - 1]
                 Log.i(TAG, "Grounded ordinal ($ordinalIndex): '${card.primaryLabel}' (id=${card.id})")
                 return card
+            }
+        }
+
+        // Icon / Menu / Incognito / Overflow synonym matching (works across Chrome, Settings, Instagram, YouTube, etc.)
+        val synonymTerms = normalizeSynonymTokens(query)
+        if (synonymTerms.isNotEmpty()) {
+            val clickableFirst = elements.filter { !it.isEditable && (it.isClickable || it.isCheckable) } +
+                elements.filter { !it.isEditable && !it.isClickable && !it.isCheckable }
+            for (syn in synonymTerms) {
+                clickableFirst.firstOrNull { el ->
+                    val textL = el.text.lowercase(Locale.ROOT)
+                    val descL = el.contentDescription.lowercase(Locale.ROOT)
+                    val vidL = el.viewId.substringAfterLast("/").lowercase(Locale.ROOT)
+                    textL.contains(syn) || descL.contains(syn) || vidL.contains(syn)
+                }?.let { matched ->
+                    Log.i(TAG, "Grounded via icon/UI synonym '$query' -> '${matched.primaryLabel}' (vid=${matched.viewId}, id=${matched.id})")
+                    return matched
+                }
             }
         }
 
@@ -448,30 +514,40 @@ class UiGroundingEngine {
             candidateElements.filter { it.isEditable }
         )
 
-        // Case 2: Exact text or Normalized match with non-editable priority
+        // Case 2: Exact text, contentDescription, or viewId match with non-editable priority
         for (tier in tiers) {
             tier.firstOrNull {
                 val text = it.text.lowercase(Locale.ROOT)
                 val desc = it.contentDescription.lowercase(Locale.ROOT)
+                val vidShort = it.viewId.substringAfterLast("/").lowercase(Locale.ROOT)
                 val cleanText = text.replace("[^a-zA-Z0-9]".toRegex(), "")
                 val cleanDesc = desc.replace("[^a-zA-Z0-9]".toRegex(), "")
+                val cleanVid = vidShort.replace("[^a-zA-Z0-9]".toRegex(), "")
 
-                text == query || desc == query ||
-                (cleanQuery.isNotEmpty() && (cleanText == cleanQuery || cleanDesc == cleanQuery)) ||
-                (cleanStrippedQuery.isNotEmpty() && (cleanText == cleanStrippedQuery || cleanDesc == cleanStrippedQuery))
+                text == query || desc == query || vidShort == query ||
+                    (cleanQuery.isNotEmpty() && (cleanText == cleanQuery || cleanDesc == cleanQuery || cleanVid == cleanQuery)) ||
+                    (cleanStrippedQuery.isNotEmpty() && (cleanText == cleanStrippedQuery || cleanDesc == cleanStrippedQuery || cleanVid == cleanStrippedQuery))
             }?.let { return it }
         }
 
-        // Case 3: Normalized Substring Containment with non-editable priority
+        // Case 3: Normalized Substring Containment (text, desc, viewId) with non-editable priority
         for (tier in tiers) {
             tier.filter {
                 val text = it.text.lowercase(Locale.ROOT)
                 val desc = it.contentDescription.lowercase(Locale.ROOT)
+                val vidShort = it.viewId.substringAfterLast("/").lowercase(Locale.ROOT)
                 val cleanText = text.replace("[^a-zA-Z0-9]".toRegex(), "")
                 val cleanDesc = desc.replace("[^a-zA-Z0-9]".toRegex(), "")
+                val cleanVid = vidShort.replace("[^a-zA-Z0-9]".toRegex(), "")
 
-                (cleanQuery.length >= 3 && (cleanText.contains(cleanQuery) || cleanQuery.contains(cleanText.takeIf { t -> t.length >= 3 } ?: "____"))) ||
-                (cleanStrippedQuery.length >= 3 && (cleanText.contains(cleanStrippedQuery) || cleanStrippedQuery.contains(cleanText.takeIf { t -> t.length >= 3 } ?: "____")))
+                (cleanQuery.length >= 3 && (
+                    cleanText.contains(cleanQuery) || cleanDesc.contains(cleanQuery) || cleanVid.contains(cleanQuery) ||
+                        cleanQuery.contains(cleanText.takeIf { t -> t.length >= 3 } ?: "____")
+                    )) ||
+                    (cleanStrippedQuery.length >= 3 && (
+                        cleanText.contains(cleanStrippedQuery) || cleanDesc.contains(cleanStrippedQuery) || cleanVid.contains(cleanStrippedQuery) ||
+                            cleanStrippedQuery.contains(cleanText.takeIf { t -> t.length >= 3 } ?: "____")
+                        ))
             }.minWithOrNull(
                 compareBy<UiElementInfo> { element ->
                     val text = element.text.lowercase(Locale.ROOT).replace("[^a-zA-Z0-9]".toRegex(), "")
@@ -579,8 +655,9 @@ class UiGroundingEngine {
 
         sb.append("Visible Elements:\n")
         val meaningful = elements.filter {
-            (it.text.isNotBlank() || it.contentDescription.isNotBlank() || it.isEditable || it.isCheckable || (it.isClickable && it.isImageOrThumbnail)) &&
-            !it.isGenericContainer
+            (it.text.isNotBlank() || it.contentDescription.isNotBlank() || it.isEditable || it.isCheckable ||
+                (it.isClickable && it.isImageOrThumbnail) || (it.isClickable && it.viewId.isNotBlank())) &&
+                !it.isGenericContainer
         }
 
         val screenBounds = Rect()
@@ -596,7 +673,7 @@ class UiGroundingEngine {
             sb.append("RULE: Do NOT type your generation/creative prompt into the Google search bar! Look at the clickable website result links below and click the matching result to enter the website.\n")
         }
 
-        for (el in meaningful.take(75)) {
+        for (el in meaningful.take(110)) {
             val label = when {
                 el.text.isNotBlank() && el.contentDescription.isNotBlank() && !el.contentDescription.equals(el.text, true) ->
                     "${el.text} [desc: ${el.contentDescription}]"

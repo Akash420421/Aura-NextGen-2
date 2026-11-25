@@ -2,7 +2,7 @@ package com.example.gemini.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -21,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,19 +54,20 @@ fun AuraModeToggle(
             .padding(3.dp)
     ) {
         val tabWidth = maxWidth / 2
-        val thumbOffset by animateDpAsState(
-            targetValue = if (isChat) 0.dp else tabWidth,
+        val tabWidthPx = with(LocalDensity.current) { tabWidth.toPx() }
+        val thumbFraction by animateFloatAsState(
+            targetValue = if (isChat) 0f else 1f,
             animationSpec = spring(
                 dampingRatio = Spring.DampingRatioNoBouncy,
                 stiffness = Spring.StiffnessMediumLow
             ),
-            label = "mode_toggle_thumb_offset"
+            label = "mode_toggle_thumb_fraction"
         )
 
-        // Sliding white thumb
+        // Sliding white thumb (GPU-composited translationX avoids per-frame relayout)
         Box(
             modifier = Modifier
-                .offset(x = thumbOffset)
+                .graphicsLayer { translationX = thumbFraction * tabWidthPx }
                 .width(tabWidth)
                 .fillMaxHeight()
                 .shadow(elevation = 4.dp, shape = RoundedCornerShape(50), spotColor = Color(0x33000000))

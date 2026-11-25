@@ -381,7 +381,6 @@ class BrowserSessionManager private constructor() {
             val trimmed = input.trim()
             if (trimmed.isBlank()) return ""
 
-            // Normalize YouTube shortcuts
             val lower = trimmed.lowercase()
             if (lower == "youtube" || lower == "youtube.com" || lower == "www.youtube.com" || lower == "m.youtube.com" || lower == "yt") {
                 return "https://m.youtube.com"
@@ -389,32 +388,7 @@ class BrowserSessionManager private constructor() {
             if (lower.startsWith("youtube.com/") || lower.startsWith("www.youtube.com/") || lower.startsWith("m.youtube.com/")) {
                 return "https://$trimmed"
             }
-
-            if (trimmed.startsWith("http://", ignoreCase = true) ||
-                trimmed.startsWith("https://", ignoreCase = true) ||
-                trimmed.startsWith("file://", ignoreCase = true) ||
-                trimmed.startsWith("about:", ignoreCase = true) ||
-                trimmed.startsWith("data:", ignoreCase = true)
-            ) {
-                return trimmed
-            }
-            if (trimmed.startsWith("localhost", ignoreCase = true) ||
-                trimmed.startsWith("127.0.0.1") ||
-                trimmed.startsWith("192.168.") ||
-                trimmed.startsWith("10.0.")
-            ) {
-                return "http://$trimmed"
-            }
-            // Bare domain names default to https://
-            if (trimmed.matches(Regex("^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(/.*)?$"))) {
-                return "https://$trimmed"
-            }
-            // Host with port e.g. myserver:3000
-            if (trimmed.contains(":") && trimmed.substringBefore(":").all { it.isLetterOrDigit() || it == '.' }) {
-                return "http://$trimmed"
-            }
-            val encoded = try { URLEncoder.encode(trimmed, "UTF-8") } catch (_: Exception) { trimmed }
-            return "https://www.google.com/search?q=$encoded"
+            return com.example.gemini.data.automation.DomainNormalizer.normalizeToUrl(trimmed)
         }
     }
 
@@ -874,15 +848,16 @@ class BrowserSessionManager private constructor() {
                 val effectiveCtx = ctx ?: tab.webView?.context ?: return@load
                 var wv = tab.webView
                 if (wv == null) {
-                    wv = ensureWebViewAttached(effectiveCtx, tab, isDark = true)
+                    // Create WebView without loading tab.url first to avoid a duplicate loadUrl() cancellation race
+                    wv = ensureWebViewAttached(effectiveCtx, tab, isDark = true, loadInitialUrl = false)
                 }
 
                 try {
-                    wv.loadUrl(effectiveUrl)
+                    BrowserExtensionManager.instance.loadWithExtensions(tab, wv, effectiveUrl)
                 } catch (e: Throwable) {
                     Log.w(TAG, "WebView loadUrl failed on existing instance, recreating WebView...", e)
-                    wv = createWebView(effectiveCtx, tab, isDark = true)
-                    wv.loadUrl(effectiveUrl)
+                    wv = createWebView(effectiveCtx, tab, isDark = true, loadInitialUrl = false)
+                    BrowserExtensionManager.instance.loadWithExtensions(tab, wv, effectiveUrl)
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "Fatal error loading URL: $effectiveUrl", e)
@@ -983,9 +958,14 @@ class BrowserSessionManager private constructor() {
      * Ensures the WebView instance is created, configured, and offscreen-measured if headless.
      */
     @SuppressLint("SetJavaScriptEnabled")
-    fun ensureWebViewAttached(context: Context, tab: BrowserTabSession, isDark: Boolean): WebView {
+    fun ensureWebViewAttached(
+        context: Context,
+        tab: BrowserTabSession,
+        isDark: Boolean,
+        loadInitialUrl: Boolean = true
+    ): WebView {
         tab.webView?.let { return it }
-        return createWebView(context, tab, isDark)
+        return createWebView(context, tab, isDark, loadInitialUrl = loadInitialUrl)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -1458,9 +1438,36 @@ class BrowserSessionManager private constructor() {
                     }
                 }
             }
-        } catch (e: Exception) {
+            } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /**
+     * Controls HTML5 audio/video playback or YouTube player actions (play, pause, play_pause,
+     * mute, unmute, seek, fullscreen, skip_ad, next) directly inside the active WebView tab.
+     */
+    suspend fun controlWebVideo(
+        action: String,
+        seekSeconds: Double? = null,
+        tabId: String? = null
+    ): String {
+        val norm = action.trim().lowercase(java.util.Locale.ROOT)
+        val delta = seekSeconds ?: 10.0
+        val js = when (norm) {
+            "play" -> "(function(){var v=document.querySelector('video,audio');if(!v)return 'No media element found on page';v.muted=false;var p=v.play();if(p&&p.catch)p.catch(function(){});return 'Playing media at '+Math.round(v.currentTime)+'s';})()"
+            "pause" -> "(function(){var v=document.querySelectorAll('video,audio');if(!v.length)return 'No media element found on page';v.forEach(function(m){m.pause();});return 'Paused media';})()"
+            "play_pause", "toggle" -> "(function(){var v=document.querySelector('video,audio');if(!v)return 'No media element found on page';if(v.paused){v.play();return 'Resumed media';}else{v.pause();return 'Paused media';}})()"
+            "mute" -> "(function(){var v=document.querySelectorAll('video,audio');if(!v.length)return 'No media element found on page';v.forEach(function(m){m.muted=true;});return 'Muted web media';})()"
+            "unmute" -> "(function(){var v=document.querySelectorAll('video,audio');if(!v.length)return 'No media element found on page';v.forEach(function(m){m.muted=false;});return 'Unmuted web media';})()"
+            "forward", "seek_forward" -> "(function(){var v=document.querySelector('video,audio');if(!v)return 'No media element found on page';v.currentTime=Math.min((v.duration||1e9),v.currentTime+$delta);return 'Seeked forward to '+Math.round(v.currentTime)+'s';})()"
+            "rewind", "seek_back", "backward" -> "(function(){var v=document.querySelector('video,audio');if(!v)return 'No media element found on page';v.currentTime=Math.max(0,v.currentTime-$delta);return 'Rewound to '+Math.round(v.currentTime)+'s';})()"
+            "skip_ad", "skip", "skip_ads", "ad_skip" -> "(function(){var sel='.ytp-ad-skip-button,.ytp-skip-ad-button,.ytp-ad-skip-button-modern,button[class*=\"skip\"],[aria-label*=\"Skip ad\" i],[aria-label*=\"Skip ads\" i]';var b=document.querySelector(sel);if(b){b.click();return 'Clicked Skip Ad in browser';}var v=document.querySelector('.ad-showing video');if(v&&isFinite(v.duration)){v.currentTime=v.duration;return 'Fast-forwarded browser ad';}return 'No skippable ad button found right now';})()"
+            "next" -> "(function(){var b=document.querySelector('.ytp-next-button,a[aria-label*=\"Next\" i],button[aria-label*=\"Next\" i]');if(b){b.click();return 'Triggered next video';}return 'No next button found on page';})()"
+            "fullscreen" -> "(function(){var b=document.querySelector('.ytp-fullscreen-button,.fullscreen-icon,button[aria-label*=\"full screen\" i]');if(b){b.click();return 'Toggled fullscreen';}var v=document.querySelector('video');if(v&&v.requestFullscreen){v.requestFullscreen();return 'Requested fullscreen';}return 'No fullscreen control found';})()"
+            else -> return "Failed: Unknown web media action '$action'."
+        }
+        return evaluateJs(tabId, js).getOrElse { "Failed: ${it.message ?: "JS error"}" }
     }
 
     /**
@@ -1843,7 +1850,7 @@ class BrowserSessionManager private constructor() {
             } else {
                 Result.failure(Exception(json.optString("error", "Scroll failed")))
             }
-        } catch (e: Exception) {
+            } catch (e: Exception) {
             Result.failure(e)
         }
     }

@@ -150,7 +150,10 @@ object AuraAgentEventBus {
     }
 
     fun updateActiveProject(transform: (ActiveProjectContext) -> ActiveProjectContext) {
-        _activeProject.value = transform(_activeProject.value).copy(updatedAt = System.currentTimeMillis())
+        val current = _activeProject.value
+        val next = transform(current)
+        if (next.copy(updatedAt = current.updatedAt) == current) return
+        _activeProject.value = next.copy(updatedAt = System.currentTimeMillis())
     }
 
     fun setActiveProject(context: ActiveProjectContext) {

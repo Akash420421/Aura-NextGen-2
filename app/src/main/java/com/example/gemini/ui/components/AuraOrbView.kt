@@ -35,6 +35,7 @@ fun AuraOrbView(
     onOrbTapped: () -> Unit = {}
 ) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var lastSentMode by remember { mutableStateOf("") }
 
     fun resolveMode(): String {
         return if (livePhase != null) {
@@ -55,16 +56,14 @@ fun AuraOrbView(
         }
     }
 
-    // Sync active/pause state to WebGL orb to eliminate GPU overdraw & battery drain when not visible
+    // Pause/resume only this WebView cleanly without calling process-global WebView.pauseTimers()
     LaunchedEffect(isPaused, webViewRef) {
         val wv = webViewRef ?: return@LaunchedEffect
         if (isPaused) {
             wv.evaluateJavascript("if (window.pauseOrb) window.pauseOrb();", null)
             wv.onPause()
-            wv.pauseTimers()
         } else {
             wv.onResume()
-            wv.resumeTimers()
             wv.evaluateJavascript("if (window.resumeOrb) window.resumeOrb();", null)
         }
     }
@@ -73,14 +72,15 @@ fun AuraOrbView(
         onDispose {
             webViewRef?.evaluateJavascript("if (window.pauseOrb) window.pauseOrb();", null)
             webViewRef?.onPause()
-            webViewRef?.pauseTimers()
         }
     }
 
-    // Sync phase to WebGL orb
+    // Sync phase to WebGL orb (deduplicated so equivalent phases don't spam JS bridge)
     LaunchedEffect(phase, livePhase, webViewRef) {
         val wv = webViewRef ?: return@LaunchedEffect
         val mode = resolveMode()
+        if (mode == lastSentMode) return@LaunchedEffect
+        lastSentMode = mode
         wv.evaluateJavascript(
             "if (window.setAuraMode) { window.setAuraMode('$mode'); } else if (window.JarvisOrb && window.JarvisOrb.setState) { window.JarvisOrb.setState('$mode'); }",
             null
@@ -103,7 +103,7 @@ fun AuraOrbView(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     setBackgroundColor(Color.TRANSPARENT)
-                    setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
+                    setLayerType(WebView.LAYER_TYPE_NONE, null)
                     isVerticalScrollBarEnabled = false
                     isHorizontalScrollBarEnabled = false
                     overScrollMode = View.OVER_SCROLL_NEVER

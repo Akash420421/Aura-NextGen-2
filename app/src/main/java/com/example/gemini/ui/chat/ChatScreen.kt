@@ -2129,11 +2129,12 @@ fun ChatScreen(
                     val isExistingConversation = currentConv != null && currentConv?.title != "New Chat" &&
                         (conversations.any { it.id == currentConv?.id } || jarvisConversations.any { it.id == currentConv?.id })
                     val isExistingChat = visibleMessages.isEmpty() && isExistingConversation && isLoadingConversation
-                    Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, visibleCount=${visibleMessages.size}, error=$conversationError, isServerStopped=$isServerStopped")
+                    LaunchedEffect(currentConv?.id, isLoadingConversation, isExistingChat, visibleMessages.size, conversationError) {
+                        Log.d("CHAT_OPEN_DEBUG", "🖥️ [ChatScreen Render] convId=${currentConv?.id}, title='${currentConv?.title}', isLoading=$isLoadingConversation, isExisting=$isExistingChat, msgCount=${messages.size}, visibleCount=${visibleMessages.size}, error=$conversationError, isServerStopped=$isServerStopped")
+                    }
 
-                    val isVoiceActive = isAuraHome && auraHomeVoice
-                    val isDrawerActive = drawerState.isOpen || drawerState.isAnimationRunning
-                    val isVoicePaused = !isVoiceActive || isDrawerActive
+                    val isVoiceActive = isAuraHome && auraHomeVoice && isScreenVisible
+                    val isVoicePaused = !isVoiceActive || drawerState.isOpen
 
                     if (isAuraHome) {
                         Box(
@@ -2617,8 +2618,8 @@ fun ChatScreen(
                     val slashQuery = slash?.query ?: ""
 
                     // `/plu:` browses custom AntiGem plugins and their skills; custom commands join the normal list
-                    val customCommands = com.example.gemini.data.remote.CustomSlashCommands.commands.toList()
-                    val installedPlugins = com.example.gemini.ui.browser.BrowserExtensionManager.instance.extensions.toList()
+                    val customCommands = if (isSlashActive) com.example.gemini.data.remote.CustomSlashCommands.commands.toList() else emptyList()
+                    val installedPlugins = if (isSlashActive) com.example.gemini.ui.browser.BrowserExtensionManager.instance.extensions.toList() else emptyList()
                     val slashSuggestions = remember(slashQuery, effectiveSlashCommands, isSlashActive, customCommands, installedPlugins) {
                         if (!isSlashActive) emptyList()
                         else if (slashQuery.startsWith("plu:", ignoreCase = true)) com.example.gemini.data.remote.PromptExpansion.pluginSuggestions(slashQuery.substring(4))

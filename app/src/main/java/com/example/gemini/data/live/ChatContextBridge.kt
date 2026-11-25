@@ -33,11 +33,21 @@ object ChatContextBridge {
 
     fun requestViewMode(mode: String) {
         val upper = mode.trim().uppercase(Locale.ROOT)
+        syncViewModeFromUi(upper)
+        viewModel?.requestViewMode(upper)
+    }
+
+    fun syncViewModeFromUi(mode: String) {
+        val upper = mode.trim().uppercase(Locale.ROOT)
         if (upper != "BROWSER") {
             previousNonBrowserMode = upper
         }
         currentViewMode = upper
-        viewModel?.requestViewMode(upper)
+    }
+
+    fun isInBuiltBrowserActive(): Boolean {
+        return currentViewMode == "BROWSER" ||
+            runCatching { com.example.gemini.ui.browser.BrowserSessionManager.instance.getActiveTab()?.isOnScreen == true }.getOrDefault(false)
     }
 
     private val _lastActiveChatTitle = MutableStateFlow("")
@@ -302,6 +312,9 @@ object ChatContextBridge {
         )
     }
 
+    private val bridgeDbScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    @Volatile private var lastPersistedMetaKey: String = ""
+
     fun persistConversationMetadata(
         sessionId: String,
         title: String,
@@ -311,7 +324,10 @@ object ChatContextBridge {
         summary: String? = null
     ) {
         val ctx = viewModel?.getApplication<android.app.Application>() ?: return
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+        val key = "$sessionId|$title|${projectName.orEmpty()}|${projectType.orEmpty()}|${projectPath.orEmpty()}|${summary.orEmpty()}"
+        if (key == lastPersistedMetaKey) return
+        lastPersistedMetaKey = key
+        bridgeDbScope.launch {
             runCatching {
                 com.example.gemini.data.database.ChatDatabase.getInstance(ctx).updateSessionMetadata(
                     sessionId = sessionId,
@@ -815,6 +831,18 @@ object ChatContextBridge {
             sb.append("Open Local Servers: ")
             sb.append(openPorts.joinToString(", ") { "http://localhost:$it" })
             sb.append("\n")
+        }
+
+        // In-Built Browser live state
+        runCatching {
+            val bm = com.example.gemini.ui.browser.BrowserSessionManager.instance
+            val activeTab = bm.getActiveTab()
+            val isOpen = isInBuiltBrowserActive()
+            sb.append("In-Built Browser View: ${if (isOpen) "OPEN (on screen)" else "HIDDEN"}\n")
+            if (activeTab != null) {
+                val curUrl = activeTab.webView?.url ?: activeTab.url
+                sb.append("Active Browser Tab [${activeTab.id}]: \"${activeTab.title}\" | URL=${curUrl.ifBlank { "New Tab" }} | loading=${activeTab.isLoading} | totalTabs=${bm.tabs.size}\n")
+            }
         }
 
         return@withContext sb.toString().trim()

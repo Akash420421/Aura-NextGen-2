@@ -1,16 +1,15 @@
 {
-  "version_code": 246,
-  "version_name": "2.4.6",
+  "version_code": 247,
+  "version_name": "2.4.7",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.6 — Phone Automation & App Control Overhaul (Fixes 15–21)",
-    "Instagram Reels: Bottom nav Reels tab grounding and 200ms upward flick with reel advancement verification",
-    "Instagram DM Target Validation: Excluded bottom nav tabs from contact search; hard abort guard against injecting chat messages into search bars",
-    "Enhanced Scroll & Continuous Auto-Scroll: Re-calibrated scroll distances (35%, 65%, 80%) and background continuous auto-scrolling with smart auto-stop triggers",
-    "Messaging Chat Row Click: Filtered out avatar/profile picture nodes and biased coordinate clicks to text area with auto-recovery from profile dialogs",
-    "Native Phone Dialer: Direct dial_number intent pre-fills native dialpad across all OEM dialers without using search bars",
-    "Dedicated App Close & Recents Reopen Guard: Separated close_current_app from clear_all_recents with 150ms upward fling and auto-recovery if an app reopens",
-    "Native YouTube Priority: Direct native intent launches com.google.android.youtube by default, reserving In-Built Browser for explicit requests"
+    "Aura AI v2.4.7 — Advance Browser Voice Control, Hardware Telemetry, Reels/Shorts & Smart YouTube",
+    "Full In-Built Browser Voice Control: Wired BrowserMcp DOM tools (browser_read_page, browser_find, browser_click, browser_type, browser_scroll, browser_navigate, browser_tabs, browser_media_control) and unified screen routing with DomainNormalizer + single-load fix",
+    "Advance Device Control: Instant fast-path hardware telemetry (battery, volume streams, RAM, storage, network, brightness) and multi-stream volume, ringer mode, DND, torch callback, Quick Settings/panels, and OTP/notification reader",
+    "Bulletproof Reels & Shorts Swiping: Safe mid-viewport 0.60h->0.20h awaited gesture, YouTube Shorts detection, fixed direction inversion, and unthrottled UI change observer",
+    "Universal UI & Chrome Popups: Multi-window accessibility tree scanning, icon/Hinglish synonyms (3 dots, incognito), fixed ordinal #3 collision, and early abort on failed workflow steps",
+    "YouTube Smart Playback & Ad Skip: Zero-quota direct video resolver, curated surprise song playback, modern Litho video picker, youtube_action (skip_ad, like, subscribe, fullscreen) and auto ad-skip watcher",
+    "Voice Screen & 60 FPS Smoothness: Repositioned orb/buttons, WebGL orb shader/DOM optimizations, Compose recomposition cleanup, and deferred accessibility IPC"
   ],
   "is_critical": false
 }

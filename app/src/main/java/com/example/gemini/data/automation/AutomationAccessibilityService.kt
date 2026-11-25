@@ -12,8 +12,10 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Display
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -97,9 +99,10 @@ class AutomationAccessibilityService : AccessibilityService() {
         val uiChanges: StateFlow<UiChangeSnapshot> = _uiChanges.asStateFlow()
 
         private var lastUiEventTimestamp = 0L
-        fun recordUiEvent() {
+        fun recordUiEvent(immediate: Boolean = false) {
             val now = System.currentTimeMillis()
-            if (now - lastUiEventTimestamp >= 300L) {
+            val minGap = if (immediate) 0L else 120L
+            if (now - lastUiEventTimestamp >= minGap) {
                 lastUiEventTimestamp = now
                 _uiChanges.value = UiChangeSnapshot(_uiChanges.value.revision + 1, now)
             }
@@ -107,6 +110,7 @@ class AutomationAccessibilityService : AccessibilityService() {
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var adSkipWatcherJob: Job? = null
     @Volatile var lastEventAt = 0L
         private set
     @Volatile var foregroundPackage: String? = null
@@ -124,7 +128,10 @@ class AutomationAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         lastEventAt = System.currentTimeMillis()
-        recordUiEvent()
+        val isStructuralChange = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
+        recordUiEvent(immediate = isStructuralChange)
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 event.packageName?.toString()?.let {
@@ -132,7 +139,7 @@ class AutomationAccessibilityService : AccessibilityService() {
                     _activePackage.value = it
                 }
                 event.className?.toString()?.let { foregroundClass = it }
-                AuraScreenObserver.processAccessibilityEvent(event, getActiveRootNode())
+                AuraScreenObserver.processAccessibilityEvent(event)
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 event.packageName?.toString()?.let {
@@ -162,6 +169,8 @@ class AutomationAccessibilityService : AccessibilityService() {
 
     private fun releaseServiceResources() {
         stopContinuousScroll("service_disconnected")
+        adSkipWatcherJob?.cancel()
+        adSkipWatcherJob = null
         mainHandler.removeCallbacksAndMessages(null)
         if (instance === this) {
             instance = null
@@ -221,6 +230,48 @@ class AutomationAccessibilityService : AccessibilityService() {
 
     fun getActiveRootNode(): AccessibilityNodeInfo? {
         return getForegroundAppRootNode()
+    }
+
+    /**
+     * Returns all active non-Aura application window roots (main window + PopupWindow menus,
+     * context sheets, dialogs) ordered top-most / focused / active first so popup menus
+     * like Chrome's "New Incognito tab" are never missed.
+     */
+    fun getAllApplicationWindowsRootNodes(): List<AccessibilityNodeInfo> {
+        val myPackage = packageName
+        val roots = mutableListOf<AccessibilityNodeInfo>()
+        try {
+            val ordered = windows
+                .filter {
+                    it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD &&
+                        it.type != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
+                }
+                .sortedByDescending { win ->
+                    val layerScore = win.layer * 10
+                    val focusScore = if (win.isFocused) 100_000 else 0
+                    val activeScore = if (win.isActive) 50_000 else 0
+                    val typeScore = if (win.type == AccessibilityWindowInfo.TYPE_APPLICATION) 25_000 else 0
+                    focusScore + activeScore + typeScore + layerScore
+                }
+            for (win in ordered) {
+                val root = runCatching { win.root }.getOrNull() ?: continue
+                val pkg = root.packageName?.toString().orEmpty()
+                if (pkg == myPackage || pkg == "com.android.systemui") {
+                    // Only include systemui chooser/dialog windows when no non-Aura app window matches, handled later
+                    if (pkg == myPackage) continue
+                }
+                if (!roots.contains(root)) {
+                    roots.add(root)
+                }
+            }
+        } catch (_: Exception) {}
+
+        getForegroundAppRootNode()?.let { active ->
+            if (!roots.contains(active)) {
+                roots.add(0, active)
+            }
+        }
+        return roots
     }
 
     fun clickAt(x: Float, y: Float, durationMs: Long = 100L): Boolean {
@@ -412,15 +463,18 @@ class AutomationAccessibilityService : AccessibilityService() {
         val cy = rect.exactCenterY()
         val root = getActiveRootNode()
         if (root?.packageName?.toString() == "com.android.chrome" && clickAt(cx, cy)) return true
-        var node = root?.let { findNodeCoveringRect(it, rect) }
-        while (node != null) {
-            val bounds = Rect()
-            node.getBoundsInScreen(bounds)
-            if (node.isVisibleToUser && node.isClickable && bounds.contains(cx.toInt(), cy.toInt())) {
-                if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-                break
+        val searchRoots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(root) }
+        for (searchRoot in searchRoots) {
+            var node = findNodeCoveringRect(searchRoot, rect)
+            while (node != null) {
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                if (node.isVisibleToUser && node.isClickable && bounds.contains(cx.toInt(), cy.toInt())) {
+                    if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                    break
+                }
+                node = node.parent
             }
-            node = node.parent
         }
         Log.i(TAG, "Using coordinate fallback at ($cx, $cy) [bounds: $rect]")
         return clickAt(cx, cy)
@@ -470,80 +524,100 @@ class AutomationAccessibilityService : AccessibilityService() {
                vid.contains("location_bar") || vid.contains("search_box_text")
     }
 
-    fun performSmartScroll(direction: String, distance: String = "medium"): Boolean {
-        val dm = resources.displayMetrics
-        val width = dm.widthPixels.toFloat()
-        val height = dm.heightPixels.toFloat()
+    private fun getRealScreenDimensions(): Pair<Float, Float> {
+        val dm = DisplayMetrics()
+        val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        @Suppress("DEPRECATION")
+        wm?.defaultDisplay?.getRealMetrics(dm)
+        if (dm.widthPixels <= 0 || dm.heightPixels <= 0) {
+            dm.setTo(resources.displayMetrics)
+        }
+        return dm.widthPixels.toFloat().coerceAtLeast(1f) to dm.heightPixels.toFloat().coerceAtLeast(1f)
+    }
 
+    private fun buildSmartScrollGesture(direction: String, distance: String): Pair<Path, Long> {
+        val (width, height) = getRealScreenDimensions()
         val deltaY = when (distance.lowercase(Locale.ROOT)) {
             "short", "small" -> height * 0.35f
-            "long", "large" -> height * 0.80f
-            else -> height * 0.65f // "medium" covers ~65% screen height
+            "long", "large" -> height * 0.72f
+            else -> height * 0.52f
         }
         val durationMs = when (distance.lowercase(Locale.ROOT)) {
-            "short", "small" -> 280L
-            "long", "large" -> 380L
-            else -> 320L
+            "short", "small" -> 300L
+            "long", "large" -> 400L
+            else -> 340L
         }
-
         val (startX, startY, endX, endY) = when (direction.lowercase(Locale.ROOT)) {
-            "down" -> listOf(width * 0.5f, height * 0.78f, width * 0.5f, (height * 0.78f - deltaY).coerceAtLeast(height * 0.12f))
-            "up" -> listOf(width * 0.5f, height * 0.22f, width * 0.5f, (height * 0.22f + deltaY).coerceAtMost(height * 0.88f))
+            "down" -> listOf(width * 0.5f, height * 0.65f, width * 0.5f, (height * 0.65f - deltaY).coerceAtLeast(height * 0.14f))
+            "up" -> listOf(width * 0.5f, height * 0.28f, width * 0.5f, (height * 0.28f + deltaY).coerceAtMost(height * 0.84f))
             "left" -> listOf(width * 0.80f, height * 0.5f, width * 0.20f, height * 0.5f)
             "right" -> listOf(width * 0.20f, height * 0.5f, width * 0.80f, height * 0.5f)
-            else -> listOf(width * 0.5f, height * 0.78f, width * 0.5f, (height * 0.78f - deltaY).coerceAtLeast(height * 0.12f))
+            else -> listOf(width * 0.5f, height * 0.65f, width * 0.5f, (height * 0.65f - deltaY).coerceAtLeast(height * 0.14f))
         }
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+        return path to durationMs
+    }
 
-        try {
-            val path = Path().apply {
-                moveTo(startX, startY)
-                lineTo(endX, endY)
-            }
-            val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
-                .build()
-            val dispatched = dispatchGesture(gesture, null, null)
-            Log.i(TAG, "Dispatched smart scroll $direction gesture (distance=$distance, deltaY=$deltaY, duration=${durationMs}ms): $dispatched")
-            return dispatched
+    private fun buildReelSwipePath(upward: Boolean): Path {
+        val (width, height) = getRealScreenDimensions()
+        val cx = width * 0.50f
+        // Start in unobstructed mid-viewport (60% -> 20%) so bottom captions, seekbars,
+        // and Shorts overlays never swallow or bounce back the touch gesture.
+        val (startY, endY) = if (upward) {
+            height * 0.60f to height * 0.20f
+        } else {
+            height * 0.24f to height * 0.66f
+        }
+        return Path().apply {
+            moveTo(cx, startY)
+            lineTo(cx, endY)
+        }
+    }
+
+    fun performSmartScroll(direction: String, distance: String = "medium"): Boolean {
+        val (path, durationMs) = buildSmartScrollGesture(direction, distance)
+        return try {
+            val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+            val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+            Log.i(TAG, "Dispatched smart scroll $direction (distance=$distance, duration=${durationMs}ms): $dispatched")
+            dispatched
         } catch (e: Exception) {
             Log.e(TAG, "Scroll gesture failed: ${e.message}")
+            false
         }
-        return false
+    }
+
+    suspend fun performSmartScrollAndAwait(direction: String, distance: String = "medium"): Boolean {
+        val (path, durationMs) = buildSmartScrollGesture(direction, distance)
+        val completed = gesture(path, durationMs)
+        Log.i(TAG, "Awaited smart scroll $direction (distance=$distance, duration=${durationMs}ms): completed=$completed")
+        return completed
     }
 
     /**
-     * Dedicated high-velocity vertical flick gesture for short-video feeds (Instagram Reels, YouTube Shorts, etc.).
-     * Operates strictly in the center column (X=50%) between Y=78% and Y=18% (200ms flick), staying safely
-     * above Android's bottom gesture navigation threshold (Y=88%+) to prevent accidental home navigation.
+     * Dedicated short-video flick gesture for Instagram Reels / YouTube Shorts / TikTok.
      */
     fun performReelSwipe(upward: Boolean = true): Boolean {
-        val dm = resources.displayMetrics
-        val width = dm.widthPixels.toFloat()
-        val height = dm.heightPixels.toFloat()
-
-        val startX = width * 0.5f
-        val endX = width * 0.5f
-        val (startY, endY) = if (upward) {
-            Pair(height * 0.78f, height * 0.18f)
-        } else {
-            Pair(height * 0.22f, height * 0.82f)
-        }
-
+        val path = buildReelSwipePath(upward)
         return try {
-            val path = Path().apply {
-                moveTo(startX, startY)
-                lineTo(endX, endY)
-            }
-            val gesture = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, 200L))
-                .build()
-            val dispatched = dispatchGesture(gesture, null, null)
-            Log.i(TAG, "performReelSwipe (upward=$upward, startY=$startY -> endY=$endY): $dispatched")
+            val stroke = GestureDescription.StrokeDescription(path, 0, 240L)
+            val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+            Log.i(TAG, "performReelSwipe (upward=$upward): dispatched=$dispatched")
             dispatched
         } catch (e: Exception) {
             Log.e(TAG, "performReelSwipe failed: ${e.message}", e)
             false
         }
+    }
+
+    suspend fun performReelSwipeAndAwait(upward: Boolean = true): Boolean {
+        val path = buildReelSwipePath(upward)
+        val completed = gesture(path, 240L)
+        Log.i(TAG, "performReelSwipeAndAwait (upward=$upward): completed=$completed")
+        return completed
     }
 
     // Continuous auto-scroll engine
@@ -1921,22 +1995,9 @@ class AutomationAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed(object : Runnable {
             var attempts = 0
             override fun run() {
-                val root = getActiveRootNode()
-                if (root != null) {
-                    val videoViewIds = listOf(
-                        "com.google.android.youtube:id/thumbnail",
-                        "com.google.android.youtube:id/video_info",
-                        "com.google.android.youtube:id/title",
-                        "com.google.android.youtube:id/compact_renderer"
-                    )
-                    for (id in videoViewIds) {
-                        val nodes = root.findAccessibilityNodeInfosByViewId(id)
-                        if (nodes.isNotEmpty()) {
-                            clickNodeAndTap(nodes[0])
-                            Log.d(TAG, "Tapped first YouTube video via Accessibility on attempt $attempts!")
-                            return
-                        }
-                    }
+                if (clickFirstYouTubeVideoNow()) {
+                    Log.d(TAG, "Tapped first YouTube video via Accessibility on attempt $attempts!")
+                    return
                 }
                 attempts++
                 if (attempts < 12) {
@@ -1944,6 +2005,165 @@ class AutomationAccessibilityService : AccessibilityService() {
                 }
             }
         }, 800)
+    }
+
+    fun clickFirstYouTubeVideoNow(): Boolean {
+        val roots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(getActiveRootNode()) }
+        val (_, height) = getRealScreenDimensions()
+        val ytRoots = roots.filter { it.packageName?.toString()?.contains("youtube", ignoreCase = true) == true }
+            .ifEmpty { roots }
+
+        val videoViewIds = listOf(
+            "com.google.android.youtube:id/thumbnail",
+            "com.google.android.youtube:id/video_info",
+            "com.google.android.youtube:id/title",
+            "com.google.android.youtube:id/compact_renderer"
+        )
+        for (root in ytRoots) {
+            for (id in videoViewIds) {
+                val nodes = root.findAccessibilityNodeInfosByViewId(id)
+                val valid = nodes.firstOrNull { node ->
+                    val r = Rect().also { node.getBoundsInScreen(it) }
+                    node.isVisibleToUser && r.top > height * 0.12f && r.height() > 40
+                }
+                if (valid != null && clickNodeAndTap(valid)) return true
+            }
+            // Modern Litho YouTube UI often omits XML viewIds on search result cards; match clickable metadata cards instead.
+            val lithoNodes = mutableListOf<AccessibilityNodeInfo>()
+            collectAllNodes(root, lithoNodes, maxNodes = 300)
+            val rect = Rect()
+            val candidate = lithoNodes.firstOrNull { n ->
+                if (!n.isVisibleToUser || !n.isClickable) return@firstOrNull false
+                n.getBoundsInScreen(rect)
+                if (rect.top < height * 0.14f || rect.height() < 80) return@firstOrNull false
+                val desc = n.contentDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                val text = n.text?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                val combined = "$desc $text"
+                val looksLikeVideoCard = combined.contains("views") || combined.contains("ago") ||
+                    combined.contains("minute") || combined.contains("second") ||
+                    combined.contains("play video") || combined.contains("go to channel")
+                val notChipOrChrome = !combined.contains("search youtube") &&
+                    !combined.contains("clear search") &&
+                    !combined.contains("shorts")
+                looksLikeVideoCard && notChipOrChrome
+            }
+            if (candidate != null && clickNodeAndTap(candidate)) return true
+        }
+        return false
+    }
+
+    fun armYouTubeAdSkipWatcher(durationMs: Long = 35_000L) {
+        adSkipWatcherJob?.cancel()
+        adSkipWatcherJob = CoroutineScope(Dispatchers.IO).launch {
+            val deadline = System.currentTimeMillis() + durationMs.coerceIn(5_000L, 90_000L)
+            try {
+                delay(2_000L)
+                while (isActive && System.currentTimeMillis() < deadline) {
+                    val pkg = foregroundPackage ?: getActiveRootNode()?.packageName?.toString().orEmpty()
+                    if (pkg.contains("youtube", ignoreCase = true) && skipYouTubeAd()) {
+                        Log.i(TAG, "Auto Ad-Skip Watcher clicked YouTube Skip Ad button!")
+                        delay(4_000L) // In case of double pre-roll ad, keep monitoring briefly
+                        continue
+                    }
+                    delay(1_200L)
+                }
+            } catch (_: CancellationException) {
+            } finally {
+                adSkipWatcherJob = null
+            }
+        }
+    }
+
+    fun skipYouTubeAd(): Boolean {
+        val roots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(getActiveRootNode()) }
+        val skipIds = listOf(
+            "com.google.android.youtube:id/skip_ad_button",
+            "com.google.android.youtube:id/skip_ad_button_text",
+            "com.google.android.youtube:id/skip_ad_button_container",
+            "com.google.android.youtube:id/modern_skip_ad_text",
+            "com.google.android.youtube:id/skip_button"
+        )
+        for (root in roots) {
+            for (id in skipIds) {
+                val nodes = root.findAccessibilityNodeInfosByViewId(id)
+                val target = nodes.firstOrNull { it.isVisibleToUser && it.isEnabled }
+                if (target != null && clickNodeAndTap(target)) return true
+            }
+            val nodes = mutableListOf<AccessibilityNodeInfo>()
+            collectAllNodes(root, nodes, maxNodes = 300)
+            val skipNode = nodes.firstOrNull { n ->
+                if (!n.isVisibleToUser || !n.isEnabled) return@firstOrNull false
+                val t = n.text?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val d = n.contentDescription?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val vid = n.viewIdResourceName?.lowercase(Locale.ROOT).orEmpty()
+                vid.contains("skip_ad") ||
+                    t == "skip" || t == "skip ad" || t == "skip ads" ||
+                    d == "skip ad" || d == "skip ads" ||
+                    (t.startsWith("skip") && t.length <= 12)
+            }
+            if (skipNode != null && clickNodeAndTap(skipNode)) return true
+        }
+        return false
+    }
+
+    fun likeYouTubeVideo(): Boolean {
+        val roots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(getActiveRootNode()) }
+        val likeIds = listOf("com.google.android.youtube:id/like_button")
+        for (root in roots) {
+            for (id in likeIds) {
+                val n = root.findAccessibilityNodeInfosByViewId(id).firstOrNull { it.isVisibleToUser }
+                if (n != null && clickNodeAndTap(n)) return true
+            }
+            val nodes = mutableListOf<AccessibilityNodeInfo>()
+            collectAllNodes(root, nodes, maxNodes = 260)
+            val n = nodes.firstOrNull { node ->
+                if (!node.isVisibleToUser) return@firstOrNull false
+                val d = node.contentDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                val t = node.text?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                (d.contains("like this video") || d.startsWith("like ") || t == "like") &&
+                    !d.contains("dislike") && !t.contains("dislike")
+            }
+            if (n != null && clickNodeAndTap(n)) return true
+        }
+        return false
+    }
+
+    fun subscribeYouTubeChannel(): Boolean {
+        val roots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(getActiveRootNode()) }
+        for (root in roots) {
+            val subNode = root.findAccessibilityNodeInfosByViewId("com.google.android.youtube:id/subscribe_button")
+                .firstOrNull { it.isVisibleToUser }
+                ?: run {
+                    val nodes = mutableListOf<AccessibilityNodeInfo>()
+                    collectAllNodes(root, nodes, maxNodes = 260)
+                    nodes.firstOrNull { n ->
+                        n.isVisibleToUser && (
+                            n.text?.toString()?.equals("Subscribe", true) == true ||
+                                n.contentDescription?.toString()?.lowercase(Locale.ROOT)?.startsWith("subscribe to ") == true
+                            )
+                    }
+                }
+            if (subNode != null && clickNodeAndTap(subNode)) return true
+        }
+        return false
+    }
+
+    fun toggleYouTubeFullscreen(): Boolean {
+        val roots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(getActiveRootNode()) }
+        for (root in roots) {
+            val fsNode = root.findAccessibilityNodeInfosByViewId("com.google.android.youtube:id/fullscreen_button")
+                .firstOrNull { it.isVisibleToUser }
+                ?: run {
+                    val nodes = mutableListOf<AccessibilityNodeInfo>()
+                    collectAllNodes(root, nodes, maxNodes = 260)
+                    nodes.firstOrNull { n ->
+                        val d = n.contentDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                        n.isVisibleToUser && (d.contains("enter fullscreen") || d.contains("exit fullscreen") || d.contains("full screen"))
+                    }
+                }
+            if (fsNode != null && clickNodeAndTap(fsNode)) return true
+        }
+        return false
     }
 
     suspend fun gesture(path: Path, durationMs: Long): Boolean = suspendCancellableCoroutine { cont ->

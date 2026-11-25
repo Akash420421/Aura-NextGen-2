@@ -460,6 +460,13 @@ class VisualTaskOrchestrator(
         }
     }
 
+    private fun observeMultiWindow(service: AutomationAccessibilityService): Triple<AccessibilityNodeInfo?, List<AccessibilityNodeInfo>, List<UiElementInfo>> {
+        val allRoots = service.getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(service.getActiveRootNode()) }
+        val primaryRoot = allRoots.firstOrNull() ?: service.getActiveRootNode()
+        val elements = if (allRoots.isNotEmpty()) groundingEngine.scanAllWindows(allRoots) else emptyList()
+        return Triple(primaryRoot, allRoots, elements)
+    }
+
     /** Waits for accessibility changes and a stable, non-loading tree; polling is bounded fallback only. */
     suspend fun waitForUiState(
         previousSignature: ScreenSignature? = null,
@@ -479,9 +486,10 @@ class VisualTaskOrchestrator(
             if (AgentTaskEngine.isCancelled()) {
                 return@withContext UiWaitResult(false, latestRoot, latestElements, latestSignature, false, "Task was cancelled while waiting for UI")
             }
-            latestRoot = service.getActiveRootNode()
-            latestElements = groundingEngine.scanScreen(latestRoot)
-            latestSignature = ScreenSignatureCalculator.computeSignature(latestRoot)
+            val (primaryRoot, allRoots, scannedElements) = observeMultiWindow(service)
+            latestRoot = primaryRoot
+            latestElements = scannedElements
+            latestSignature = ScreenSignatureCalculator.computeCombinedSignature(allRoots)
             val pkg = latestRoot?.packageName?.toString().orEmpty()
             val packageReady = expectedPackage.isNullOrBlank() || pkg.contains(expectedPackage, ignoreCase = true)
             val loading = latestElements.any { element ->
@@ -490,7 +498,7 @@ class VisualTaskOrchestrator(
             }
             AgentTaskEngine.observe(latestSignature, pkg, groundingEngine.formatElementsSummary(latestElements, latestRoot))
             if (packageReady && !loading && latestRoot != null) {
-                if (latestSignature != null && latestSignature.isEquivalentTo(lastSignature)) stableSamples++ else stableSamples = 0
+                if (latestSignature.isEquivalentTo(lastSignature)) stableSamples++ else stableSamples = 0
                 if (stableSamples >= 1) {
                     AgentTaskEngine.setState(AgentTaskEngine.State.VERIFYING)
                     return@withContext UiWaitResult(
@@ -504,11 +512,11 @@ class VisualTaskOrchestrator(
             }
             lastSignature = latestSignature
             val revision = AutomationAccessibilityService.uiChanges.value.revision
-            val waitedForEvent = withTimeoutOrNull(220L) {
+            val waitedForEvent = withTimeoutOrNull(200L) {
                 AutomationAccessibilityService.uiChanges.first { it.revision > revision }
                 true
             } ?: false
-            if (!waitedForEvent) delay(100L)
+            if (!waitedForEvent) delay(90L)
         }
         AgentTaskEngine.updateActivity("UI did not become stable before the wait deadline", AgentTaskEngine.State.RECOVERING)
         UiWaitResult(false, latestRoot, latestElements, latestSignature,
@@ -666,15 +674,7 @@ class VisualTaskOrchestrator(
             val isBrowser = rootPkg.contains("chrome", ignoreCase = true) || rootPkg.contains("browser", ignoreCase = true)
             val targetLower = targetName.lowercase(Locale.ROOT)
 
-            if (isBrowser) {
-                // Block accidental tap on Chrome 3-dots menu button (top right: x >= 850 && y <= 150)
-                if (x >= 850 && y <= 150) {
-                    Log.w(TAG, "Blocked accidental tap on Chrome 3-dots menu button at ($x, $y)")
-                    return@withContext TaskActionResult(
-                        success = false,
-                        message = "Refusing to click Chrome 3-dots browser menu. Stay on the web creation page."
-                    )
-                }
+            if (isBrowser && groundingEngine.isGoogleFlowSurface(elementsBeforeVisualTap)) {
                 // Block accidental clicks on settings tags in Google Flow (e.g. Video • 720p • 8s • x1)
                 val isSubmit = targetLower.contains("generate") || targetLower.contains("submit") ||
                         targetLower.contains("arrow") || targetLower.contains("create") || targetLower.contains("enter") || targetLower.contains("send")
@@ -794,7 +794,7 @@ class VisualTaskOrchestrator(
             }
         }
 
-        val rootBefore = service.getActiveRootNode()
+        val (rootBefore, allRootsBefore, elementsBefore) = observeMultiWindow(service)
         val rootPkgBefore = rootBefore?.packageName?.toString() ?: ""
         if (rootPkgBefore.contains("com.example.gemini")) {
             val lower = targetName.lowercase(Locale.ROOT).trim()
@@ -807,8 +807,7 @@ class VisualTaskOrchestrator(
                 )
             }
         }
-        val elementsBefore = groundingEngine.scanScreen(rootBefore)
-        val preTapSignature = ScreenSignatureCalculator.computeSignature(rootBefore)
+        val preTapSignature = ScreenSignatureCalculator.computeCombinedSignature(allRootsBefore)
         val repeatedTarget = targetName.lowercase(Locale.ROOT).trim()
         if (repeatedTarget.isNotBlank() && repeatedTarget == lastUnverifiedClickTarget &&
             lastUnverifiedClickScreen?.isEquivalentTo(preTapSignature) == true) {
@@ -858,9 +857,6 @@ class VisualTaskOrchestrator(
             initialTarget
         }
 
-        // Chrome's native Settings page is reached through its overflow menu. Treat
-        // that menu tap as a navigation step for an explicit Settings request, then
-        // reacquire the tree and resolve Settings afresh before tapping it.
         val isChrome = (rootBefore?.packageName?.toString() ?: "").contains("chrome", ignoreCase = true)
         if ((target == null || isBrowserOverflowMenu(target)) && isChrome && targetName.contains("settings", ignoreCase = true)) {
             val menuTarget = groundingEngine.findTargetElement(elementsBefore, "More options")
@@ -873,9 +869,8 @@ class VisualTaskOrchestrator(
                     verified = false
                 )
             }
-            delay(350)
-            val menuRoot = service.getActiveRootNode()
-            val menuElements = groundingEngine.scanScreen(menuRoot)
+            delay(400)
+            val (menuRoot, _, menuElements) = observeMultiWindow(service)
             val settingsTarget = groundingEngine.findTargetElement(menuElements, "Settings")
             if (settingsTarget == null) {
                 return@withContext TaskActionResult(
@@ -885,14 +880,13 @@ class VisualTaskOrchestrator(
                     verified = false
                 )
             }
-            val beforeSettings = ScreenSignatureCalculator.computeSignature(menuRoot)
+            val beforeSettings = ScreenSignatureCalculator.computeCombinedSignature(observeMultiWindow(service).second)
             if (!mutateUi("open-chrome-settings") { service.performClickAtRect(settingsTarget.bounds) }) {
                 return@withContext TaskActionResult(false, "Could not tap Chrome Settings.", groundingEngine.formatElementsSummary(menuElements, menuRoot), verified = false)
             }
             delay(700)
-            val settingsRoot = service.getActiveRootNode()
-            val settingsElements = groundingEngine.scanScreen(settingsRoot)
-            val afterSettings = ScreenSignatureCalculator.computeSignature(settingsRoot)
+            val (settingsRoot, settingsAllRoots, settingsElements) = observeMultiWindow(service)
+            val afterSettings = ScreenSignatureCalculator.computeCombinedSignature(settingsAllRoots)
             val verified = settingsRoot != null && settingsRoot.packageName?.toString()?.contains("chrome", ignoreCase = true) == true &&
                 !afterSettings.isEquivalentTo(beforeSettings) &&
                 settingsElements.any { it.primaryLabel.contains("settings", ignoreCase = true) || it.viewId.contains("settings", ignoreCase = true) }
@@ -913,25 +907,65 @@ class VisualTaskOrchestrator(
                     verified = false
                 )
             }
-            // Continue searching across screens until the target appears, the screen
-            // stops changing repeatedly, or the bounded safety ceiling is reached.
-            Log.d(TAG, "Target '$targetName' not visible on current screen. Running auto-scroll search...")
+
+            // Never run a 20-scroll search when a popup menu/dialog overlay is open OR when targeting
+            // toolbar/menu controls like "3 dots", "incognito", "menu", "settings", "close", etc.
+            val popupOpen = allRootsBefore.size > 1
+            val isToolbarOrMenuTarget = Regex("\\b(dot|dots|line|lines|menu|more options|incognito|inkinido|private|new tab|tab|toolbar|back|close|settings|share|search)\\b")
+                .containsMatchIn(normalizedTarget)
+            if (popupOpen || isToolbarOrMenuTarget) {
+                // In Chrome/browsers, if toolbar auto-hid from prior scroll, swipe gently up once to reveal toolbar & re-check
+                if (isChrome && !popupOpen) {
+                    mutateUi("reveal-chrome-toolbar") { service.performSmartScroll("up", "short") }
+                    delay(450)
+                    val (revealedRoot, _, revealedElements) = observeMultiWindow(service)
+                    val foundInToolbar = groundingEngine.findTargetElement(
+                        elements = revealedElements,
+                        targetName = targetName,
+                        isToggleIntent = isToggle,
+                        elementId = elementId
+                    )
+                    if (foundInToolbar != null) {
+                        val clicked = mutateUi("click-revealed:${foundInToolbar.primaryLabel}") {
+                            service.performClickAtRect(foundInToolbar.bounds)
+                        }
+                        delay(450)
+                        val (postRoot, _, postEls) = observeMultiWindow(service)
+                        return@withContext TaskActionResult(
+                            success = clicked,
+                            message = if (clicked) "Clicked '${foundInToolbar.primaryLabel}' after revealing toolbar. Inspect current elements before next action." else "Failed to click '${foundInToolbar.primaryLabel}'.",
+                            currentStateSummary = groundingEngine.formatElementsSummary(postEls, postRoot),
+                            verified = clicked
+                        )
+                    }
+                }
+                val (pkg, title) = groundingEngine.extractScreenContext(rootBefore, elementsBefore)
+                return@withContext TaskActionResult(
+                    success = false,
+                    message = "Could not find '$targetName' on current screen ('$title' in $pkg). Scrolled search skipped so open menus/toolbars aren't dismissed.",
+                    currentStateSummary = groundingEngine.formatElementsSummary(elementsBefore, rootBefore),
+                    verified = false
+                )
+            }
+
+            // Bounded scroll search across lists (max 6 scrolls so we don't thrash)
+            Log.d(TAG, "Target '$targetName' not visible on current screen. Running bounded auto-scroll search...")
             var foundTarget: UiElementInfo? = null
             var prevSig: ScreenSignature? = null
             var noProgressCount = 0
 
-            for (scrollStep in 1..20) {
+            for (scrollStep in 1..6) {
                 AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
                 val scrolled = mutateUi("auto-scroll-search:$targetName") { service.performSmartScroll("down", "medium") }
                 AgentTaskEngine.current()?.scrollCount = (AgentTaskEngine.current()?.scrollCount ?: 0) + 1
                 if (AgentTaskEngine.isCancelled()) break
                 if (!scrolled) break
-                delay(600)
-                val rootAfterScroll = service.getActiveRootNode()
-                val currentSig = ScreenSignatureCalculator.computeSignature(rootAfterScroll)
+                delay(550)
+                val (_, scrolledRoots, elementsAfterScroll) = observeMultiWindow(service)
+                val currentSig = ScreenSignatureCalculator.computeCombinedSignature(scrolledRoots)
                 if (prevSig != null && currentSig.isEquivalentTo(prevSig)) {
                     noProgressCount++
-                    if (noProgressCount >= 3) {
+                    if (noProgressCount >= 2) {
                         Log.i(TAG, "Stopping target search after $noProgressCount consecutive unchanged screen signatures.")
                         break
                     }
@@ -940,7 +974,6 @@ class VisualTaskOrchestrator(
                 }
                 prevSig = currentSig
 
-                val elementsAfterScroll = groundingEngine.scanScreen(rootAfterScroll)
                 val targetAfterScroll = groundingEngine.findTargetElement(
                     elements = elementsAfterScroll,
                     targetName = targetName,
@@ -957,7 +990,7 @@ class VisualTaskOrchestrator(
             if (foundTarget != null) {
                 AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
                 val clicked = mutateUi("click-after-scroll:$targetName") { service.performClickAtRect(foundTarget.bounds) }
-                delay(300)
+                delay(350)
                 dispatchImmediateScreenFrame()
                 return@withContext TaskActionResult(
                     success = clicked,
@@ -977,20 +1010,6 @@ class VisualTaskOrchestrator(
         }
 
         val rootPkg = rootBefore?.packageName?.toString() ?: ""
-        val isBrowserApp = rootPkg.contains("chrome", ignoreCase = true) || rootPkg.contains("browser", ignoreCase = true)
-        val isExplicitMenuRequest = targetName.lowercase(Locale.ROOT).contains("menu") ||
-            targetName.lowercase(Locale.ROOT).contains("more options") ||
-            (description ?: "").lowercase(Locale.ROOT).contains("menu") ||
-            (allowChromeMenuForSettings && isBrowserApp)
-
-        if (isBrowserApp && !isExplicitMenuRequest && isBrowserOverflowMenu(target)) {
-            Log.w(TAG, "Blocked clicking browser overflow menu ('More options' / 3 dots). Target: ${target.primaryLabel}")
-            return@withContext TaskActionResult(
-                success = false,
-                message = "Refusing to click Chrome's browser menu ('More options' / three dots). Please interact directly with the website content, search results, or prompt input instead of the browser menu.",
-                currentStateSummary = captureCurrentStateSummary(service)
-            )
-        }
 
         val initialCheckedState = target.isChecked
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
@@ -1045,8 +1064,9 @@ class VisualTaskOrchestrator(
             (normalizedTarget == "reels" || normalizedTarget == "reel" || normalizedTarget.contains("reels tab"))
         if (isInstagramReelsClick) {
             delay(500)
-            rootAfter = service.getActiveRootNode()
-            elementsAfter = groundingEngine.scanScreen(rootAfter)
+            val (igRoot, _, igElems) = observeMultiWindow(service)
+            rootAfter = igRoot
+            elementsAfter = igElems
             val reelsViewerActive = elementsAfter.any { el ->
                 val vId = el.viewId.lowercase(Locale.ROOT)
                 val lbl = el.primaryLabel.lowercase(Locale.ROOT)
@@ -1233,7 +1253,7 @@ class VisualTaskOrchestrator(
                 }
             )
         }
-        val elementsForTyping = if (rootForTyping != null) groundingEngine.scanScreen(rootForTyping) else emptyList()
+        val elementsForTyping = if (rootForTyping != null) observeMultiWindow(service).third else emptyList()
         val visibleUiText = elementsForTyping.joinToString(" ") {
             "${it.text} ${it.contentDescription} ${it.viewId}"
         }.lowercase(Locale.ROOT)
@@ -1542,6 +1562,62 @@ class VisualTaskOrchestrator(
     }
 
     /**
+     * Executes a dedicated short-video swipe (Instagram Reels, YouTube Shorts, TikTok) with
+     * awaited gesture completion and post-swipe metadata verification.
+     */
+    suspend fun handleSwipeReel(direction: String = "up"): TaskActionResult = withContext(Dispatchers.IO) {
+        AgentTaskEngine.setState(AgentTaskEngine.State.OBSERVING)
+        val service = AutomationAccessibilityService.instance
+            ?: return@withContext TaskActionResult(false, "Accessibility Service not running.")
+
+        val dirLower = direction.trim().lowercase(Locale.ROOT)
+        // Standard swipe_reel contract: "up" / "next" moves to NEXT reel (finger swipes upward),
+        // "down" / "prev" moves to PREVIOUS reel (finger swipes downward).
+        val upward = dirLower !in setOf("down", "prev", "previous", "back")
+
+        val (rootBefore, allRootsBefore, preElements) = observeMultiWindow(service)
+        val preSignature = ScreenSignatureCalculator.computeCombinedSignature(allRootsBefore)
+        val pkg = rootBefore?.packageName?.toString().orEmpty()
+        val preReelMeta = preElements
+            .mapNotNull { it.primaryLabel.trim().takeIf { lbl -> lbl.length >= 2 } }
+            .distinct()
+            .take(15)
+            .joinToString("|")
+
+        AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
+        val dispatched = service.performReelSwipeAndAwait(upward)
+        if (!dispatched) {
+            return@withContext TaskActionResult(
+                success = false,
+                message = "FAILED: Short-video swipe gesture was cancelled or rejected by Android.",
+                currentStateSummary = groundingEngine.formatElementsSummary(preElements, rootBefore),
+                verified = false
+            )
+        }
+
+        val uiWait = waitForUiState(preSignature, expectedPackage = pkg, timeoutMs = 3_000L)
+        val (rootAfterReel, allRootsAfter, elementsAfterReel) = observeMultiWindow(service).let { (r, rs, els) ->
+            if (uiWait.elements.isNotEmpty()) Triple(uiWait.root ?: r, allRootsBefore, uiWait.elements) else Triple(r, rs, els)
+        }
+        val postSignatureReel = uiWait.signature ?: ScreenSignatureCalculator.computeCombinedSignature(allRootsAfter)
+        val postReelMeta = elementsAfterReel
+            .mapNotNull { it.primaryLabel.trim().takeIf { lbl -> lbl.length >= 2 } }
+            .distinct()
+            .take(15)
+            .joinToString("|")
+        val reelChanged = !postSignatureReel.isEquivalentTo(preSignature) ||
+            (preReelMeta.isNotBlank() && postReelMeta.isNotBlank() && preReelMeta != postReelMeta)
+
+        return@withContext TaskActionResult(
+            success = reelChanged,
+            message = if (reelChanged) "Swiped ${if (upward) "to next" else "to previous"} short video and verified screen change."
+                      else "FAILED: Swiped short video gesture completed, but the same Reel/Short appears to still be on screen.",
+            currentStateSummary = groundingEngine.formatElementsSummary(elementsAfterReel, rootAfterReel),
+            verified = reelChanged
+        )
+    }
+
+    /**
      * Performs a directional scroll with loop guard.
      */
     // #17: Default scroll distance is "medium" (~65% screen height) instead of "small"
@@ -1555,8 +1631,7 @@ class VisualTaskOrchestrator(
         consecutiveScrollCount++
         if (consecutiveScrollCount > 15) {
             resetScrollCount()
-            val root = service.getActiveRootNode()
-            val elements = groundingEngine.scanScreen(root)
+            val (root, _, elements) = observeMultiWindow(service)
             val (pkg, title) = groundingEngine.extractScreenContext(root, elements)
             return@withContext TaskActionResult(
                 success = false,
@@ -1565,51 +1640,30 @@ class VisualTaskOrchestrator(
             )
         }
 
-        AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
-        val rootNode = service.getActiveRootNode()
-        val preSignature = ScreenSignatureCalculator.computeSignature(rootNode)
-        val preElements = groundingEngine.scanScreen(rootNode)
-
+        val (rootNode, allRootsBefore, preElements) = observeMultiWindow(service)
+        val preSignature = ScreenSignatureCalculator.computeCombinedSignature(allRootsBefore)
         val pkg = rootNode?.packageName?.toString() ?: ""
+
         val isInstagramReels = pkg.contains("instagram", ignoreCase = true) &&
-                preElements.any { it.viewId.contains("clips") || it.viewId.contains("reel") }
-        val isShortVideoFeed = isInstagramReels || distance.lowercase(Locale.ROOT) == "reel"
-
-        // #15: Snapshot visible Reel handle/caption/audio metadata before swiping
-        val preReelMeta = if (isShortVideoFeed) {
-            preElements.mapNotNull { it.primaryLabel.trim().takeIf { lbl -> lbl.length >= 2 } }
-                .distinct()
-                .take(15)
-                .joinToString("|")
-        } else ""
-
-        val success = if (isShortVideoFeed) {
-            val upward = direction.lowercase(Locale.ROOT) != "up"
-            mutateUi("reel-swipe:${if (upward) "next" else "prev"}") { service.performReelSwipe(upward) }
-        } else {
-            mutateUi("scroll:$direction") { service.performSmartScroll(direction, distance) }
-        }
+            preElements.any { it.viewId.contains("clips", ignoreCase = true) || it.viewId.contains("reel", ignoreCase = true) }
+        val isYouTubeShorts = pkg.contains("youtube", ignoreCase = true) &&
+            preElements.any {
+                it.viewId.contains("reel", ignoreCase = true) ||
+                    it.viewId.contains("shorts", ignoreCase = true) ||
+                    it.primaryLabel.contains("shorts remix", ignoreCase = true) ||
+                    it.contentDescription.contains("dislike this video", ignoreCase = true)
+            }
+        val distLower = distance.lowercase(Locale.ROOT)
+        val isShortVideoFeed = isInstagramReels || isYouTubeShorts || distLower == "reel" || distLower == "short"
 
         if (isShortVideoFeed) {
-            delay(500)
-            val rootAfterReel = service.getActiveRootNode()
-            val postSignatureReel = ScreenSignatureCalculator.computeSignature(rootAfterReel)
-            val elementsAfterReel = groundingEngine.scanScreen(rootAfterReel)
-            val postReelMeta = elementsAfterReel.mapNotNull { it.primaryLabel.trim().takeIf { lbl -> lbl.length >= 2 } }
-                .distinct()
-                .take(15)
-                .joinToString("|")
-            val reelAdvanced = !postSignatureReel.isEquivalentTo(preSignature) ||
-                (preReelMeta.isNotBlank() && postReelMeta.isNotBlank() && preReelMeta != postReelMeta)
-            return@withContext TaskActionResult(
-                success = success && reelAdvanced,
-                message = if (success && reelAdvanced) "Reel swipe succeeded and verified new Reel metadata."
-                          else if (success) "FAILED: Reel swipe gesture dispatched, but Reel metadata/screen did not change after 500ms. Still on the same Reel."
-                          else "FAILED: Reel swipe gesture failed to dispatch.",
-                currentStateSummary = groundingEngine.formatElementsSummary(elementsAfterReel, rootAfterReel),
-                verified = success && reelAdvanced
-            )
+            // In scroll_screen semantics, "down" advances forward (finger swipes UP), "up" goes back (finger swipes DOWN)
+            val swipeDir = if (direction.lowercase(Locale.ROOT) == "up") "down" else "up"
+            return@withContext handleSwipeReel(swipeDir)
         }
+
+        AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
+        val success = service.performSmartScrollAndAwait(direction, distance)
 
         AgentTaskEngine.current()?.scrollCount = (AgentTaskEngine.current()?.scrollCount ?: 0) + 1
         dispatchImmediateScreenFrame()
@@ -1687,29 +1741,26 @@ class VisualTaskOrchestrator(
     suspend fun inspectScreen(waitForContent: Boolean = false): String = withContext(Dispatchers.IO) {
         val service = AutomationAccessibilityService.instance
             ?: return@withContext "Screen context unavailable: Accessibility Service is not active."
-        var root = service.getActiveRootNode()
-        var elements = if (root != null) groundingEngine.scanScreen(root) else emptyList()
+        var (root, _, elements) = observeMultiWindow(service)
 
         if (waitForContent) {
             var attempts = 0
             while (attempts < 4 && elements.none { it.text.isNotBlank() || it.contentDescription.isNotBlank() }) {
                 delay(250)
-                root = service.getActiveRootNode()
-                elements = if (root != null) groundingEngine.scanScreen(root) else emptyList()
+                val obs = observeMultiWindow(service)
+                root = obs.first
+                elements = obs.third
                 attempts++
             }
         }
 
-        // If active root produced no elements, scan across all interactive windows
+        // If multi-window app scan produced no elements, check every accessible window as fallback
         if (elements.isEmpty()) {
             val allRoots = service.getAllRootNodes()
-            for (r in allRoots) {
-                val scanned = groundingEngine.scanScreen(r)
-                if (scanned.isNotEmpty()) {
-                    elements = scanned
-                    root = r
-                    break
-                }
+            val scanned = groundingEngine.scanAllWindows(allRoots)
+            if (scanned.isNotEmpty()) {
+                elements = scanned
+                root = allRoots.firstOrNull()
             }
         }
 
@@ -1721,13 +1772,13 @@ class VisualTaskOrchestrator(
         val recentOtp = AutomationAccessibilityService.getRecentOtp()
         val otpNotice = if (recentOtp != null) "\n[SYSTEM NOTICE: Detected incoming SMS/Notification OTP: '$recentOtp' (available for auto-entry)]" else ""
         val screenSource = if (screenCaptureManager.hasRecentFrame()) {
-            "[Screen share active: a recent visual frame is being streamed.]\n"
+            "[Screen share active: visual frame + multi-window accessibility tree available.]\n"
         } else {
             val flowDetected = groundingEngine.isGoogleFlowSurface(elements)
             if (flowDetected) {
-                "[Google Flow detected. Current labeled controls can be used from accessibility. Screen coordinates require a fresh Screen Share frame; if the requested control has no accessible label, explain that limitation once.]\n"
+                "[Google Flow detected. Labeled accessibility controls are available. Screen coordinates require Screen Share.]\n"
             } else {
-                "[Current accessibility labels are available. Use a unique labeled target for actions; image-only and unlabeled controls are unavailable.]\n"
+                "[Live multi-window accessibility tree (including popup menus & icon viewIds) is active. Target by element_id, exact label, or icon synonym like '3 dots', 'incognito', 'menu', 'settings'.]\n"
             }
         }
         val summary = screenSource + groundingEngine.formatElementsSummary(elements, root) + otpNotice
@@ -1941,8 +1992,8 @@ class VisualTaskOrchestrator(
     }
 
     private fun captureCurrentStateSummary(service: AutomationAccessibilityService): String {
-        val root = service.getActiveRootNode() ?: return "Screen empty or not accessible."
-        val elements = groundingEngine.scanScreen(root)
+        val (root, _, elements) = observeMultiWindow(service)
+        if (root == null && elements.isEmpty()) return "Screen empty or not accessible."
         val recentOtp = AutomationAccessibilityService.getRecentOtp()
         val otpNotice = if (recentOtp != null) "\n[SYSTEM NOTICE: Detected incoming SMS/Notification OTP: '$recentOtp' (available for auto-entry)]" else ""
         return groundingEngine.formatElementsSummary(elements, root) + otpNotice

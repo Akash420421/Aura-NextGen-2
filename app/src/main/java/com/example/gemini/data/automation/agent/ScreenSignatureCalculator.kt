@@ -76,6 +76,38 @@ object ScreenSignatureCalculator {
     }
 
     /**
+     * Computes a unified ScreenSignature across multiple windows (e.g. main Activity +
+     * PopupWindow / AlertDialog overlay) so menu popups reliably count as screen state transitions.
+     */
+    fun computeCombinedSignature(roots: List<AccessibilityNodeInfo>): ScreenSignature {
+        if (roots.isEmpty()) return computeSignature(null)
+        if (roots.size == 1) return computeSignature(roots[0])
+
+        val primary = roots[0]
+        var totalElements = 0
+        var combinedHash = 1125899906842597L
+        val combinedTexts = mutableListOf<String>()
+
+        for (root in roots) {
+            val sig = computeSignature(root)
+            totalElements += sig.elementCount
+            combinedHash = 31 * combinedHash + sig.packageName.hashCode() + sig.contentHash
+            for (t in sig.primaryTexts) {
+                if (combinedTexts.size < 18 && !combinedTexts.contains(t)) {
+                    combinedTexts.add(t)
+                }
+            }
+        }
+        return ScreenSignature(
+            packageName = primary.packageName?.toString() ?: "",
+            className = primary.className?.toString() ?: "",
+            elementCount = totalElements,
+            contentHash = combinedHash,
+            primaryTexts = combinedTexts
+        )
+    }
+
+    /**
      * Generates a stable key for an individual interactive element (e.g. for bulk tracking).
      */
     fun computeElementKey(node: AccessibilityNodeInfo): String {

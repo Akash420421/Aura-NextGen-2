@@ -162,6 +162,9 @@ fun FloatingChatWindow(
                     shadowElevation = 18.dp,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 ) {
+                    LaunchedEffect(currentViewMode) {
+                        com.example.gemini.data.live.ChatContextBridge.syncViewModeFromUi(currentViewMode.name)
+                    }
                     Box(modifier = Modifier.fillMaxSize()) {
                         // Persistent Floating Chat Screen
                         Box(

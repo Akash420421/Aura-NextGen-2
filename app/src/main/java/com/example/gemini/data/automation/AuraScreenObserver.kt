@@ -99,11 +99,18 @@ object AuraScreenObserver {
     /**
      * Called by AutomationAccessibilityService on window state changes.
      */
-    fun processAccessibilityEvent(event: AccessibilityEvent, rootNode: AccessibilityNodeInfo?) {
+    fun processAccessibilityEvent(event: AccessibilityEvent, rootNode: AccessibilityNodeInfo? = null) {
         if (!isContinuousMonitoringEnabled) return
         val pkg = event.packageName?.toString() ?: _currentScreen.value.packageName
         val cls = event.className?.toString() ?: _currentScreen.value.className
-        processInternal(pkg, cls, rootNode)
+        if (activeGuidanceSteps.isEmpty()) {
+            processInternal(pkg, cls, null)
+            return
+        }
+        observerScope.launch {
+            val resolvedRoot = rootNode ?: AutomationAccessibilityService.instance?.getActiveRootNode()
+            processInternal(pkg, cls, resolvedRoot)
+        }
     }
 
     private fun processInternal(pkg: String, cls: String, rootNode: AccessibilityNodeInfo?) {

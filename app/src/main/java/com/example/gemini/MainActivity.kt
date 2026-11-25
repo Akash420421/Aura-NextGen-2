@@ -296,6 +296,7 @@ class MainActivity : ComponentActivity() {
                         var previousModeForFocus by remember { mutableStateOf(currentViewMode) }
 
                         LaunchedEffect(currentViewMode) {
+                            com.example.gemini.data.live.ChatContextBridge.syncViewModeFromUi(currentViewMode.name)
                             if (previousModeForFocus != currentViewMode) {
                                 val isKeyboardOpen = imeInsets.getBottom(density) > 0
                                 focusCoordinator.onScreenLeaving(previousModeForFocus, isKeyboardOpen)

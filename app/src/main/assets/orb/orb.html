@@ -74,7 +74,7 @@ if (isEmbedded) {
   document.body.style.background = "transparent";
 }
 
-const FOV=45, VIS=3.1, ORBIT=36, COUNT=6000;
+const FOV=45, VIS=3.1, ORBIT=28, COUNT=2800;
 const STATES={
   idle:     {scale:1.00,speed:.28,cyan:.35,purple:.45,bright:1.00,glow:.45,ring:.15,wob:0},
   listening:{scale:1.05,speed:.85,cyan:1.00,purple:.25,bright:1.12,glow:.95,ring:.35,wob:0},
@@ -87,7 +87,7 @@ const $=s=>document.querySelector(s);
 const stage=$("#stage"),canvas=$("#c"),shadowEl=$("#shadow");
 
 let renderer;
-try{renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true,powerPreference:"high-performance"});}
+try{renderer=new THREE.WebGLRenderer({canvas,antialias:false,alpha:true,powerPreference:"high-performance"});}
 catch(e){$("#err").style.display="block";stage.style.display="none";return;}
 renderer.setClearColor(0x000000,0);
 const scene=new THREE.Scene();
@@ -112,9 +112,9 @@ void main(){
  c=mix(c,PURP,smoothstep(.1,.9,d.x*.6-d.y*.3+aRnd*.4)*uPurple);
  c=mix(DEEP,c,.5+.5*aRnd);
  vC=c*uBright*mix(.8,1.,depth);
- gl_PointSize=max((.009+aRnd*.017)*(1.+uAmp*.5)*uPx/(-mv.z)*mix(.85,1.2,depth),1.7);
+ gl_PointSize=max((.012+aRnd*.020)*(1.+uAmp*.5)*uPx/(-mv.z)*mix(.85,1.2,depth),1.8);
  gl_Position=projectionMatrix*mv;}`;
-const dotF="precision highp float;varying vec3 vC;varying float vA;void main(){float d=length(gl_PointCoord-.5);gl_FragColor=vec4(vC,smoothstep(.5,.05,d)*vA);}";
+const dotF="precision mediump float;varying vec3 vC;varying float vA;void main(){float d=length(gl_PointCoord-.5);gl_FragColor=vec4(vC,smoothstep(.5,.05,d)*vA);}";
 function buildParticles(){
   const pos=new Float32Array(COUNT*3),rnd=new Float32Array(COUNT);
   for(let i=0;i<COUNT;i++){
@@ -137,7 +137,7 @@ let glowMat,glow,ring1,ring2,orbitPts,ptData=[];
 function createGlow(){
   glowMat=new THREE.ShaderMaterial({
     vertexShader:"varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}",
-    fragmentShader:`varying vec2 vUv;uniform float uTime,uStrength,uMix;uniform vec3 uA,uB,uC;
+    fragmentShader:`precision mediump float;varying vec2 vUv;uniform float uTime,uStrength,uMix;uniform vec3 uA,uB,uC;
 void main(){vec2 c=vUv-.5;float d=length(c)*2.,a=atan(c.y,c.x);
  float g=(d>.68?exp(-(d-.68)*6.5)*.75:0.)*smoothstep(1.,.78,d);
  vec3 col=mix(mix(uA,uB,.5+.5*sin(a+uTime*.4)),uC,uMix*(.5+.5*sin(a*2.-uTime*.6)));
@@ -146,9 +146,9 @@ void main(){vec2 c=vUv-.5;float d=length(c)*2.,a=atan(c.y,c.x);
   glow=new THREE.Mesh(new THREE.PlaneGeometry(VIS,VIS),glowMat);glow.position.z=-.05;glow.renderOrder=-2;scene.add(glow);
 }
 function createRing(r0,r1,segs,seed,alpha){
-  const m=new THREE.Mesh(new THREE.RingGeometry(r0,r1,128,1),new THREE.ShaderMaterial({
+  const m=new THREE.Mesh(new THREE.RingGeometry(r0,r1,96,1),new THREE.ShaderMaterial({
     vertexShader:"varying vec2 vP;void main(){vP=position.xy;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}",
-    fragmentShader:`varying vec2 vP;uniform float uAlpha,uSeed,uSegs;uniform vec3 uA,uB,uC;
+    fragmentShader:`precision mediump float;varying vec2 vP;uniform float uAlpha,uSeed,uSegs;uniform vec3 uA,uB,uC;
 void main(){float a=atan(vP.y,vP.x);
  float m=smoothstep(-.25,.35,sin(a*uSegs+uSeed))*smoothstep(-.9,-.2,sin(a+uSeed*.7));
  vec3 col=mix(mix(uC,uA,.5+.5*sin(a+uSeed)),uB,.5+.5*sin(a*2.-uSeed));
@@ -321,6 +321,7 @@ canvas.addEventListener("pointerup",endDrag);canvas.addEventListener("pointercan
 
 /* ---------- Update ---------- */
 let time=0,flow=0,r1a=0,r2a=0,pxPerUnit=300;
+const _cDeep=new THREE.Color(), _cBlue=new THREE.Color(), _cCyan=new THREE.Color(), _cPurp=new THREE.Color();
 function updateOrb(dt){
   const k=1-Math.exp(-dt*3.5);
   for(const key in cur) cur[key]+=(tgt[key]-cur[key])*k;
@@ -336,23 +337,23 @@ function updateOrb(dt){
   U.uTime.value=flow;U.uAmp.value=audio.level+cur.wob*.25;U.uBass.value=audio.bass;U.uHigh.value=audio.high;
   U.uCyan.value=cur.cyan;U.uPurple.value=cur.purple;U.uBright.value=cur.bright+idlePulse;
 
-  // Continuous RGB Color Cycle Animation (Deep, rich saturated dark jewel tones)
+  // Continuous RGB Color Cycle Animation (zero per-frame GC allocation)
   const rgbSpeed = 0.08;
   const baseHue = (time * rgbSpeed) % 1.0;
-  const cDeep = new THREE.Color().setHSL(baseHue, 1.0, 0.22);
-  const cBlue = new THREE.Color().setHSL((baseHue + 0.18) % 1.0, 1.0, 0.36);
-  const cCyan = new THREE.Color().setHSL((baseHue + 0.42) % 1.0, 1.0, 0.38);
-  const cPurp = new THREE.Color().setHSL((baseHue + 0.68) % 1.0, 1.0, 0.35);
+  _cDeep.setHSL(baseHue, 1.0, 0.22);
+  _cBlue.setHSL((baseHue + 0.18) % 1.0, 1.0, 0.36);
+  _cCyan.setHSL((baseHue + 0.42) % 1.0, 1.0, 0.38);
+  _cPurp.setHSL((baseHue + 0.68) % 1.0, 1.0, 0.35);
 
-  U.DEEP.value.copy(cDeep);
-  U.BLUE.value.copy(cBlue);
-  U.CYAN.value.copy(cCyan);
-  U.PURP.value.copy(cPurp);
+  U.DEEP.value.copy(_cDeep);
+  U.BLUE.value.copy(_cBlue);
+  U.CYAN.value.copy(_cCyan);
+  U.PURP.value.copy(_cPurp);
 
   if (orbitPts && orbitPts.geometry && orbitPts.geometry.attributes && orbitPts.geometry.attributes.aColor) {
     const oc = orbitPts.geometry.attributes.aColor;
     for(let i = 0; i < ORBIT; i++) {
-      const ptCol = (i % 3 === 0) ? cCyan : (i % 3 === 1 ? cBlue : cPurp);
+      const ptCol = (i % 3 === 0) ? _cCyan : (i % 3 === 1 ? _cBlue : _cPurp);
       oc.setXYZ(i, ptCol.r, ptCol.g, ptCol.b);
     }
     oc.needsUpdate = true;
@@ -365,7 +366,6 @@ function updateOrb(dt){
   ring1.scale.setScalar(s*(1+pulse*.03));ring2.scale.setScalar(s*(1+pulse*.02));
   ring1.material.uniforms.uAlpha.value=.4+cur.ring*.3+audio.level*.35;
   ring2.material.uniforms.uAlpha.value=.22+cur.ring*.2+audio.level*.2;
-  shadowEl.style.width=Math.round(pxPerUnit*1.5*s)+"px";
 }
 function updateParticles(dt){
   const P=orbitPts.geometry.attributes,boost=.6+cur.speed*.8+(state==="thinking"?1.2:0);
@@ -381,12 +381,13 @@ function updateParticles(dt){
 
 /* ---------- Resize / loop ---------- */
 function handleResize(){
-  const w=Math.max(stage.clientWidth,1),h=Math.max(stage.clientHeight,1),pr=Math.min(window.devicePixelRatio,2);
+  const w=Math.max(stage.clientWidth,1),h=Math.max(stage.clientHeight,1),pr=Math.min(window.devicePixelRatio||1,1.5);
   renderer.setPixelRatio(pr);renderer.setSize(w,h,false);
   camera.aspect=w/h;
   const visH=VIS/Math.min(1,w/h),tan=Math.tan(THREE.MathUtils.degToRad(FOV/2));
   camera.position.z=visH/(2*tan);U.uCamZ.value=camera.position.z;camera.updateProjectionMatrix();
   pxPerUnit=h/visH;U.uPx.value=h*pr/(2*tan);
+  shadowEl.style.width=Math.round(pxPerUnit*1.5)+"px";
   shadowEl.style.top=Math.round(h/2+pxPerUnit*1.2)+"px";
 }
 let last=performance.now();

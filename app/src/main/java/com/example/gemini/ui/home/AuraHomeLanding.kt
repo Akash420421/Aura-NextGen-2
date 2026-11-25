@@ -298,25 +298,6 @@ fun AuraVoiceWelcome(
 ) {
     val isDark = isSystemInDarkTheme()
     val livePhase by com.example.gemini.data.live.AuraLiveVoiceManager.phase.collectAsState()
-    val liveStatusText by com.example.gemini.data.live.AuraLiveVoiceManager.statusText.collectAsState()
-    val spokenSentence by com.example.gemini.data.live.AuraLiveVoiceManager.spokenSentence.collectAsState()
-
-    var displayedSpokenText by remember { mutableStateOf("") }
-    LaunchedEffect(spokenSentence, livePhase) {
-        if (livePhase != com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING) {
-            displayedSpokenText = ""
-            return@LaunchedEffect
-        }
-        val target = spokenSentence.trim()
-        if (target.length > displayedSpokenText.length) {
-            for (i in (displayedSpokenText.length + 1)..target.length) {
-                displayedSpokenText = target.take(i)
-                delay(14L) // typewriter character reveal for full readable sentence
-            }
-        } else {
-            displayedSpokenText = target
-        }
-    }
 
     val greetingName = resolveVoiceDisplayName(userName)
     val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
@@ -331,23 +312,6 @@ fun AuraVoiceWelcome(
         else -> com.example.gemini.data.jarvis.JarvisController.Phase.IDLE
     }
 
-    val singleStatusLabel: Pair<String, Color> = when (livePhase) {
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING -> "Connecting…" to Color(0xFFD97706)
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE_READY -> "Speak to ask" to if (isDark) Color(0xFF9E9EA4) else Color(0xFF64748B)
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING -> "Listening…" to Color(0xFF16A34A)
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING -> "Thinking…" to Color(0xFF8B5CF6)
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.WORKING -> "Working…" to Color(0xFFD97706)
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING -> "Speaking…" to Color(0xFF2563EB)
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.MUTED -> "Muted" to Color(0xFFDC2626)
-        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE -> {
-            if (com.example.gemini.data.live.AuraLiveVoiceManager.isLive()) {
-                "Speak to ask" to if (isDark) Color(0xFF9E9EA4) else Color(0xFF64748B)
-            } else {
-                "" to Color.Transparent
-            }
-        }
-    }
-
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -358,14 +322,15 @@ fun AuraVoiceWelcome(
         } else {
             270.dp
         }
+        val topOffset = if (maxHeight < 430.dp) 18.dp else 48.dp
 
         Column(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(topOffset))
 
-            // Top: 2-line Greeting + Full Name + Single Live Status Indicator
+            // Top: 2-line Greeting + Full Name only (dynamic status lives in the center action button)
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -385,36 +350,6 @@ fun AuraVoiceWelcome(
                     minFontSizeSp = 12f,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 26.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AnimatedContent(
-                        targetState = singleStatusLabel,
-                        transitionSpec = {
-                            (fadeIn(animationSpec = tween(180)) + slideInVertically { it / 3 }) togetherWith
-                                (fadeOut(animationSpec = tween(140)) + slideOutVertically { -it / 3 })
-                        },
-                        label = "voice_single_status"
-                    ) { (statusLabel, statusColor) ->
-                        if (statusLabel.isNotEmpty()) {
-                            Text(
-                                text = statusLabel,
-                                color = statusColor,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                textAlign = TextAlign.Center,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        } else {
-                            Spacer(Modifier.height(20.dp))
-                        }
-                    }
-                }
             }
 
             // Center: Voice Orb cleanly centered in remaining viewport weight(1f)
@@ -427,7 +362,6 @@ fun AuraVoiceWelcome(
                 Box(
                     modifier = Modifier
                         .size(orbSize)
-                        .clip(CircleShape)
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onTap = { onActionTap() },
@@ -473,14 +407,24 @@ fun AuraVoiceActions(
     var showLanguageDialog by remember { mutableStateOf(false) }
 
     val isLiveActive = com.example.gemini.data.live.AuraLiveVoiceManager.isLive()
-    // Strictly an action control — never duplicates live status ("Thinking…", "Listening…", "Speaking…")
-    val (actionLabel, accentColor, iconVector) = when {
-        !isLiveActive && livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE ->
-            Triple("Start", AuraBlue, Icons.Rounded.Mic)
-        livePhase == com.example.gemini.data.live.AuraLiveVoiceManager.Phase.MUTED ->
-            Triple("Unmute", Color(0xFFDC2626), Icons.Filled.MicOff)
-        else ->
-            Triple("Mute", AuraInk, Icons.Rounded.Mic)
+    val (statusLabel, accentColor, iconVector) = when (livePhase) {
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.CONNECTING ->
+            Triple("Connecting…", Color(0xFFD97706), Icons.Default.HourglassEmpty)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE_READY ->
+            Triple("Speak to ask", Color(0xFF475569), Icons.Rounded.Mic)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.LISTENING ->
+            Triple("Listening…", Color(0xFF16A34A), Icons.Rounded.Mic)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.THINKING ->
+            Triple("Thinking…", Color(0xFF8B5CF6), Icons.Default.HourglassEmpty)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.WORKING ->
+            Triple("Working…", Color(0xFFD97706), Icons.Default.HourglassEmpty)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.SPEAKING ->
+            Triple("Speaking…", Color(0xFF2563EB), Icons.Filled.VolumeUp)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.MUTED ->
+            Triple("Muted", Color(0xFFDC2626), Icons.Filled.MicOff)
+        com.example.gemini.data.live.AuraLiveVoiceManager.Phase.IDLE ->
+            if (isLiveActive) Triple("Speak to ask", Color(0xFF475569), Icons.Rounded.Mic)
+            else Triple("Start", AuraBlue, Icons.Rounded.Mic)
     }
 
     val languageLabel = remember(currentLang) {
@@ -494,7 +438,7 @@ fun AuraVoiceActions(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 24.dp)
-            .padding(top = 6.dp, bottom = 16.dp),
+            .padding(top = 0.dp, bottom = 16.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top
     ) {
@@ -510,41 +454,44 @@ fun AuraVoiceActions(
             )
         }
 
-        Surface(
-            shape = centerButtonShape,
-            color = Color.White,
-            shadowElevation = 3.dp,
-            modifier = Modifier
-                .defaultMinSize(minWidth = 148.dp, minHeight = 56.dp)
-                .height(56.dp)
-                .clip(centerButtonShape)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { onActionTap() },
-                        onDoubleTap = { onActionDoubleTap() }
+        // Offset center pill down slightly so side circular actions sit naturally elevated (~14dp higher)
+        Box(modifier = Modifier.padding(top = 14.dp)) {
+            Surface(
+                shape = centerButtonShape,
+                color = Color.White,
+                shadowElevation = 3.dp,
+                modifier = Modifier
+                    .defaultMinSize(minWidth = 156.dp, minHeight = 56.dp)
+                    .height(56.dp)
+                    .clip(centerButtonShape)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { onActionTap() },
+                            onDoubleTap = { onActionDoubleTap() }
+                        )
+                    }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 22.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = iconVector,
+                        contentDescription = statusLabel,
+                        tint = accentColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = statusLabel,
+                        color = accentColor,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = iconVector,
-                    contentDescription = actionLabel,
-                    tint = accentColor,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = actionLabel,
-                    color = accentColor,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    softWrap = false
-                )
             }
         }
 
