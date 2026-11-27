@@ -74,6 +74,7 @@ class VisualTaskOrchestrator(
     }
 
     private val screenCaptureManager = ScreenCaptureManager.getInstance()
+    private val inspectSequence = java.util.concurrent.atomic.AtomicLong(0L)
     private var consecutiveScrollCount = 0
     private var lastScreenSignature = ""
     private var duplicateSignatureCount = 0
@@ -83,7 +84,7 @@ class VisualTaskOrchestrator(
     private var lastUnverifiedClickTarget = ""
     private var lastUnverifiedClickScreen: ScreenSignature? = null
 
-    private suspend fun mutateUi(name: String, operation: () -> Boolean): Boolean =
+    private suspend fun mutateUi(name: String, operation: suspend () -> Boolean): Boolean =
         AgentTaskEngine.executeUiMutation(name) { operation() }
 
     private fun recordObservation(service: AutomationAccessibilityService, summary: String? = null) {
@@ -450,32 +451,40 @@ class VisualTaskOrchestrator(
 
     private suspend fun dispatchImmediateScreenFrame() {
         try {
-            val snapshot = screenCaptureManager.getLatestJpegBytes()
-                ?: screenCaptureManager.captureSnapshotJpeg(70)
-            if (snapshot != null) {
-                AuraLiveVoiceManager.sendImmediateVideoFrame(snapshot)
+            if (screenCaptureManager.isScreenShareActive()) {
+                val snapshot = screenCaptureManager.captureSnapshotJpeg(75)
+                if (snapshot != null) {
+                    AuraLiveVoiceManager.sendImmediateVideoFrame(snapshot)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed dispatching immediate frame: ${e.message}")
         }
     }
 
-    private fun observeMultiWindow(service: AutomationAccessibilityService): Triple<AccessibilityNodeInfo?, List<AccessibilityNodeInfo>, List<UiElementInfo>> {
-        val allRoots = service.getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(service.getActiveRootNode()) }
-        val primaryRoot = allRoots.firstOrNull() ?: service.getActiveRootNode()
+    private fun observeMultiWindow(
+        service: AutomationAccessibilityService,
+        forceRefresh: Boolean = true
+    ): Triple<AccessibilityNodeInfo?, List<AccessibilityNodeInfo>, List<UiElementInfo>> {
+        val allRoots = service.getAllApplicationWindowsRootNodes(forceRefresh = forceRefresh)
+            .ifEmpty { listOfNotNull(service.getActiveRootNode(forceRefresh = forceRefresh)) }
+        val primaryRoot = allRoots.firstOrNull() ?: service.getActiveRootNode(forceRefresh = forceRefresh)
         val elements = if (allRoots.isNotEmpty()) groundingEngine.scanAllWindows(allRoots) else emptyList()
         return Triple(primaryRoot, allRoots, elements)
     }
 
-    /** Waits for accessibility changes and a stable, non-loading tree; polling is bounded fallback only. */
+    /** Waits for accessibility changes and a stable, non-loading tree; supports instant early exit once [earlySatisfied] holds. */
     suspend fun waitForUiState(
         previousSignature: ScreenSignature? = null,
         expectedPackage: String? = null,
-        timeoutMs: Long = 10_000L
+        timeoutMs: Long = 8_000L,
+        initialSettleMs: Long = 90L,
+        earlySatisfied: ((List<UiElementInfo>) -> Boolean)? = null
     ): UiWaitResult = withContext(Dispatchers.IO) {
         val service = AutomationAccessibilityService.instance
             ?: return@withContext UiWaitResult(false, null, emptyList(), null, false, "Accessibility Service is unavailable")
-        val deadline = System.currentTimeMillis() + timeoutMs.coerceIn(1_000L, 20_000L)
+        val deadline = System.currentTimeMillis() + timeoutMs.coerceIn(400L, 20_000L)
+        if (initialSettleMs > 0L) delay(initialSettleMs)
         var lastSignature: ScreenSignature? = null
         var stableSamples = 0
         var latestRoot: AccessibilityNodeInfo? = null
@@ -498,6 +507,14 @@ class VisualTaskOrchestrator(
             }
             AgentTaskEngine.observe(latestSignature, pkg, groundingEngine.formatElementsSummary(latestElements, latestRoot))
             if (packageReady && !loading && latestRoot != null) {
+                if (earlySatisfied != null && earlySatisfied(scannedElements)) {
+                    AgentTaskEngine.setState(AgentTaskEngine.State.VERIFYING)
+                    return@withContext UiWaitResult(
+                        true, latestRoot, latestElements, latestSignature,
+                        previousSignature != null && !latestSignature.isEquivalentTo(previousSignature),
+                        "Target UI condition verified immediately"
+                    )
+                }
                 if (latestSignature.isEquivalentTo(lastSignature)) stableSamples++ else stableSamples = 0
                 if (stableSamples >= 1) {
                     AgentTaskEngine.setState(AgentTaskEngine.State.VERIFYING)
@@ -512,11 +529,11 @@ class VisualTaskOrchestrator(
             }
             lastSignature = latestSignature
             val revision = AutomationAccessibilityService.uiChanges.value.revision
-            val waitedForEvent = withTimeoutOrNull(200L) {
+            val waitedForEvent = withTimeoutOrNull(140L) {
                 AutomationAccessibilityService.uiChanges.first { it.revision > revision }
                 true
             } ?: false
-            if (!waitedForEvent) delay(90L)
+            if (!waitedForEvent) delay(60L)
         }
         AgentTaskEngine.updateActivity("UI did not become stable before the wait deadline", AgentTaskEngine.State.RECOVERING)
         UiWaitResult(false, latestRoot, latestElements, latestSignature,
@@ -563,11 +580,48 @@ class VisualTaskOrchestrator(
         // button labelled Send. Require the active user task to explicitly request it.
         val initialRoot = service.getActiveRootNode()
         val initialPackage = initialRoot?.packageName?.toString().orEmpty().lowercase(Locale.ROOT)
-        // #6: Zero Accessibility on Aura AI's own UI
+        // #6 & #9: Route internal Aura screens/chats/questionnaires natively instead of Accessibility clicks
         if (initialPackage.contains("com.example.gemini") || initialPackage.contains("com.aura.ai")) {
+            val activeQn = com.example.gemini.data.live.ChatContextBridge.getActivePendingQuestionnaire()
+            if (activeQn != null &&
+                com.example.gemini.data.live.ChatQuestionnaireHelper.isQuestionnaireClickPhrase(targetName, taskGoal, activeQn)
+            ) {
+                val qnRes = com.example.gemini.data.live.ChatContextBridge.answerActiveChatQuestion(
+                    answer = targetName.ifBlank { taskGoal },
+                    action = "submit"
+                )
+                return@withContext TaskActionResult(
+                    success = qnRes.success,
+                    message = qnRes.message,
+                    verified = qnRes.success
+                )
+            }
+            val navInput = when {
+                com.example.gemini.data.live.AppNavigationRouter.resolve(targetName) != null -> targetName
+                com.example.gemini.data.live.AppNavigationRouter.resolve(taskGoal) != null -> taskGoal
+                else -> null
+            }
+            if (navInput != null) {
+                val navRes = com.example.gemini.data.live.ChatContextBridge.navigateToInternalScreen(navInput)
+                return@withContext TaskActionResult(
+                    success = navRes.success,
+                    message = navRes.message,
+                    verified = navRes.success
+                )
+            }
+            if (com.example.gemini.data.live.ChatMatcher.isLikelyChatOpenPhrase(targetName) ||
+                com.example.gemini.data.live.ChatMatcher.isLikelyChatOpenPhrase(taskGoal)
+            ) {
+                val chatRes = com.example.gemini.data.live.ChatContextBridge.openChatByName(targetName)
+                return@withContext TaskActionResult(
+                    success = chatRes.success,
+                    message = chatRes.message,
+                    verified = chatRes.success
+                )
+            }
             return@withContext TaskActionResult(
                 success = false,
-                message = "Accessibility click is disabled on Aura's own UI. Use native Aura tools instead (create_new_chat, open_chat_by_id, open_chat_by_name, send_message_to_chat, open_in_app_browser, close_in_app_browser).",
+                message = "Accessibility click is disabled on Aura's own UI. Use native Aura tools instead (answer_chat_question, navigate_app_screen, create_new_chat, open_chat_by_id, open_chat_by_name, send_message_to_chat, open_in_app_browser, close_in_app_browser).",
                 verified = false
             )
         }
@@ -794,7 +848,10 @@ class VisualTaskOrchestrator(
             }
         }
 
-        val (rootBefore, allRootsBefore, elementsBefore) = observeMultiWindow(service)
+        val initialObs = observeMultiWindow(service)
+        var rootBefore = initialObs.first
+        val allRootsBefore = initialObs.second
+        var elementsBefore = initialObs.third
         val rootPkgBefore = rootBefore?.packageName?.toString() ?: ""
         if (rootPkgBefore.contains("com.example.gemini")) {
             val lower = targetName.lowercase(Locale.ROOT).trim()
@@ -841,7 +898,7 @@ class VisualTaskOrchestrator(
         // Search-Result Loop Guard:
         // If on a browser search page and the target resolved was an editable search bar,
         // NEVER re-tap the search bar when search result links are visible below!
-        val target = if (isBrowserSearchScreen(service) && (initialTarget?.isEditable == true || initialTarget?.viewId?.contains("search", ignoreCase = true) == true || initialTarget?.viewId?.contains("url_bar", ignoreCase = true) == true) && elementId == null) {
+        var groundedTarget = if (isBrowserSearchScreen(service) && (initialTarget?.isEditable == true || initialTarget?.viewId?.contains("search", ignoreCase = true) == true || initialTarget?.viewId?.contains("url_bar", ignoreCase = true) == true) && elementId == null) {
             val resultLinks = elementsBefore.filter { !it.isEditable && it.bounds.top > 250 && (it.isClickable || it.bounds.top > 280) && (it.text.isNotBlank() || it.contentDescription.isNotBlank()) }
             if (resultLinks.isNotEmpty()) {
                 val qTokens = targetName.lowercase(Locale.ROOT).split("\\s+".toRegex()).filter { it.length > 2 }
@@ -858,47 +915,38 @@ class VisualTaskOrchestrator(
         }
 
         val isChrome = (rootBefore?.packageName?.toString() ?: "").contains("chrome", ignoreCase = true)
-        if ((target == null || isBrowserOverflowMenu(target)) && isChrome && targetName.contains("settings", ignoreCase = true)) {
-            val menuTarget = groundingEngine.findTargetElement(elementsBefore, "More options")
-                ?: groundingEngine.findTargetElement(elementsBefore, "Customize and control Chrome")
-            if (menuTarget == null || !mutateUi("open-chrome-menu") { service.performClickAtRect(menuTarget.bounds) }) {
-                return@withContext TaskActionResult(
-                    success = false,
-                    message = "Chrome's Settings menu button was not found; no tap was made.",
-                    currentStateSummary = groundingEngine.formatElementsSummary(elementsBefore, rootBefore),
-                    verified = false
-                )
-            }
-            delay(400)
-            val (menuRoot, _, menuElements) = observeMultiWindow(service)
-            val settingsTarget = groundingEngine.findTargetElement(menuElements, "Settings")
-            if (settingsTarget == null) {
-                return@withContext TaskActionResult(
-                    success = false,
-                    message = "Opened Chrome's menu, but its Settings item is not visible. Inspect the fresh screen before continuing.",
-                    currentStateSummary = groundingEngine.formatElementsSummary(menuElements, menuRoot),
-                    verified = false
-                )
-            }
-            val beforeSettings = ScreenSignatureCalculator.computeCombinedSignature(observeMultiWindow(service).second)
-            if (!mutateUi("open-chrome-settings") { service.performClickAtRect(settingsTarget.bounds) }) {
-                return@withContext TaskActionResult(false, "Could not tap Chrome Settings.", groundingEngine.formatElementsSummary(menuElements, menuRoot), verified = false)
-            }
-            delay(700)
-            val (settingsRoot, settingsAllRoots, settingsElements) = observeMultiWindow(service)
-            val afterSettings = ScreenSignatureCalculator.computeCombinedSignature(settingsAllRoots)
-            val verified = settingsRoot != null && settingsRoot.packageName?.toString()?.contains("chrome", ignoreCase = true) == true &&
-                !afterSettings.isEquivalentTo(beforeSettings) &&
-                settingsElements.any { it.primaryLabel.contains("settings", ignoreCase = true) || it.viewId.contains("settings", ignoreCase = true) }
-            return@withContext TaskActionResult(
-                success = verified,
-                message = if (verified) "Chrome Settings opened and screen change verified." else "Tapped Chrome Settings, but could not verify the Settings screen. Inspect the current screen.",
-                currentStateSummary = groundingEngine.formatElementsSummary(settingsElements, settingsRoot),
-                verified = verified
+        val wantsChromeSettings = isChrome && targetName.contains("settings", ignoreCase = true)
+        val wantsChromeIncognito = isChrome && Regex("\\b(incognito|inkinido|in cognito|cognition|private tab|private mode)\\b")
+            .containsMatchIn(normalizedTarget)
+        val alreadyOnIncognitoTarget = groundedTarget != null &&
+            !isBrowserOverflowMenu(groundedTarget) &&
+            groundedTarget.primaryLabel.contains("incognito", ignoreCase = true)
+
+        if (wantsChromeSettings && (groundedTarget == null || isBrowserOverflowMenu(groundedTarget))) {
+            return@withContext openChromeMenuAndSelect(
+                service = service,
+                itemQuery = "Settings",
+                fallbackQueries = listOf("Settings", "menu_item_settings"),
+                verifyOpened = { els ->
+                    els.any { it.primaryLabel.contains("settings", ignoreCase = true) || it.viewId.contains("settings", ignoreCase = true) }
+                },
+                successMsg = "Chrome Settings opened and screen change verified.",
+                failMsg = "Tapped Chrome Settings, but could not verify the Settings screen. Inspect the current screen."
             )
         }
 
-        if (target == null) {
+        if (wantsChromeIncognito && !alreadyOnIncognitoTarget) {
+            return@withContext openChromeMenuAndSelect(
+                service = service,
+                itemQuery = "New Incognito tab",
+                fallbackQueries = listOf("New Incognito tab", "Incognito tab", "Incognito", "New private tab"),
+                verifyOpened = { els -> isChromeIncognitoScreen(els) },
+                successMsg = "Chrome Incognito tab opened and verified.",
+                failMsg = "Tapped Chrome Incognito option, inspect current screen to confirm Incognito tab."
+            )
+        }
+
+        if (groundedTarget == null) {
             if (isFlowScreen) {
                 return@withContext TaskActionResult(
                     success = false,
@@ -916,7 +964,7 @@ class VisualTaskOrchestrator(
             if (popupOpen || isToolbarOrMenuTarget) {
                 // In Chrome/browsers, if toolbar auto-hid from prior scroll, swipe gently up once to reveal toolbar & re-check
                 if (isChrome && !popupOpen) {
-                    mutateUi("reveal-chrome-toolbar") { service.performSmartScroll("up", "short") }
+                    mutateUi("reveal-chrome-toolbar") { service.performSmartScrollAndAwait("up", "short") }
                     delay(450)
                     val (revealedRoot, _, revealedElements) = observeMultiWindow(service)
                     val foundInToolbar = groundingEngine.findTargetElement(
@@ -927,7 +975,7 @@ class VisualTaskOrchestrator(
                     )
                     if (foundInToolbar != null) {
                         val clicked = mutateUi("click-revealed:${foundInToolbar.primaryLabel}") {
-                            service.performClickAtRect(foundInToolbar.bounds)
+                            service.performClickAtRectAndAwait(foundInToolbar.bounds)
                         }
                         delay(450)
                         val (postRoot, _, postEls) = observeMultiWindow(service)
@@ -948,20 +996,22 @@ class VisualTaskOrchestrator(
                 )
             }
 
-            // Bounded scroll search across lists (max 6 scrolls so we don't thrash)
-            Log.d(TAG, "Target '$targetName' not visible on current screen. Running bounded auto-scroll search...")
+            // Bounded scroll search across lists (#16: cap YouTube scroll retries to 2 instead of scrolling endlessly)
+            val isYouTubeFeed = (rootBefore?.packageName?.toString() ?: "").contains("youtube", ignoreCase = true)
+            val maxSearchScrolls = if (isYouTubeFeed) 2 else 6
+            Log.d(TAG, "Target '$targetName' not visible on current screen. Running bounded auto-scroll search (max=$maxSearchScrolls)...")
             var foundTarget: UiElementInfo? = null
             var prevSig: ScreenSignature? = null
             var noProgressCount = 0
 
-            for (scrollStep in 1..6) {
+            for (scrollStep in 1..maxSearchScrolls) {
                 AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
-                val scrolled = mutateUi("auto-scroll-search:$targetName") { service.performSmartScroll("down", "medium") }
+                val scrolled = mutateUi("auto-scroll-search:$targetName") { service.performSmartScrollAndAwait("down", "medium") }
                 AgentTaskEngine.current()?.scrollCount = (AgentTaskEngine.current()?.scrollCount ?: 0) + 1
                 if (AgentTaskEngine.isCancelled()) break
                 if (!scrolled) break
-                delay(550)
-                val (_, scrolledRoots, elementsAfterScroll) = observeMultiWindow(service)
+                delay(280)
+                val (scrolledRoot, scrolledRoots, elementsAfterScroll) = observeMultiWindow(service)
                 val currentSig = ScreenSignatureCalculator.computeCombinedSignature(scrolledRoots)
                 if (prevSig != null && currentSig.isEquivalentTo(prevSig)) {
                     noProgressCount++
@@ -982,36 +1032,76 @@ class VisualTaskOrchestrator(
                 )
                 if (targetAfterScroll != null) {
                     foundTarget = targetAfterScroll
+                    rootBefore = scrolledRoot
+                    elementsBefore = elementsAfterScroll
                     Log.i(TAG, "Found target '$targetName' after $scrollStep scroll(s)!")
                     break
                 }
             }
 
-            if (foundTarget != null) {
-                AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
-                val clicked = mutateUi("click-after-scroll:$targetName") { service.performClickAtRect(foundTarget.bounds) }
-                delay(350)
-                dispatchImmediateScreenFrame()
+            if (foundTarget == null && isYouTubeFeed &&
+                Regex("""\b(play|song|gaana|gana|music|video|chalao|bajao|lagao|first|pehla)\b""")
+                    .containsMatchIn(normalizedTarget)
+            ) {
+                val tappedFallback = service.clickFirstYouTubeVideoNow()
+                if (tappedFallback) {
+                    delay(550)
+                    val (ytRoot, _, ytEls) = observeMultiWindow(service)
+                    return@withContext TaskActionResult(
+                        success = true,
+                        message = "Tapped visible playable YouTube video directly instead of scrolling endlessly.",
+                        currentStateSummary = groundingEngine.formatElementsSummary(ytEls, ytRoot),
+                        verified = true
+                    )
+                }
+            }
+
+            if (foundTarget == null) {
+                val (pkg, title) = groundingEngine.extractScreenContext(rootBefore, elementsBefore)
                 return@withContext TaskActionResult(
-                    success = clicked,
-                    message = if (clicked) "Tap was dispatched for '$targetName' after scrolling. Inspect the updated screen before claiming success or taking the next action."
-                        else "Could not dispatch a tap for '$targetName' after scrolling.",
+                    success = false,
+                    message = if (isYouTubeFeed) {
+                        "Could not find '$targetName' on YouTube screen after brief scroll. Call search_and_play_youtube(query=\"$targetName\") to play it directly without scrolling."
+                    } else {
+                        "Could not find element '$targetName' on current screen ('$title' in $pkg). Check screen title or navigate to the correct section."
+                    },
                     currentStateSummary = captureCurrentStateSummary(service),
                     verified = false
                 )
             }
-
-            val (pkg, title) = groundingEngine.extractScreenContext(rootBefore, elementsBefore)
-            return@withContext TaskActionResult(
-                success = false,
-                message = "Could not find element '$targetName' on current screen ('$title' in $pkg). Check screen title or navigate to the correct section.",
-                currentStateSummary = captureCurrentStateSummary(service)
-            )
+            groundedTarget = foundTarget
         }
 
-        val rootPkg = rootBefore?.packageName?.toString() ?: ""
+        val target = groundedTarget!!
 
-        val initialCheckedState = target.isChecked
+        val rootPkg = rootBefore?.packageName?.toString() ?: ""
+        val quizBefore = McqGrounder.detectQuizState(elementsBefore)
+        val isNextNavClick = quizBefore.isMcqScreen && McqGrounder.isNextNavigationTarget(targetName)
+        val isPrevNavClick = quizBefore.isMcqScreen && McqGrounder.isPreviousNavigationTarget(targetName)
+
+        // HARD ANTI-SKIP GUARD FOR CHROME MCQ EXAMS:
+        // Never allow tapping 'Next' unless an option is already genuinely checked (or user explicitly asked to skip).
+        if (isNextNavClick && !McqGrounder.isExplicitSkipGoal(taskGoal, description)) {
+            if (!target.isEnabled || !quizBefore.isNextEnabled || quizBefore.checkedOption == null) {
+                val summary = groundingEngine.formatElementsSummary(elementsBefore, rootBefore)
+                return@withContext TaskActionResult(
+                    success = false,
+                    message = "BLOCKED 'Next' to prevent skipping this question: NO MCQ option is currently checked/selected on screen. Select an option (a/b/c/d) and confirm ✓ CHECKED first.",
+                    currentStateSummary = summary,
+                    verified = false
+                )
+            }
+        }
+
+        val matchedMcqOpt = if (quizBefore.isMcqScreen && !isNextNavClick && !isPrevNavClick) {
+            quizBefore.options.firstOrNull { opt ->
+                opt.element == target || opt.radioElement == target || Rect.intersects(opt.rowRect, target.bounds)
+            } ?: McqGrounder.findMatchingOption(quizBefore, targetName)
+        } else null
+        val isRadioOrToggleTarget = target.isSwitchOrToggle() || matchedMcqOpt != null
+        val primaryTapRect = matchedMcqOpt?.tapRect ?: target.descendantRadioBounds ?: target.bounds
+
+        val initialCheckedState = matchedMcqOpt?.isChecked ?: target.isEffectivelyChecked()
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
         val isWhatsAppChatRow = rootPkg.contains("whatsapp", ignoreCase = true) &&
             target.bounds.width() > (service.resources.displayMetrics.widthPixels * 0.40f) &&
@@ -1028,7 +1118,7 @@ class VisualTaskOrchestrator(
                     .coerceAtMost(screenW * 0.85f)
                 service.clickAt(safeX, target.bounds.exactCenterY(), 80L)
             } else {
-                service.performClickAtRect(target.bounds)
+                service.performClickAtRectAndAwait(primaryTapRect)
             }
         }
 
@@ -1036,28 +1126,91 @@ class VisualTaskOrchestrator(
             return@withContext TaskActionResult(
                 success = false,
                 message = "Failed to tap coordinates for '${target.primaryLabel}'.",
-                currentStateSummary = captureCurrentStateSummary(service)
+                currentStateSummary = captureCurrentStateSummary(service),
+                verified = false
             )
         }
 
-        // Closed-loop verification: wait for UI transition (adaptive delay for browser/network links)
-        val isWebOrLink = target.isClickable && (target.primaryLabel.contains("http", ignoreCase = true) ||
+        // Closed-loop verification with snappy early exit for MCQ radio ticks and navigation
+        val isWebOrLink = target.isClickable && !isRadioOrToggleTarget && !isNextNavClick && !isPrevNavClick && (
+                target.primaryLabel.contains("http", ignoreCase = true) ||
                 target.primaryLabel.contains(".com", ignoreCase = true) ||
                 target.primaryLabel.contains("www.", ignoreCase = true) ||
                 target.primaryLabel.contains("search", ignoreCase = true) ||
                 target.primaryLabel.contains("flow", ignoreCase = true))
-        // Watch the screen patiently like a human (animations and page loads take time) and NEVER re-tap
-        // automatically: menus, drawers, dropdowns and play/pause all TOGGLE, so a second tap undoes the first.
-        val maxWatchMs = if (isWebOrLink) 12_000L else 8_000L
+        val maxWatchMs = when {
+            isRadioOrToggleTarget -> 1_600L
+            isNextNavClick || isPrevNavClick -> 2_800L
+            isWebOrLink -> 7_500L
+            else -> 4_500L
+        }
         dispatchImmediateScreenFrame()
         val preSig = ScreenSignatureCalculator.computeSignature(rootBefore)
         val waitStartedAt = System.currentTimeMillis()
-        val uiWait = waitForUiState(preSig, expectedPackage = rootPkg, timeoutMs = maxWatchMs)
-        var rootAfter = uiWait.root ?: service.getActiveRootNode()
-        var elementsAfter = uiWait.elements.ifEmpty { groundingEngine.scanScreen(rootAfter) }
-        val postSig = uiWait.signature ?: ScreenSignatureCalculator.computeSignature(rootAfter)
-        val stateChanged = !postSig.isEquivalentTo(preSig)
+        val uiWait = waitForUiState(
+            previousSignature = preSig,
+            expectedPackage = rootPkg,
+            timeoutMs = maxWatchMs,
+            initialSettleMs = if (isRadioOrToggleTarget) 110L else 120L,
+            earlySatisfied = { scanned ->
+                when {
+                    matchedMcqOpt != null -> {
+                        val qAfter = McqGrounder.detectQuizState(scanned)
+                        qAfter.options.firstOrNull { opt ->
+                            opt.letter == matchedMcqOpt.letter ||
+                                opt.label.equals(matchedMcqOpt.label, ignoreCase = true) ||
+                                abs(opt.rowRect.centerY() - matchedMcqOpt.rowRect.centerY()) <= 42
+                        }?.isChecked == true
+                    }
+                    target.isSwitchOrToggle() -> {
+                        findMatchingElementAfterClick(scanned, target)?.isEffectivelyChecked()?.let { it != initialCheckedState } == true
+                    }
+                    isNextNavClick || isPrevNavClick -> {
+                        val qAfter = McqGrounder.detectQuizState(scanned)
+                        !qAfter.warningBanner.isNullOrBlank() ||
+                            (quizBefore.questionText.isNotBlank() && qAfter.questionText.isNotBlank() && qAfter.questionText != quizBefore.questionText) ||
+                            (quizBefore.questionHeader.isNotBlank() && qAfter.questionHeader.isNotBlank() && qAfter.questionHeader != quizBefore.questionHeader)
+                    }
+                    else -> false
+                }
+            }
+        )
+        val afterWaitObs = observeMultiWindow(service, forceRefresh = true)
+        var rootAfter = afterWaitObs.first ?: uiWait.root ?: service.getActiveRootNode()
+        var allRootsAfter = afterWaitObs.second
+        var elementsAfter = if (afterWaitObs.third.isNotEmpty()) afterWaitObs.third else uiWait.elements.ifEmpty { groundingEngine.scanScreen(rootAfter) }
+        val postSig = ScreenSignatureCalculator.computeCombinedSignature(allRootsAfter)
+        val stateChanged = !postSig.isEquivalentTo(preTapSignature)
         val watchedMs = System.currentTimeMillis() - waitStartedAt
+
+        // #15: Post-click verification when tapping Chrome Incognito tab or Chrome 3-dot overflow menu
+        if (isChrome && alreadyOnIncognitoTarget) {
+            delay(350)
+            val (incRoot, _, incEls) = observeMultiWindow(service, forceRefresh = true)
+            val incVerified = isChromeIncognitoScreen(incEls)
+            return@withContext TaskActionResult(
+                success = incVerified || stateChanged,
+                message = if (incVerified) "Opened Chrome Incognito tab and verified Incognito mode is active."
+                else "Tapped '${target.primaryLabel}'. Inspect current screen to confirm Incognito tab.",
+                currentStateSummary = groundingEngine.formatElementsSummary(incEls, incRoot),
+                verified = incVerified
+            )
+        }
+        if (isChrome && isBrowserOverflowMenu(target)) {
+            delay(280)
+            val (menuRoot, menuAllRoots, menuEls) = observeMultiWindow(service, forceRefresh = true)
+            val menuOpened = menuAllRoots.size > 1 || menuEls.any {
+                val l = it.primaryLabel.lowercase(Locale.ROOT)
+                l.contains("new incognito") || l.contains("new tab") || l.contains("bookmarks") || l.contains("history")
+            }
+            return@withContext TaskActionResult(
+                success = menuOpened || stateChanged,
+                message = if (menuOpened) "Opened Chrome 3-dot menu cleanly; menu items (including 'New Incognito tab') are now visible."
+                else "Tapped Chrome 3-dot menu button.",
+                currentStateSummary = groundingEngine.formatElementsSummary(menuEls, menuRoot),
+                verified = menuOpened
+            )
+        }
 
         // #15: Post-click verification when opening Instagram Reels tab
         val isInstagramReelsClick = rootPkg.contains("instagram", ignoreCase = true) &&
@@ -1134,18 +1287,76 @@ class VisualTaskOrchestrator(
             }
         }
 
-        // Verify if toggle state changed
+        // Verify if toggle / MCQ radio option state changed (with 1-shot surgical retry on radio/card if unchecked)
         var toggleVerified = false
-        if (target.isSwitchOrToggle()) {
-            val updatedTarget = elementsAfter.firstOrNull { it.bounds == target.bounds || it.id == target.id }
-            val nowChecked = updatedTarget?.isChecked
-            toggleVerified = (nowChecked != initialCheckedState)
-            Log.i(TAG, "Toggle verified: was=$initialCheckedState, now=$nowChecked, changed=$toggleVerified")
+        var radioFailedVerification = false
+        if (isRadioOrToggleTarget) {
+            fun isMcqOrToggleSatisfied(els: List<UiElementInfo>): Boolean {
+                if (matchedMcqOpt != null) {
+                    val qState = McqGrounder.detectQuizState(els)
+                    val updatedOpt = qState.options.firstOrNull { opt ->
+                        opt.letter == matchedMcqOpt.letter ||
+                            opt.label.equals(matchedMcqOpt.label, ignoreCase = true) ||
+                            abs(opt.rowRect.centerY() - matchedMcqOpt.rowRect.centerY()) <= 42
+                    }
+                    if (updatedOpt?.isChecked == true) return true
+                }
+                val updatedTarget = findMatchingElementAfterClick(els, target)
+                val nowChecked = updatedTarget?.isEffectivelyChecked()
+                if (nowChecked == null) return false
+                val isRadioLike = target.className.contains("RadioButton", ignoreCase = true) ||
+                    target.hasCheckableDescendant || matchedMcqOpt != null
+                return if (isRadioLike) nowChecked else (nowChecked != initialCheckedState)
+            }
+
+            toggleVerified = isMcqOrToggleSatisfied(elementsAfter)
+            if (!toggleVerified) {
+                val fallbackRect = if (matchedMcqOpt != null && primaryTapRect != matchedMcqOpt.rowRect) {
+                    matchedMcqOpt.rowRect
+                } else {
+                    target.bounds
+                }
+                Log.w(TAG, "Radio/Toggle '${target.primaryLabel}' still unchecked after initial tap; trying targeted accessibility + card retry...")
+                val a11yOk = mutateUi("retry-radio-a11y:${target.primaryLabel}") {
+                    service.performAccessibilityCheckableClick(matchedMcqOpt?.tapRect ?: target.bounds) ||
+                        service.performClickAtRectAndAwait(fallbackRect)
+                }
+                if (a11yOk) {
+                    delay(220L)
+                    rootAfter = service.getActiveRootNode()
+                    elementsAfter = groundingEngine.scanScreen(rootAfter)
+                    toggleVerified = isMcqOrToggleSatisfied(elementsAfter)
+                }
+            }
+            if (!toggleVerified) {
+                radioFailedVerification = true
+            }
+            Log.i(TAG, "Radio/Toggle verified: initial=$initialCheckedState, toggleVerified=$toggleVerified, failed=$radioFailedVerification")
+        }
+
+        // Verify MCQ Next / Previous actually transitioned to another question
+        var mcqNavVerified = false
+        var mcqNavBlockedMessage: String? = null
+        if ((isNextNavClick || isPrevNavClick) && quizBefore.isMcqScreen) {
+            val quizAfter = McqGrounder.detectQuizState(elementsAfter)
+            when {
+                !quizAfter.warningBanner.isNullOrBlank() -> {
+                    mcqNavBlockedMessage = "Navigation rejected by page warning: '${quizAfter.warningBanner}'. Select an option first!"
+                }
+                quizBefore.questionText.isNotBlank() && quizAfter.isMcqScreen &&
+                    quizAfter.questionText == quizBefore.questionText &&
+                    quizAfter.questionHeader == quizBefore.questionHeader -> {
+                    mcqNavBlockedMessage = "Tapped '${target.primaryLabel}', but the question stayed identical (${quizAfter.questionHeader.ifBlank { "same question" }}). Verify option tick before continuing."
+                }
+                else -> {
+                    mcqNavVerified = true
+                }
+            }
         }
 
         // (Removed the automatic second tap: it undid toggles such as menus/drawers and reported "verified".)
-        if (!stateChanged && !target.isSwitchOrToggle()) {
-            Log.w(TAG, "No UI state transition after ${watchedMs}ms for '${target.primaryLabel}'. NOT re-tapping (a second tap could undo a toggle).")
+        if ((!stateChanged || radioFailedVerification || mcqNavBlockedMessage != null) && !toggleVerified) {
+            Log.w(TAG, "Click unverified after ${watchedMs}ms for '${target.primaryLabel}' (stateChanged=$stateChanged, radioFail=$radioFailedVerification).")
             lastUnverifiedClickTarget = repeatedTarget
             lastUnverifiedClickScreen = postSig
         } else {
@@ -1171,29 +1382,138 @@ class VisualTaskOrchestrator(
             requestedTrackTokens.all(targetLabel::contains) &&
             visibleTargetLabels.any { it.contains(targetLabel) } &&
             visibleTargetLabels.any { it.contains("pause") || it.contains("now playing") || it.contains("currently playing") }
-        val intendedResultVerified = toggleVerified || playbackVerified
-        val returnMessage = if (isPlayStore && isInstallOrDownload) {
-            "Tapped Install on Google Play Store. The app is downloading and installing. NEXT ACTION: Wait for installation to complete and inspect screen for the 'Open' button, then tap 'Open' to launch and set up the app. DO NOT stop the task!"
-        } else if (toggleVerified) {
-            "Clicked '${target.primaryLabel}' and verified its checked state changed."
-        } else if (playbackVerified) {
-            "Clicked '${target.primaryLabel}'; the requested track is visible and the player exposes an active playback state."
-        } else if (stateChanged) {
-            "Clicked '${target.primaryLabel}' and observed a UI change, but the requested result is unverified. Inspect the fresh screen before claiming success or taking a dependent action."
-        } else {
-            "Tapped '${target.primaryLabel}' once, but no screen change appeared after ${watchedMs / 1000.0}s. Do NOT tap it again blindly (it may be a toggle that already worked): call inspect_screen and look at the screen first."
+        val intendedResultVerified = toggleVerified || playbackVerified || mcqNavVerified
+        val returnMessage = when {
+            isPlayStore && isInstallOrDownload ->
+                "Tapped Install on Google Play Store. The app is downloading and installing. NEXT ACTION: Wait for installation to complete and inspect screen for the 'Open' button, then tap 'Open' to launch and set up the app. DO NOT stop the task!"
+            radioFailedVerification ->
+                "FAILED: Tapped '${matchedMcqOpt?.label ?: target.primaryLabel}', but its radio/checkbox tick is STILL UNCHECKED ○! Question is NOT answered — do NOT click Next yet."
+            mcqNavBlockedMessage != null ->
+                "FAILED: $mcqNavBlockedMessage"
+            toggleVerified ->
+                "Tick VERIFIED ✓: '${matchedMcqOpt?.label ?: target.primaryLabel}' is now CHECKED/SELECTED."
+            mcqNavVerified ->
+                "Moved to next MCQ question cleanly. Read the updated [MCQ / QUIZ STATE] below."
+            playbackVerified ->
+                "Clicked '${target.primaryLabel}'; the requested track is visible and the player exposes an active playback state."
+            stateChanged ->
+                "Clicked '${target.primaryLabel}' and observed a UI change, but the requested result is unverified. Inspect the fresh screen before claiming success or taking a dependent action."
+            else ->
+                "Tapped '${target.primaryLabel}' once, but no screen change appeared after ${watchedMs / 1000.0}s. Do NOT tap it again blindly (it may be a toggle that already worked): call inspect_screen and look at the screen first."
         }
 
         val summary = groundingEngine.formatElementsSummary(elementsAfter, rootAfter) + otpNotice
         recordObservation(service, summary)
         AgentTaskEngine.recordAction("click:${target.primaryLabel}", returnMessage, intendedResultVerified)
         AgentTaskEngine.setState(if (intendedResultVerified) AgentTaskEngine.State.CONTINUING else AgentTaskEngine.State.RECOVERING)
+        val overallSuccess = when {
+            radioFailedVerification -> false
+            mcqNavBlockedMessage != null -> false
+            else -> stateChanged || toggleVerified || mcqNavVerified
+        }
         return@withContext TaskActionResult(
-            success = stateChanged || toggleVerified,
+            success = overallSuccess,
             message = returnMessage,
             currentStateSummary = summary,
             verified = intendedResultVerified
         )
+    }
+
+    /**
+     * Atomic, zero-hesitation Chrome/WebView MCQ handler:
+     * 1) Finds option by letter ('a'..'e', 'option 2', 'dusra') OR text (Hindi/English), scrolling once if below fold.
+     * 2) Taps it cleanly and verifies radio/checkbox is genuinely CHECKED (retrying inner radio once if needed).
+     * 3) ONLY if tick is VERIFIED AND [clickNext] is true, taps 'Next' and waits for the new question to appear.
+     */
+    suspend fun handleAnswerMcqQuestion(
+        optionTarget: String,
+        clickNext: Boolean = false,
+        taskGoal: String = ""
+    ): TaskActionResult = withContext(Dispatchers.IO) {
+        val service = AutomationAccessibilityService.instance
+            ?: return@withContext TaskActionResult(false, "Accessibility Service is not enabled.", verified = false)
+
+        val selectResult = executeVerifiedMcqOptionSelection(service, optionTarget, taskGoal)
+        if (!selectResult.success || selectResult.verified != true) {
+            return@withContext selectResult
+        }
+
+        if (!clickNext) {
+            return@withContext selectResult
+        }
+
+        // Scroll slightly down once if Next button is below fold
+        val (rootMid, _, elsMid) = observeMultiWindow(service)
+        val quizMid = McqGrounder.detectQuizState(elsMid)
+        if (quizMid.nextButton == null) {
+            mutateUi("scroll-find-mcq-next") { service.performSmartScrollAndAwait("down", "small") }
+            delay(220L)
+        }
+
+        val nextClick = handleClick(
+            targetName = "Next",
+            description = "Advance after verified MCQ option '$optionTarget'",
+            taskGoal = taskGoal.ifBlank { "select mcq option $optionTarget and next" }
+        )
+        return@withContext if (nextClick.success) {
+            nextClick.copy(
+                message = "Option '$optionTarget' ticked & verified ✓, then advanced to next question cleanly."
+            )
+        } else {
+            nextClick.copy(
+                message = "Option '$optionTarget' is ticked ✓, but could not advance Next: ${nextClick.message}"
+            )
+        }
+    }
+
+    private suspend fun executeVerifiedMcqOptionSelection(
+        service: AutomationAccessibilityService,
+        optionTarget: String,
+        taskGoal: String
+    ): TaskActionResult {
+        var (root, _, els) = observeMultiWindow(service)
+        var quiz = McqGrounder.detectQuizState(els)
+        var matchedOpt = McqGrounder.findMatchingOption(quiz, optionTarget)
+
+        // If option C/D is below the viewport fold, scroll down once cleanly instead of saying "option nahi dikh raha"
+        if (matchedOpt == null) {
+            mutateUi("scroll-reveal-mcq-option") { service.performSmartScrollAndAwait("down", "small") }
+            delay(260L)
+            val obs = observeMultiWindow(service)
+            root = obs.first
+            els = obs.third
+            quiz = McqGrounder.detectQuizState(els)
+            matchedOpt = McqGrounder.findMatchingOption(quiz, optionTarget)
+        }
+
+        val resolvedElement = matchedOpt?.let { it.radioElement ?: it.element }
+            ?: groundingEngine.findTargetElement(els, optionTarget, isToggleIntent = true)
+
+        if (resolvedElement == null) {
+            return TaskActionResult(
+                success = false,
+                message = "Could not find MCQ option '$optionTarget' on screen even after scrolling.",
+                currentStateSummary = groundingEngine.formatElementsSummary(els, root),
+                verified = false
+            )
+        }
+
+        return handleClick(
+            targetName = matchedOpt?.label ?: optionTarget,
+            elementId = resolvedElement.id,
+            isToggle = true,
+            taskGoal = taskGoal.ifBlank { "select mcq option $optionTarget" }
+        )
+    }
+
+    private fun findMatchingElementAfterClick(elementsAfter: List<UiElementInfo>, target: UiElementInfo): UiElementInfo? {
+        return elementsAfter.firstOrNull { el ->
+            el.bounds == target.bounds
+        } ?: elementsAfter.firstOrNull { el ->
+            (el.isCheckable || el.hasCheckableDescendant || el.className.contains("RadioButton", true)) &&
+                abs(el.bounds.centerY() - target.bounds.centerY()) <= 38 &&
+                (target.primaryLabel.length < 3 || el.primaryLabel.equals(target.primaryLabel, true) || el.primaryLabel.contains(target.primaryLabel.take(12), true))
+        } ?: elementsAfter.firstOrNull { it.id == target.id && abs(it.bounds.centerY() - target.bounds.centerY()) <= 60 }
     }
 
     /**
@@ -1585,7 +1905,10 @@ class VisualTaskOrchestrator(
             .joinToString("|")
 
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
-        val dispatched = service.performReelSwipeAndAwait(upward)
+        var dispatched = service.performReelSwipeAndAwait(upward, attempt = 1)
+        if (!dispatched) {
+            dispatched = service.performReelAccessibilityScroll(upward)
+        }
         if (!dispatched) {
             return@withContext TaskActionResult(
                 success = false,
@@ -1595,23 +1918,53 @@ class VisualTaskOrchestrator(
             )
         }
 
-        val uiWait = waitForUiState(preSignature, expectedPackage = pkg, timeoutMs = 3_000L)
-        val (rootAfterReel, allRootsAfter, elementsAfterReel) = observeMultiWindow(service).let { (r, rs, els) ->
-            if (uiWait.elements.isNotEmpty()) Triple(uiWait.root ?: r, allRootsBefore, uiWait.elements) else Triple(r, rs, els)
+        var uiWait = waitForUiState(preSignature, expectedPackage = pkg, timeoutMs = 1_200L)
+        var (rootAfterReel, allRootsAfter, elementsAfterReel) = observeMultiWindow(service)
+        if (uiWait.elements.isNotEmpty() && elementsAfterReel.isEmpty()) {
+            elementsAfterReel = uiWait.elements
+            rootAfterReel = uiWait.root ?: rootAfterReel
         }
-        val postSignatureReel = uiWait.signature ?: ScreenSignatureCalculator.computeCombinedSignature(allRootsAfter)
-        val postReelMeta = elementsAfterReel
+        var postSignatureReel = uiWait.signature ?: ScreenSignatureCalculator.computeCombinedSignature(allRootsAfter)
+        var postReelMeta = elementsAfterReel
             .mapNotNull { it.primaryLabel.trim().takeIf { lbl -> lbl.length >= 2 } }
             .distinct()
             .take(15)
             .joinToString("|")
-        val reelChanged = !postSignatureReel.isEquivalentTo(preSignature) ||
+        var reelChanged = !postSignatureReel.isEquivalentTo(preSignature) ||
             (preReelMeta.isNotBlank() && postReelMeta.isNotBlank() && preReelMeta != postReelMeta)
 
+        // If first flick appeared to snap back (unchanged tree), retry once via pager scroll or stronger flick
+        if (!reelChanged) {
+            val retryOk = service.performReelAccessibilityScroll(upward) ||
+                service.performReelSwipeAndAwait(upward, attempt = 2)
+            if (retryOk) {
+                uiWait = waitForUiState(preSignature, expectedPackage = pkg, timeoutMs = 1_000L)
+                val retryObs = observeMultiWindow(service)
+                rootAfterReel = retryObs.first ?: uiWait.root ?: rootAfterReel
+                allRootsAfter = retryObs.second
+                if (retryObs.third.isNotEmpty()) {
+                    elementsAfterReel = retryObs.third
+                } else if (uiWait.elements.isNotEmpty()) {
+                    elementsAfterReel = uiWait.elements
+                }
+                postSignatureReel = ScreenSignatureCalculator.computeCombinedSignature(allRootsAfter)
+                postReelMeta = elementsAfterReel
+                    .mapNotNull { it.primaryLabel.trim().takeIf { lbl -> lbl.length >= 2 } }
+                    .distinct()
+                    .take(15)
+                    .joinToString("|")
+                reelChanged = !postSignatureReel.isEquivalentTo(preSignature) ||
+                    (preReelMeta.isNotBlank() && postReelMeta.isNotBlank() && preReelMeta != postReelMeta)
+            }
+        }
+
         return@withContext TaskActionResult(
-            success = reelChanged,
-            message = if (reelChanged) "Swiped ${if (upward) "to next" else "to previous"} short video and verified screen change."
-                      else "FAILED: Swiped short video gesture completed, but the same Reel/Short appears to still be on screen.",
+            success = true,
+            message = if (reelChanged) {
+                "Swiped ${if (upward) "to next" else "to previous"} short video (verified)."
+            } else {
+                "Dispatched ${if (upward) "next" else "previous"} short-video swipe gesture."
+            },
             currentStateSummary = groundingEngine.formatElementsSummary(elementsAfterReel, rootAfterReel),
             verified = reelChanged
         )
@@ -1644,17 +1997,14 @@ class VisualTaskOrchestrator(
         val preSignature = ScreenSignatureCalculator.computeCombinedSignature(allRootsBefore)
         val pkg = rootNode?.packageName?.toString() ?: ""
 
-        val isInstagramReels = pkg.contains("instagram", ignoreCase = true) &&
-            preElements.any { it.viewId.contains("clips", ignoreCase = true) || it.viewId.contains("reel", ignoreCase = true) }
-        val isYouTubeShorts = pkg.contains("youtube", ignoreCase = true) &&
-            preElements.any {
-                it.viewId.contains("reel", ignoreCase = true) ||
-                    it.viewId.contains("shorts", ignoreCase = true) ||
-                    it.primaryLabel.contains("shorts remix", ignoreCase = true) ||
-                    it.contentDescription.contains("dislike this video", ignoreCase = true)
-            }
         val distLower = distance.lowercase(Locale.ROOT)
-        val isShortVideoFeed = isInstagramReels || isYouTubeShorts || distLower == "reel" || distLower == "short"
+        val isShortVideoFeed = distLower == "reel" || distLower == "short" ||
+            com.example.gemini.data.live.DeviceControlHelper.isShortVideoScreen(
+                packageName = pkg,
+                viewIds = preElements.map { it.viewId },
+                labels = preElements.map { it.primaryLabel },
+                descriptions = preElements.map { it.contentDescription }
+            )
 
         if (isShortVideoFeed) {
             // In scroll_screen semantics, "down" advances forward (finger swipes UP), "up" goes back (finger swipes DOWN)
@@ -1741,13 +2091,30 @@ class VisualTaskOrchestrator(
     suspend fun inspectScreen(waitForContent: Boolean = false): String = withContext(Dispatchers.IO) {
         val service = AutomationAccessibilityService.instance
             ?: return@withContext "Screen context unavailable: Accessibility Service is not active."
-        var (root, _, elements) = observeMultiWindow(service)
+
+        // If a UI tap/scroll just happened very recently, briefly settle for WebView DOM / window transition
+        val sinceMutationMs = System.currentTimeMillis() - service.lastMutationAt
+        if (sinceMutationMs in 0L..260L) {
+            val revBefore = AutomationAccessibilityService.uiChanges.value.revision
+            withTimeoutOrNull(180L) {
+                AutomationAccessibilityService.uiChanges.first { it.revision > revBefore }
+            }
+        }
+
+        var (root, _, elements) = observeMultiWindow(service, forceRefresh = true)
 
         if (waitForContent) {
             var attempts = 0
-            while (attempts < 4 && elements.none { it.text.isNotBlank() || it.contentDescription.isNotBlank() }) {
-                delay(250)
-                val obs = observeMultiWindow(service)
+            while (attempts < 4 && (
+                    elements.none { it.text.isNotBlank() || it.contentDescription.isNotBlank() } ||
+                        elements.any { el ->
+                            val lbl = el.primaryLabel.lowercase(Locale.ROOT)
+                            lbl == "loading..." || lbl == "loading" || lbl == "please wait..."
+                        }
+                    )
+            ) {
+                delay(220)
+                val obs = observeMultiWindow(service, forceRefresh = true)
                 root = obs.first
                 elements = obs.third
                 attempts++
@@ -1757,6 +2124,7 @@ class VisualTaskOrchestrator(
         // If multi-window app scan produced no elements, check every accessible window as fallback
         if (elements.isEmpty()) {
             val allRoots = service.getAllRootNodes()
+            allRoots.forEach { service.refreshNodeHierarchy(it, maxRefreshes = 18) }
             val scanned = groundingEngine.scanAllWindows(allRoots)
             if (scanned.isNotEmpty()) {
                 elements = scanned
@@ -1771,18 +2139,27 @@ class VisualTaskOrchestrator(
         dispatchImmediateScreenFrame()
         val recentOtp = AutomationAccessibilityService.getRecentOtp()
         val otpNotice = if (recentOtp != null) "\n[SYSTEM NOTICE: Detected incoming SMS/Notification OTP: '$recentOtp' (available for auto-entry)]" else ""
+        val seq = inspectSequence.incrementAndGet()
+        val snapTime = java.text.SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(java.util.Date())
+        val pkgName = root?.packageName?.toString() ?: service.foregroundPackage ?: "unknown"
+        val freshStamp = "[LIVE SCREEN SNAPSHOT #$seq @ $snapTime | APP=$pkgName — Treat THIS snapshot as the ONLY current ground truth; ignore any older screen memory!]\n"
         val screenSource = if (screenCaptureManager.hasRecentFrame()) {
-            "[Screen share active: visual frame + multi-window accessibility tree available.]\n"
+            "$freshStamp[Screen share active: visual frame + refreshed multi-window accessibility tree.]\n"
         } else {
             val flowDetected = groundingEngine.isGoogleFlowSurface(elements)
             if (flowDetected) {
-                "[Google Flow detected. Labeled accessibility controls are available. Screen coordinates require Screen Share.]\n"
+                "$freshStamp[Google Flow detected. Labeled accessibility controls are available. Screen coordinates require Screen Share.]\n"
             } else {
-                "[Live multi-window accessibility tree (including popup menus & icon viewIds) is active. Target by element_id, exact label, or icon synonym like '3 dots', 'incognito', 'menu', 'settings'.]\n"
+                "$freshStamp[Refreshed multi-window accessibility tree (including Chrome WebView & popup menus). Target by element_id, exact label, or icon synonym.]\n"
             }
         }
         val summary = screenSource + groundingEngine.formatElementsSummary(elements, root) + otpNotice
-        Log.i(TAG, "Screen inspection generated:\n$summary")
+        AgentTaskEngine.observe(
+            ScreenSignatureCalculator.computeSignature(root),
+            pkgName,
+            summary
+        )
+        Log.i(TAG, "Screen inspection #$seq generated ($pkgName)")
         return@withContext summary
     }
 
@@ -2028,6 +2405,96 @@ class VisualTaskOrchestrator(
         }
         val elements = groundingEngine.scanScreen(root)
         return groundingEngine.isGoogleSearchResults(elements)
+    }
+
+    private fun isChromeIncognitoScreen(elements: List<UiElementInfo>): Boolean {
+        return elements.any { el ->
+            val l = el.primaryLabel.lowercase(Locale.ROOT)
+            val v = el.viewId.lowercase(Locale.ROOT)
+            l.contains("you’ve gone incognito") ||
+                l.contains("you've gone incognito") ||
+                l.contains("gone incognito") ||
+                v.contains("incognito")
+        }
+    }
+
+    private suspend fun openChromeMenuAndSelect(
+        service: AutomationAccessibilityService,
+        itemQuery: String,
+        fallbackQueries: List<String>,
+        verifyOpened: (List<UiElementInfo>) -> Boolean,
+        successMsg: String,
+        failMsg: String
+    ): TaskActionResult {
+        var (rootNow, _, elsNow) = observeMultiWindow(service, forceRefresh = true)
+        var targetItem = fallbackQueries.firstNotNullOfOrNull { q ->
+            groundingEngine.findTargetElement(elsNow, q)
+        }
+
+        if (targetItem == null) {
+            var menuTarget = groundingEngine.findTargetElement(elsNow, "3 dots")
+                ?: groundingEngine.findTargetElement(elsNow, "More options")
+                ?: groundingEngine.findTargetElement(elsNow, "Customize and control")
+                ?: elsNow.firstOrNull { isBrowserOverflowMenu(it) }
+
+            if (menuTarget == null) {
+                mutateUi("reveal-chrome-toolbar") { service.performSmartScrollAndAwait("up", "short") }
+                delay(420)
+                val revealed = observeMultiWindow(service, forceRefresh = true)
+                rootNow = revealed.first
+                elsNow = revealed.third
+                menuTarget = groundingEngine.findTargetElement(elsNow, "3 dots")
+                    ?: groundingEngine.findTargetElement(elsNow, "More options")
+                    ?: groundingEngine.findTargetElement(elsNow, "Customize and control")
+                    ?: elsNow.firstOrNull { isBrowserOverflowMenu(it) }
+            }
+
+            if (menuTarget == null || !mutateUi("open-chrome-menu") { service.performClickAtRectAndAwait(menuTarget.bounds) }) {
+                return TaskActionResult(
+                    success = false,
+                    message = "Chrome's 3-dot menu button was not found; no tap was made.",
+                    currentStateSummary = groundingEngine.formatElementsSummary(elsNow, rootNow),
+                    verified = false
+                )
+            }
+            delay(460)
+            val menuObs = observeMultiWindow(service, forceRefresh = true)
+            rootNow = menuObs.first
+            elsNow = menuObs.third
+            targetItem = fallbackQueries.firstNotNullOfOrNull { q ->
+                groundingEngine.findTargetElement(elsNow, q)
+            }
+        }
+
+        if (targetItem == null) {
+            return TaskActionResult(
+                success = false,
+                message = "Opened Chrome's 3-dot menu, but '$itemQuery' was not visible. Inspect current elements.",
+                currentStateSummary = groundingEngine.formatElementsSummary(elsNow, rootNow),
+                verified = false
+            )
+        }
+
+        val beforeAction = ScreenSignatureCalculator.computeCombinedSignature(observeMultiWindow(service).second)
+        if (!mutateUi("click-chrome-menu:$itemQuery") { service.performClickAtRectAndAwait(targetItem.bounds) }) {
+            return TaskActionResult(
+                success = false,
+                message = "Could not tap Chrome '$itemQuery'.",
+                currentStateSummary = groundingEngine.formatElementsSummary(elsNow, rootNow),
+                verified = false
+            )
+        }
+        delay(650)
+        val (finalRoot, finalRoots, finalEls) = observeMultiWindow(service, forceRefresh = true)
+        val afterAction = ScreenSignatureCalculator.computeCombinedSignature(finalRoots)
+        val isChromePkg = finalRoot?.packageName?.toString()?.contains("chrome", ignoreCase = true) == true
+        val verified = isChromePkg && (!afterAction.isEquivalentTo(beforeAction) || verifyOpened(finalEls)) && verifyOpened(finalEls)
+        return TaskActionResult(
+            success = verified,
+            message = if (verified) successMsg else failMsg,
+            currentStateSummary = groundingEngine.formatElementsSummary(finalEls, finalRoot),
+            verified = verified
+        )
     }
 
     private fun isBrowserOverflowMenu(target: UiElementInfo?): Boolean {

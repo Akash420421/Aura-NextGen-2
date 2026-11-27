@@ -5,7 +5,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.net.URLEncoder
-import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -98,81 +97,50 @@ object YouTubeApiClient {
         return searchTopVideoDirectInternal(query)
     }
 
+    private fun fetchSearchHtmlAndPickBest(url: String, cleanQuery: String, desktopUa: Boolean): VideoResult? {
+        val ua = if (desktopUa) {
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        } else {
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        }
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", ua)
+            .header("Accept-Language", "en-US,en;q=0.9,hi;q=0.8")
+            .header("Cookie", "CONSENT=YES+1; PREF=tz=UTC")
+            .get()
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                Log.w(TAG, "YouTube search HTTP ${response.code} for $url")
+                return null
+            }
+            val html = response.body?.string() ?: return null
+            val parsed = YouTubeSearchHelper.parseBestVideoFromHtml(html, cleanQuery) ?: return null
+            Log.i(TAG, "Direct search matched video: ${parsed.videoId} (${parsed.title})")
+            return VideoResult(parsed.videoId, parsed.title, parsed.channelTitle)
+        }
+    }
+
     private fun searchTopVideoDirectInternal(query: String): VideoResult? {
         val clean = YouTubeController.cleanQuery(query).ifBlank { query.trim() }
         if (clean.isBlank()) return null
 
+        val encodedQuery = URLEncoder.encode(clean, "UTF-8")
         return try {
-            val encodedQuery = URLEncoder.encode(clean, "UTF-8")
-            val url = "https://www.youtube.com/results?search_query=$encodedQuery&gl=IN&hl=en"
-            val request = Request.Builder()
-                .url(url)
-                .header(
-                    "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                )
-                .header("Accept-Language", "en-US,en;q=0.9,hi;q=0.8")
-                .header("Cookie", "CONSENT=YES+1; PREF=tz=UTC")
-                .get()
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.e(TAG, "Direct web search failed: HTTP ${response.code}")
-                    return null
-                }
-                val html = response.body?.string() ?: return null
-                parseBestVideoFromHtml(html, clean)
-            }
+            fetchSearchHtmlAndPickBest(
+                "https://www.youtube.com/results?search_query=$encodedQuery&gl=IN&hl=en",
+                clean,
+                desktopUa = true
+            ) ?: fetchSearchHtmlAndPickBest(
+                "https://m.youtube.com/results?search_query=$encodedQuery&gl=IN&hl=en",
+                clean,
+                desktopUa = false
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Direct search failed: ${e.message}", e)
             null
         }
     }
-
-    private fun parseBestVideoFromHtml(html: String, query: String): VideoResult? {
-        val queryTokens = query.lowercase(Locale.ROOT)
-            .split(Regex("[^\\p{L}\\p{N}]+"))
-            .filter { it.length >= 2 }
-
-        // Extract multiple videoRenderer blocks (~first 8) and score against the query so we don't pick a random ad/Short.
-        val blockRegex = Regex("\"videoRenderer\"\\s*:\\s*\\{\"videoId\"\\s*:\\s*\"([a-zA-Z0-9_-]{11})\".*?\"title\"\\s*:\\s*\\{\\s*\"runs\"\\s*:\\s*\\[\\s*\\{\\s*\"text\"\\s*:\\s*\"([^\"]+)\"")
-        val candidates = mutableListOf<Pair<VideoResult, Int>>()
-
-        for ((index, match) in blockRegex.findAll(html).take(8).withIndex()) {
-            val id = match.groupValues[1]
-            val title = decodeHtmlTitle(match.groupValues[2])
-            val snippetWindow = html.substring(match.range.first, (match.range.last + 600).coerceAtMost(html.length))
-            val isShortUrl = snippetWindow.contains("\"/shorts/$id\"")
-            val titleLower = title.lowercase(Locale.ROOT)
-            var score = (8 - index) * 2
-            score += queryTokens.count { token -> titleLower.contains(token) } * 5
-            if (titleLower.contains("official") || titleLower.contains("lyrics") || titleLower.contains("audio")) score += 2
-            if (isShortUrl && !query.contains("short", ignoreCase = true)) score -= 8
-            candidates.add(VideoResult(id, title, "") to score)
-        }
-
-        val bestScored = candidates.maxByOrNull { it.second }?.first
-        if (bestScored != null) {
-            Log.i(TAG, "Direct search matched video: ${bestScored.videoId} (${bestScored.title})")
-            return bestScored
-        }
-
-        val fallbackId = Regex("\"videoId\"\\s*:\\s*\"([a-zA-Z0-9_-]{11})\"").find(html)?.groupValues?.get(1)
-            ?: Regex("""watch\?v=([a-zA-Z0-9_-]{11})""").find(html)?.groupValues?.get(1)
-            ?: return null
-        val fallbackTitle = Regex("\"title\"\\s*:\\s*\\{\"runs\"\\s*:\\s*\\[\\{\"text\"\\s*:\\s*\"([^\"]+)\"")
-            .find(html)?.groupValues?.get(1)?.let(::decodeHtmlTitle)
-            ?: query
-        Log.i(TAG, "Direct search matched fallback video: $fallbackId ($fallbackTitle)")
-        return VideoResult(fallbackId, fallbackTitle, "")
-    }
-
-    private fun decodeHtmlTitle(raw: String): String =
-        raw.replace("\\u0026", "&")
-            .replace("\\\"", "\"")
-            .replace("\\/", "/")
-            .replace("&amp;", "&")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
 }

@@ -21,6 +21,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.annotation.RequiresApi
 import com.example.gemini.data.automation.agent.ScreenSignatureCalculator
+import com.example.gemini.data.live.DeviceControlHelper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -111,13 +112,23 @@ class AutomationAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var adSkipWatcherJob: Job? = null
+    @Volatile var autoSkipYouTubeAdsEnabled: Boolean = true
+    @Volatile private var lastEventAdCheckAtMs = 0L
+    @Volatile private var lastAdSkipClickAtMs = 0L
+    private val adSkipScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     @Volatile var lastEventAt = 0L
+        private set
+    @Volatile var lastMutationAt = 0L
         private set
     @Volatile var foregroundPackage: String? = null
         private set
     @Volatile var foregroundClass: String? = null
         private set
     @Volatile var lastTypeVerified: Boolean = false
+
+    fun markUiMutation() {
+        lastMutationAt = System.currentTimeMillis()
+    }
 
     override fun onServiceConnected() {
         instance = this
@@ -140,6 +151,7 @@ class AutomationAccessibilityService : AccessibilityService() {
                 }
                 event.className?.toString()?.let { foregroundClass = it }
                 AuraScreenObserver.processAccessibilityEvent(event)
+                maybeTriggerEventYouTubeAdSkip(event.packageName?.toString())
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 event.packageName?.toString()?.let {
@@ -147,6 +159,7 @@ class AutomationAccessibilityService : AccessibilityService() {
                     _activePackage.value = it
                 }
                 AuraScreenObserver.scheduleContentCheck(event.packageName?.toString())
+                maybeTriggerEventYouTubeAdSkip(event.packageName?.toString())
             }
             AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
                 try {
@@ -189,47 +202,108 @@ class AutomationAccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
-    fun getForegroundAppRootNode(): AccessibilityNodeInfo? {
+    /**
+     * Forces Android's AccessibilityNodeInfo cache to sync with live Chrome/WebView and
+     * virtual containers so stale text from previous questions/pages is never returned.
+     */
+    fun refreshNodeHierarchy(root: AccessibilityNodeInfo?, maxRefreshes: Int = 24) {
+        if (root == null) return
+        var count = 0
+        fun walk(node: AccessibilityNodeInfo, depth: Int) {
+            if (count >= maxRefreshes || depth > 9) return
+            val cls = node.className?.toString().orEmpty()
+            val shouldRefresh = depth <= 1 ||
+                node.isScrollable ||
+                cls.contains("WebView", ignoreCase = true) ||
+                cls.contains("RecyclerView", ignoreCase = true) ||
+                cls.contains("ViewPager", ignoreCase = true) ||
+                cls.contains("ScrollView", ignoreCase = true)
+            if (shouldRefresh) {
+                runCatching { node.refresh() }
+                count++
+            }
+            if (depth < 9 && count < maxRefreshes && node.childCount > 0) {
+                val limit = node.childCount.coerceAtMost(24)
+                for (i in 0 until limit) {
+                    val child = node.getChild(i) ?: continue
+                    if (child.childCount > 0 || child.isScrollable ||
+                        child.className?.toString()?.contains("WebView", true) == true
+                    ) {
+                        walk(child, depth + 1)
+                    }
+                    if (count >= maxRefreshes) break
+                }
+            }
+        }
+        runCatching { walk(root, 0) }
+    }
+
+    fun getForegroundAppRootNode(forceRefresh: Boolean = false): AccessibilityNodeInfo? {
+        var chosen: AccessibilityNodeInfo? = null
         try {
             val appWindows = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-            // 1. Focused non-Aura application window
             val focusedNonAura = appWindows.firstOrNull { win ->
                 val r = win.root
                 win.isFocused && r != null && r.packageName?.toString() != packageName
             }
-            if (focusedNonAura?.root != null) return focusedNonAura.root
-
-            // 2. Active non-Aura application window
-            val activeNonAura = appWindows.firstOrNull { win ->
-                val r = win.root
-                win.isActive && r != null && r.packageName?.toString() != packageName
-            }
-            if (activeNonAura?.root != null) return activeNonAura.root
-
-            // 3. Any non-Aura application window with a valid root
-            val anyNonAura = appWindows.firstOrNull { win ->
-                val r = win.root
-                r != null && r.packageName?.toString() != packageName
-            }
-            if (anyNonAura?.root != null) return anyNonAura.root
+            chosen = focusedNonAura?.root
+                ?: appWindows.firstOrNull { win ->
+                    val r = win.root
+                    win.isActive && r != null && r.packageName?.toString() != packageName
+                }?.root
+                ?: appWindows.firstOrNull { win ->
+                    val r = win.root
+                    r != null && r.packageName?.toString() != packageName
+                }?.root
         } catch (_: Exception) {}
 
-        // 4. rootInActiveWindow if valid and not Aura (or if Aura is the only foreground app)
-        val active = rootInActiveWindow
-        if (active != null) return active
+        if (chosen == null) {
+            chosen = rootInActiveWindow
+        }
+        if (chosen == null) {
+            try {
+                for (win in windows) {
+                    win.root?.let { chosen = it; return@let }
+                    if (chosen != null) break
+                }
+            } catch (_: Exception) {}
+        }
 
-        // 5. Any window root
-        try {
-            for (win in windows) {
-                win.root?.let { return it }
-            }
-        } catch (_: Exception) {}
-
-        return null
+        if (forceRefresh && chosen != null) {
+            refreshNodeHierarchy(chosen, maxRefreshes = 20)
+        }
+        return chosen
     }
 
-    fun getActiveRootNode(): AccessibilityNodeInfo? {
-        return getForegroundAppRootNode()
+    fun getActiveRootNode(forceRefresh: Boolean = false): AccessibilityNodeInfo? {
+        return getForegroundAppRootNode(forceRefresh)
+    }
+
+    private fun isOwnAuraPackage(pkg: String): Boolean {
+        return pkg == packageName || pkg == "com.example.gemini" || pkg == "com.aura.ai"
+    }
+
+    /**
+     * Returns true when a third-party/external Android app (e.g. Instagram, YouTube, Chrome, Settings)
+     * is currently focused on screen rather than Aura itself.
+     */
+    fun isExternalAppForeground(): Boolean {
+        try {
+            val appWindows = windows.filter {
+                it.type == AccessibilityWindowInfo.TYPE_APPLICATION
+            }
+            val focusedOrActive = appWindows
+                .filter { it.isFocused || it.isActive }
+                .sortedByDescending { (if (it.isFocused) 100 else 0) + (if (it.isActive) 50 else 0) + it.layer }
+            for (win in focusedOrActive) {
+                val pkg = runCatching { win.root?.packageName?.toString() }.getOrNull().orEmpty()
+                if (pkg.isBlank()) continue
+                if (isOwnAuraPackage(pkg)) return false
+                if (pkg != "com.android.systemui") return true
+            }
+        } catch (_: Exception) {}
+        val fg = foregroundPackage.orEmpty()
+        return fg.isNotBlank() && !isOwnAuraPackage(fg) && fg != "com.android.systemui"
     }
 
     /**
@@ -237,7 +311,7 @@ class AutomationAccessibilityService : AccessibilityService() {
      * context sheets, dialogs) ordered top-most / focused / active first so popup menus
      * like Chrome's "New Incognito tab" are never missed.
      */
-    fun getAllApplicationWindowsRootNodes(): List<AccessibilityNodeInfo> {
+    fun getAllApplicationWindowsRootNodes(forceRefresh: Boolean = false): List<AccessibilityNodeInfo> {
         val myPackage = packageName
         val roots = mutableListOf<AccessibilityNodeInfo>()
         try {
@@ -257,16 +331,18 @@ class AutomationAccessibilityService : AccessibilityService() {
                 val root = runCatching { win.root }.getOrNull() ?: continue
                 val pkg = root.packageName?.toString().orEmpty()
                 if (pkg == myPackage || pkg == "com.android.systemui") {
-                    // Only include systemui chooser/dialog windows when no non-Aura app window matches, handled later
                     if (pkg == myPackage) continue
                 }
                 if (!roots.contains(root)) {
+                    if (forceRefresh) {
+                        refreshNodeHierarchy(root, maxRefreshes = 18)
+                    }
                     roots.add(root)
                 }
             }
         } catch (_: Exception) {}
 
-        getForegroundAppRootNode()?.let { active ->
+        getForegroundAppRootNode(forceRefresh)?.let { active ->
             if (!roots.contains(active)) {
                 roots.add(0, active)
             }
@@ -275,10 +351,11 @@ class AutomationAccessibilityService : AccessibilityService() {
     }
 
     fun clickAt(x: Float, y: Float, durationMs: Long = 100L): Boolean {
+        markUiMutation()
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        return dispatchGesture(gesture, null, null)
+        return dispatchGesture(gesture, null, mainHandler)
     }
 
     fun tapAtPercentage(xPercent: Float, yPercent: Float): Boolean {
@@ -457,27 +534,90 @@ class AutomationAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun performClickAtRect(rect: Rect): Boolean {
-        if (rect.width() <= 0 || rect.height() <= 0) return false
-        val cx = rect.exactCenterX()
-        val cy = rect.exactCenterY()
+    private fun isNodeInsideWebView(node: AccessibilityNodeInfo?): Boolean {
+        var cur = node
+        var depth = 0
+        while (cur != null && depth < 14) {
+            if (cur.className?.toString()?.contains("WebView", ignoreCase = true) == true) {
+                return true
+            }
+            cur = cur.parent
+            depth++
+        }
+        return false
+    }
+
+    private fun tryNativeNodeClickAtRect(rect: Rect, cx: Float, cy: Float): Pair<Boolean, Boolean> {
         val root = getActiveRootNode()
-        if (root?.packageName?.toString() == "com.android.chrome" && clickAt(cx, cy)) return true
+        val inChrome = root?.packageName?.toString()?.contains("chrome", ignoreCase = true) == true
         val searchRoots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(root) }
+        var coveredByWebView = false
+
         for (searchRoot in searchRoots) {
             var node = findNodeCoveringRect(searchRoot, rect)
+            if (inChrome && isNodeInsideWebView(node)) {
+                coveredByWebView = true
+                continue
+            }
             while (node != null) {
                 val bounds = Rect()
                 node.getBoundsInScreen(bounds)
                 if (node.isVisibleToUser && node.isClickable && bounds.contains(cx.toInt(), cy.toInt())) {
-                    if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                    if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        return true to coveredByWebView
+                    }
                     break
                 }
                 node = node.parent
             }
         }
+        return false to coveredByWebView
+    }
+
+    fun performClickAtRect(rect: Rect): Boolean {
+        if (rect.width() <= 0 || rect.height() <= 0) return false
+        val cx = rect.exactCenterX()
+        val cy = rect.exactCenterY()
+        val (nativeClicked, _) = tryNativeNodeClickAtRect(rect, cx, cy)
+        if (nativeClicked) return true
         Log.i(TAG, "Using coordinate fallback at ($cx, $cy) [bounds: $rect]")
         return clickAt(cx, cy)
+    }
+
+    /**
+     * Awaits completion of the actual click / gesture dispatch so subsequent verification
+     * never races an in-flight Android gesture stroke.
+     */
+    suspend fun performClickAtRectAndAwait(rect: Rect): Boolean {
+        if (rect.width() <= 0 || rect.height() <= 0) return false
+        val cx = rect.exactCenterX()
+        val cy = rect.exactCenterY()
+        val (nativeClicked, _) = tryNativeNodeClickAtRect(rect, cx, cy)
+        if (nativeClicked) return true
+        return gesture(Path().apply { moveTo(cx, cy) }, 65L)
+    }
+
+    /**
+     * Triggers native accessibility ACTION_CLICK on a checkable or clickable node covering [rect].
+     * Used as a targeted retry in Chrome/WebView when coordinate tap alone did not toggle a radio/checkbox.
+     */
+    fun performAccessibilityCheckableClick(rect: Rect): Boolean {
+        if (rect.width() <= 0 || rect.height() <= 0) return false
+        val cx = rect.centerX()
+        val cy = rect.centerY()
+        val searchRoots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(getActiveRootNode()) }
+        for (searchRoot in searchRoots) {
+            var node = findNodeCoveringRect(searchRoot, rect)
+            while (node != null) {
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                if (node.isVisibleToUser && (node.isCheckable || node.isClickable) && bounds.contains(cx, cy)) {
+                    if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                }
+                node = node.parent
+            }
+        }
+        return false
     }
 
     fun findNodeCoveringRect(root: AccessibilityNodeInfo, targetRect: Rect): AccessibilityNodeInfo? {
@@ -561,27 +701,86 @@ class AutomationAccessibilityService : AccessibilityService() {
         return path to durationMs
     }
 
-    private fun buildReelSwipePath(upward: Boolean): Path {
+    private fun buildReelSwipePath(upward: Boolean, attempt: Int = 1): Pair<Path, Long> {
         val (width, height) = getRealScreenDimensions()
-        val cx = width * 0.50f
-        // Start in unobstructed mid-viewport (60% -> 20%) so bottom captions, seekbars,
-        // and Shorts overlays never swallow or bounce back the touch gesture.
-        val (startY, endY) = if (upward) {
-            height * 0.60f to height * 0.20f
+        val cx = if (attempt <= 1) width * 0.48f else width * 0.46f
+        // Start in unobstructed video canvas away from right-side action buttons (x > 84%)
+        // and use crisp velocity + 56%-66% height travel so ViewPager2 commits decisively (#14).
+        val (startY, endY, durationMs) = if (upward) {
+            if (attempt <= 1) Triple(height * 0.72f, height * 0.16f, 160L)
+            else Triple(height * 0.78f, height * 0.12f, 135L)
         } else {
-            height * 0.24f to height * 0.66f
+            if (attempt <= 1) Triple(height * 0.20f, height * 0.76f, 165L)
+            else Triple(height * 0.16f, height * 0.80f, 145L)
         }
-        return Path().apply {
+        val path = Path().apply {
             moveTo(cx, startY)
             lineTo(cx, endY)
         }
+        return path to durationMs
+    }
+
+    private fun isCurrentlyShortVideoFeed(root: AccessibilityNodeInfo?): Boolean {
+        val r = root ?: return false
+        val pkg = r.packageName?.toString().orEmpty()
+        val viewIds = mutableListOf<String>()
+        val labels = mutableListOf<String>()
+        val descs = mutableListOf<String>()
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(r)
+        var scanned = 0
+        while (q.isNotEmpty() && scanned < 45) {
+            val node = q.removeFirst()
+            scanned++
+            node.viewIdResourceName?.takeIf { it.isNotBlank() }?.let { viewIds.add(it) }
+            node.text?.toString()?.takeIf { it.isNotBlank() }?.let { labels.add(it) }
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { descs.add(it) }
+            for (i in 0 until node.childCount.coerceAtMost(12)) {
+                node.getChild(i)?.let { q.add(it) }
+            }
+        }
+        return DeviceControlHelper.isShortVideoScreen(pkg, viewIds, labels, descs)
+    }
+
+    fun performReelAccessibilityScroll(upward: Boolean = true): Boolean {
+        val root = getActiveRootNode(forceRefresh = true) ?: return false
+        val (_, height) = getRealScreenDimensions()
+        val rect = Rect()
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var scanned = 0
+        while (q.isNotEmpty() && scanned < 120) {
+            val node = q.removeFirst()
+            scanned++
+            val cls = node.className?.toString()?.lowercase(Locale.ROOT) ?: ""
+            val isPagerOrList = cls.contains("viewpager") || cls.contains("recyclerview") || node.isScrollable
+            if (isPagerOrList) {
+                node.getBoundsInScreen(rect)
+                // Must cover at least half the vertical screen so we don't scroll a tiny carousel
+                if (rect.height() >= height * 0.50f) {
+                    val action = if (upward) {
+                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    } else {
+                        AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                    }
+                    if (node.performAction(action)) {
+                        Log.i(TAG, "performReelAccessibilityScroll(upward=$upward) succeeded on $cls")
+                        return true
+                    }
+                }
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { q.add(it) }
+            }
+        }
+        return false
     }
 
     fun performSmartScroll(direction: String, distance: String = "medium"): Boolean {
         val (path, durationMs) = buildSmartScrollGesture(direction, distance)
         return try {
             val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
-            val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+            val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, mainHandler)
             Log.i(TAG, "Dispatched smart scroll $direction (distance=$distance, duration=${durationMs}ms): $dispatched")
             dispatched
         } catch (e: Exception) {
@@ -600,12 +799,12 @@ class AutomationAccessibilityService : AccessibilityService() {
     /**
      * Dedicated short-video flick gesture for Instagram Reels / YouTube Shorts / TikTok.
      */
-    fun performReelSwipe(upward: Boolean = true): Boolean {
-        val path = buildReelSwipePath(upward)
+    fun performReelSwipe(upward: Boolean = true, attempt: Int = 1): Boolean {
+        val (path, durationMs) = buildReelSwipePath(upward, attempt)
         return try {
-            val stroke = GestureDescription.StrokeDescription(path, 0, 240L)
-            val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-            Log.i(TAG, "performReelSwipe (upward=$upward): dispatched=$dispatched")
+            val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+            val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, mainHandler)
+            Log.i(TAG, "performReelSwipe (upward=$upward, attempt=$attempt, ${durationMs}ms): dispatched=$dispatched")
             dispatched
         } catch (e: Exception) {
             Log.e(TAG, "performReelSwipe failed: ${e.message}", e)
@@ -613,10 +812,10 @@ class AutomationAccessibilityService : AccessibilityService() {
         }
     }
 
-    suspend fun performReelSwipeAndAwait(upward: Boolean = true): Boolean {
-        val path = buildReelSwipePath(upward)
-        val completed = gesture(path, 240L)
-        Log.i(TAG, "performReelSwipeAndAwait (upward=$upward): completed=$completed")
+    suspend fun performReelSwipeAndAwait(upward: Boolean = true, attempt: Int = 1): Boolean {
+        val (path, durationMs) = buildReelSwipePath(upward, attempt)
+        val completed = gesture(path, durationMs)
+        Log.i(TAG, "performReelSwipeAndAwait (upward=$upward, attempt=$attempt, ${durationMs}ms): completed=$completed")
         return completed
     }
 
@@ -634,9 +833,9 @@ class AutomationAccessibilityService : AccessibilityService() {
         val initialPkg = getActiveRootNode()?.packageName?.toString() ?: ""
 
         val scrollIntervalMs = when (speed.lowercase(Locale.ROOT)) {
-            "slow" -> 2200L
-            "fast" -> 900L
-            else -> 1500L
+            "slow" -> 2400L
+            "fast" -> 1000L
+            else -> 1600L
         }
         val scrollDistance = when (speed.lowercase(Locale.ROOT)) {
             "slow" -> "small"
@@ -652,14 +851,21 @@ class AutomationAccessibilityService : AccessibilityService() {
 
             try {
                 while (isActive && totalScrolls < maxScrolls) {
-                    val currentPkg = getActiveRootNode()?.packageName?.toString() ?: ""
+                    val activeRoot = getActiveRootNode()
+                    val currentPkg = activeRoot?.packageName?.toString() ?: ""
                     if (initialPkg.isNotEmpty() && currentPkg != initialPkg && !currentPkg.contains("systemui") && !currentPkg.contains("launcher")) {
                         Log.i(TAG, "Continuous scroll auto-stopped: App switched from $initialPkg to $currentPkg")
                         onStopped?.invoke("App switched to $currentPkg")
                         break
                     }
 
-                    val ok = performSmartScroll(direction, scrollDistance)
+                    val inShortFeed = isCurrentlyShortVideoFeed(activeRoot)
+                    val ok = if (inShortFeed) {
+                        val upward = !direction.equals("up", ignoreCase = true)
+                        performReelSwipe(upward = upward)
+                    } else {
+                        performSmartScroll(direction, scrollDistance)
+                    }
                     if (!ok) {
                         Log.w(TAG, "Continuous scroll gesture dispatch failed, stopping.")
                         break
@@ -668,18 +874,21 @@ class AutomationAccessibilityService : AccessibilityService() {
 
                     delay(scrollIntervalMs)
 
-                    val root = getActiveRootNode()
-                    val sig = root?.let { ScreenSignatureCalculator.computeSignature(it).toString() } ?: ""
-                    if (sig.isNotEmpty() && sig == lastScreenSignature) {
-                        duplicateCount++
-                        if (duplicateCount >= 2) {
-                            Log.i(TAG, "Continuous scroll auto-stopped: End of screen reached")
-                            onStopped?.invoke("End of screen reached")
-                            break
+                    // Skip premature static-signature abort during fullscreen SurfaceView Reels/Shorts
+                    if (!inShortFeed) {
+                        val root = getActiveRootNode()
+                        val sig = root?.let { ScreenSignatureCalculator.computeSignature(it).toString() } ?: ""
+                        if (sig.isNotEmpty() && sig == lastScreenSignature) {
+                            duplicateCount++
+                            if (duplicateCount >= 2) {
+                                Log.i(TAG, "Continuous scroll auto-stopped: End of screen reached")
+                                onStopped?.invoke("End of screen reached")
+                                break
+                            }
+                        } else {
+                            duplicateCount = 0
+                            lastScreenSignature = sig
                         }
-                    } else {
-                        duplicateCount = 0
-                        lastScreenSignature = sig
                     }
                 }
             } catch (_: CancellationException) {
@@ -1806,7 +2015,7 @@ class AutomationAccessibilityService : AccessibilityService() {
 
         val stroke = GestureDescription.StrokeDescription(path, 0, 300L)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        val gestureDispatched = dispatchGesture(gesture, null, null)
+        val gestureDispatched = dispatchGesture(gesture, null, mainHandler)
         Log.d(TAG, "performScroll gesture swipe dispatched ($cleanDir): $gestureDispatched")
         return gestureDispatched
     }
@@ -1991,15 +2200,52 @@ class AutomationAccessibilityService : AccessibilityService() {
         return null
     }
 
+    private fun collectDescendantText(node: AccessibilityNodeInfo, maxDepth: Int = 4): String {
+        val parts = ArrayList<String>(6)
+        fun walk(n: AccessibilityNodeInfo, depth: Int) {
+            if (parts.size >= 8 || depth > maxDepth) return
+            n.contentDescription?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+            n.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+            for (i in 0 until n.childCount.coerceAtMost(10)) {
+                n.getChild(i)?.let { walk(it, depth + 1) }
+            }
+        }
+        walk(node, 0)
+        return parts.distinct().joinToString(" ")
+    }
+
+    private fun isYouTubePlayerOpen(roots: List<AccessibilityNodeInfo>): Boolean {
+        val playerIds = listOf(
+            "com.google.android.youtube:id/watch_player",
+            "com.google.android.youtube:id/player_view",
+            "com.google.android.youtube:id/player_fragment_container"
+        )
+        return roots.any { r ->
+            playerIds.any { id ->
+                r.findAccessibilityNodeInfosByViewId(id).any { it.isVisibleToUser }
+            }
+        }
+    }
+
     fun armYouTubePlay() {
         mainHandler.postDelayed(object : Runnable {
             var attempts = 0
             override fun run() {
+                val roots = getAllApplicationWindowsRootNodes().ifEmpty { listOfNotNull(getActiveRootNode()) }
+                val inYouTube = roots.any { it.packageName?.toString()?.contains("youtube", ignoreCase = true) == true }
+                if (inYouTube && isYouTubePlayerOpen(roots)) {
+                    Log.d(TAG, "YouTube player already open; stopping armYouTubePlay.")
+                    return
+                }
                 if (clickFirstYouTubeVideoNow()) {
                     Log.d(TAG, "Tapped first YouTube video via Accessibility on attempt $attempts!")
                     return
                 }
                 attempts++
+                // If Sponsored banners fill the top fold, scroll down gently once on attempt 4 (#16)
+                if (inYouTube && attempts == 4) {
+                    performSmartScroll("down", "small")
+                }
                 if (attempts < 12) {
                     mainHandler.postDelayed(this, 500)
                 }
@@ -2024,48 +2270,95 @@ class AutomationAccessibilityService : AccessibilityService() {
                 val nodes = root.findAccessibilityNodeInfosByViewId(id)
                 val valid = nodes.firstOrNull { node ->
                     val r = Rect().also { node.getBoundsInScreen(it) }
-                    node.isVisibleToUser && r.top > height * 0.12f && r.height() > 40
+                    if (!node.isVisibleToUser) return@firstOrNull false
+                    val meta = collectDescendantText(node)
+                    YouTubeSearchHelper.isPlayableYouTubeVideoCard(
+                        viewId = id,
+                        text = node.text?.toString().orEmpty(),
+                        contentDescription = meta,
+                        topPx = r.top,
+                        heightPx = r.height(),
+                        screenHeightPx = height.toInt()
+                    )
                 }
                 if (valid != null && clickNodeAndTap(valid)) return true
             }
-            // Modern Litho YouTube UI often omits XML viewIds on search result cards; match clickable metadata cards instead.
+
+            // Modern Litho YouTube UI often places card metadata in child nodes under a blank clickable card
             val lithoNodes = mutableListOf<AccessibilityNodeInfo>()
-            collectAllNodes(root, lithoNodes, maxNodes = 300)
+            collectAllNodes(root, lithoNodes, maxNodes = 700)
             val rect = Rect()
-            val candidate = lithoNodes.firstOrNull { n ->
-                if (!n.isVisibleToUser || !n.isClickable) return@firstOrNull false
+            val candidate = lithoNodes.filter { n ->
+                if (!n.isVisibleToUser || !n.isClickable) return@filter false
                 n.getBoundsInScreen(rect)
-                if (rect.top < height * 0.14f || rect.height() < 80) return@firstOrNull false
-                val desc = n.contentDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
-                val text = n.text?.toString()?.lowercase(Locale.ROOT).orEmpty()
-                val combined = "$desc $text"
-                val looksLikeVideoCard = combined.contains("views") || combined.contains("ago") ||
-                    combined.contains("minute") || combined.contains("second") ||
-                    combined.contains("play video") || combined.contains("go to channel")
-                val notChipOrChrome = !combined.contains("search youtube") &&
-                    !combined.contains("clear search") &&
-                    !combined.contains("shorts")
-                looksLikeVideoCard && notChipOrChrome
+                val meta = collectDescendantText(n)
+                YouTubeSearchHelper.isPlayableYouTubeVideoCard(
+                    viewId = n.viewIdResourceName.orEmpty(),
+                    text = n.text?.toString().orEmpty(),
+                    contentDescription = meta,
+                    topPx = rect.top,
+                    heightPx = rect.height(),
+                    screenHeightPx = height.toInt()
+                )
+            }.minByOrNull { n ->
+                n.getBoundsInScreen(rect)
+                rect.top
             }
             if (candidate != null && clickNodeAndTap(candidate)) return true
         }
         return false
     }
 
-    fun armYouTubeAdSkipWatcher(durationMs: Long = 35_000L) {
+    private fun maybeTriggerEventYouTubeAdSkip(eventPkg: String?) {
+        if (!autoSkipYouTubeAdsEnabled || eventPkg.isNullOrBlank()) return
+        val isYtOrChrome = eventPkg.contains("youtube", ignoreCase = true) ||
+            eventPkg.contains("chrome", ignoreCase = true)
+        if (!isYtOrChrome) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastAdSkipClickAtMs < 1_200L || now - lastEventAdCheckAtMs < 420L) return
+        lastEventAdCheckAtMs = now
+
+        adSkipScope.launch {
+            runCatching {
+                if (eventPkg.contains("chrome", ignoreCase = true)) {
+                    val urlHint = getActiveRootNode()
+                        ?.findAccessibilityNodeInfosByViewId("com.android.chrome:id/url_bar")
+                        ?.firstOrNull()
+                        ?.text
+                        ?.toString()
+                        .orEmpty()
+                    if (!urlHint.contains("youtube", ignoreCase = true) && !urlHint.contains("youtu.be", ignoreCase = true)) {
+                        return@runCatching
+                    }
+                }
+                if (skipYouTubeAd()) {
+                    lastAdSkipClickAtMs = System.currentTimeMillis()
+                    Log.i(TAG, "Event-driven Auto Ad-Skip clicked Skip Ad in $eventPkg!")
+                }
+            }
+        }
+    }
+
+    fun armYouTubeAdSkipWatcher(durationMs: Long = 90_000L) {
         adSkipWatcherJob?.cancel()
-        adSkipWatcherJob = CoroutineScope(Dispatchers.IO).launch {
-            val deadline = System.currentTimeMillis() + durationMs.coerceIn(5_000L, 90_000L)
+        adSkipWatcherJob = adSkipScope.launch {
+            val deadline = System.currentTimeMillis() + durationMs.coerceIn(5_000L, 180_000L)
             try {
-                delay(2_000L)
+                delay(700L)
                 while (isActive && System.currentTimeMillis() < deadline) {
                     val pkg = foregroundPackage ?: getActiveRootNode()?.packageName?.toString().orEmpty()
-                    if (pkg.contains("youtube", ignoreCase = true) && skipYouTubeAd()) {
+                    val isYtContext = pkg.contains("youtube", ignoreCase = true) ||
+                        (pkg.contains("chrome", ignoreCase = true) && getActiveRootNode()
+                            ?.findAccessibilityNodeInfosByViewId("com.android.chrome:id/url_bar")
+                            ?.firstOrNull()?.text?.toString()?.contains("youtube", ignoreCase = true) == true)
+                    if (isYtContext && skipYouTubeAd()) {
+                        lastAdSkipClickAtMs = System.currentTimeMillis()
                         Log.i(TAG, "Auto Ad-Skip Watcher clicked YouTube Skip Ad button!")
-                        delay(4_000L) // In case of double pre-roll ad, keep monitoring briefly
+                        delay(2_200L) // Fast re-check in case of double pre-roll ad
                         continue
                     }
-                    delay(1_200L)
+                    delay(550L)
                 }
             } catch (_: CancellationException) {
             } finally {
@@ -2081,25 +2374,47 @@ class AutomationAccessibilityService : AccessibilityService() {
             "com.google.android.youtube:id/skip_ad_button_text",
             "com.google.android.youtube:id/skip_ad_button_container",
             "com.google.android.youtube:id/modern_skip_ad_text",
-            "com.google.android.youtube:id/skip_button"
+            "com.google.android.youtube:id/modern_skip_ad_button",
+            "com.google.android.youtube:id/ad_skip_button",
+            "com.google.android.youtube:id/skip_button",
+            "app.revanced.android.youtube:id/skip_ad_button"
         )
+        val bounds = Rect()
         for (root in roots) {
             for (id in skipIds) {
                 val nodes = root.findAccessibilityNodeInfosByViewId(id)
-                val target = nodes.firstOrNull { it.isVisibleToUser && it.isEnabled }
+                val target = nodes.firstOrNull { n ->
+                    n.getBoundsInScreen(bounds)
+                    val ownOrChildText = n.text?.toString().orEmpty().ifBlank { collectDescendantText(n, 2) }
+                    val ownOrChildDesc = n.contentDescription?.toString().orEmpty()
+                    YouTubeSearchHelper.isSkippableAdButton(
+                        viewId = id,
+                        text = ownOrChildText,
+                        contentDescription = ownOrChildDesc,
+                        isVisible = n.isVisibleToUser,
+                        isEnabled = n.isEnabled,
+                        widthPx = bounds.width(),
+                        heightPx = bounds.height()
+                    )
+                }
                 if (target != null && clickNodeAndTap(target)) return true
             }
             val nodes = mutableListOf<AccessibilityNodeInfo>()
-            collectAllNodes(root, nodes, maxNodes = 300)
+            collectAllNodes(root, nodes, maxNodes = 650)
             val skipNode = nodes.firstOrNull { n ->
-                if (!n.isVisibleToUser || !n.isEnabled) return@firstOrNull false
-                val t = n.text?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
-                val d = n.contentDescription?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
-                val vid = n.viewIdResourceName?.lowercase(Locale.ROOT).orEmpty()
-                vid.contains("skip_ad") ||
-                    t == "skip" || t == "skip ad" || t == "skip ads" ||
-                    d == "skip ad" || d == "skip ads" ||
-                    (t.startsWith("skip") && t.length <= 12)
+                n.getBoundsInScreen(bounds)
+                val t = n.text?.toString().orEmpty()
+                val d = n.contentDescription?.toString().orEmpty()
+                val vid = n.viewIdResourceName.orEmpty()
+                YouTubeSearchHelper.isSkippableAdButton(
+                    viewId = vid,
+                    text = t,
+                    contentDescription = d,
+                    isVisible = n.isVisibleToUser,
+                    isEnabled = n.isEnabled,
+                    widthPx = bounds.width(),
+                    heightPx = bounds.height()
+                )
             }
             if (skipNode != null && clickNodeAndTap(skipNode)) return true
         }
@@ -2166,28 +2481,36 @@ class AutomationAccessibilityService : AccessibilityService() {
         return false
     }
 
-    suspend fun gesture(path: Path, durationMs: Long): Boolean = suspendCancellableCoroutine { cont ->
-        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs.coerceIn(1, 60_000))
-        val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(true) }
-            override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(false) }
-        }, null)
-        if (!dispatched && cont.isActive) cont.resume(false)
+    suspend fun gesture(path: Path, durationMs: Long): Boolean {
+        val safeDur = durationMs.coerceIn(1, 60_000)
+        return withTimeoutOrNull((safeDur + 1_800L).coerceAtLeast(2_200L)) {
+            suspendCancellableCoroutine { cont ->
+                markUiMutation()
+                val stroke = GestureDescription.StrokeDescription(path, 0, safeDur)
+                val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(true) }
+                    override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(false) }
+                }, mainHandler)
+                if (!dispatched && cont.isActive) cont.resume(false)
+            }
+        } ?: false
     }
 
     suspend fun multiStrokeGesture(strokes: List<GestureDescription.StrokeDescription>): Boolean {
         if (strokes.isEmpty()) return false
-        return suspendCancellableCoroutine { cont ->
-            val builder = GestureDescription.Builder()
-            for (stroke in strokes) {
-                builder.addStroke(stroke)
+        return withTimeoutOrNull(3_000L) {
+            suspendCancellableCoroutine { cont ->
+                val builder = GestureDescription.Builder()
+                for (stroke in strokes) {
+                    builder.addStroke(stroke)
+                }
+                val dispatched = dispatchGesture(builder.build(), object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(true) }
+                    override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(false) }
+                }, mainHandler)
+                if (!dispatched && cont.isActive) cont.resume(false)
             }
-            val dispatched = dispatchGesture(builder.build(), object : GestureResultCallback() {
-                override fun onCompleted(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(true) }
-                override fun onCancelled(gestureDescription: GestureDescription?) { if (cont.isActive) cont.resume(false) }
-            }, null)
-            if (!dispatched && cont.isActive) cont.resume(false)
-        }
+        } ?: false
     }
 
     /**
@@ -2643,6 +2966,317 @@ class AutomationAccessibilityService : AccessibilityService() {
             else return result
         }
         return Result.failure(IllegalStateException("screenshot failed"))
+    }
+
+    data class SettingToggleOutcome(
+        val handled: Boolean,
+        val verifiedState: Boolean? = null,
+        val toggled: Boolean = false,
+        val message: String
+    )
+
+    private data class MatchedSettingTarget(
+        val labelText: String,
+        val labelNode: AccessibilityNodeInfo,
+        val rowNode: AccessibilityNodeInfo,
+        val switchNode: AccessibilityNodeInfo?,
+        val actionButtonImpliedState: Boolean? = null
+    )
+
+    private fun findMatchedSettingTarget(
+        roots: List<AccessibilityNodeInfo>,
+        rowLabels: List<String>,
+        actionButtonLabels: List<String> = emptyList()
+    ): MatchedSettingTarget? {
+        val candidates = mutableListOf<Triple<Int, AccessibilityNodeInfo, String>>()
+        val lblRect = Rect()
+        val swRect = Rect()
+
+        for (root in roots) {
+            val q = ArrayDeque<AccessibilityNodeInfo>()
+            q.add(root)
+            var visited = 0
+            while (q.isNotEmpty() && visited < 400) {
+                val node = q.removeFirst()
+                visited++
+                val text = node.text?.toString()?.trim().orEmpty()
+                val desc = node.contentDescription?.toString()?.trim().orEmpty()
+                val combined = text.ifBlank { desc }
+                if (combined.isNotBlank()) {
+                    val lower = combined.lowercase(Locale.ROOT)
+                    rowLabels.forEachIndexed { idx, want ->
+                        val wantLow = want.lowercase(Locale.ROOT)
+                        if (lower == wantLow) {
+                            candidates.add(Triple(idx * 2, node, combined))
+                        } else if (lower.contains(wantLow)) {
+                            candidates.add(Triple(idx * 2 + 1, node, combined))
+                        }
+                    }
+                    actionButtonLabels.forEachIndexed { idx, want ->
+                        val wantLow = want.lowercase(Locale.ROOT)
+                        if (lower == wantLow || lower.contains(wantLow)) {
+                            candidates.add(Triple(100 + idx, node, combined))
+                        }
+                    }
+                }
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { q.add(it) }
+                }
+            }
+        }
+
+        val sorted = candidates.sortedBy { it.first }
+        for ((score, lblNode, lblText) in sorted) {
+            if (score >= 100) {
+                val impliedOn = lblText.lowercase(Locale.ROOT).contains("turn off") ||
+                    lblText.lowercase(Locale.ROOT).contains("disable")
+                return MatchedSettingTarget(
+                    labelText = lblText,
+                    labelNode = lblNode,
+                    rowNode = lblNode,
+                    switchNode = null,
+                    actionButtonImpliedState = impliedOn
+                )
+            }
+            if (lblNode.isCheckable) {
+                return MatchedSettingTarget(lblText, lblNode, lblNode, lblNode)
+            }
+            lblNode.getBoundsInScreen(lblRect)
+            var anc: AccessibilityNodeInfo? = lblNode.parent
+            var depth = 0
+            while (anc != null && depth < 4) {
+                val switchInRow = findCheckableInSubtree(anc, lblRect.centerY(), swRect)
+                if (switchInRow != null) {
+                    return MatchedSettingTarget(lblText, lblNode, anc, switchInRow)
+                }
+                if (anc.isCheckable) {
+                    return MatchedSettingTarget(lblText, lblNode, anc, anc)
+                }
+                anc = anc.parent
+                depth++
+            }
+        }
+
+        // Second pass: clickable submenu item without switch (e.g. "Wi-Fi hotspot")
+        val firstNonSwitch = sorted.firstOrNull { it.first < 100 }
+        if (firstNonSwitch != null) {
+            val (_, lblNode, lblText) = firstNonSwitch
+            var clickable: AccessibilityNodeInfo = lblNode
+            var anc = lblNode.parent
+            var depth = 0
+            while (anc != null && depth < 4 && !clickable.isClickable) {
+                if (anc.isClickable) clickable = anc
+                anc = anc.parent
+                depth++
+            }
+            return MatchedSettingTarget(lblText, lblNode, clickable, null)
+        }
+        return null
+    }
+
+    private fun findCheckableInSubtree(
+        container: AccessibilityNodeInfo,
+        labelCenterY: Int,
+        tmpRect: Rect
+    ): AccessibilityNodeInfo? {
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(container)
+        var n = 0
+        while (q.isNotEmpty() && n < 24) {
+            val cur = q.removeFirst()
+            n++
+            val cls = cur.className?.toString()?.lowercase(Locale.ROOT) ?: ""
+            if (cur.isCheckable || cls.contains("switch") || cls.contains("toggle") || cls.contains("checkbox")) {
+                cur.getBoundsInScreen(tmpRect)
+                if (kotlin.math.abs(tmpRect.centerY() - labelCenterY) <= 180) {
+                    return cur
+                }
+            }
+            for (i in 0 until cur.childCount) {
+                cur.getChild(i)?.let { q.add(it) }
+            }
+        }
+        return null
+    }
+
+    private fun hasClickableConfirmButton(root: AccessibilityNodeInfo): Boolean {
+        val confirmTerms = setOf("turn off", "turn on", "agree", "allow", "enable", "ok")
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var n = 0
+        while (q.isNotEmpty() && n < 60) {
+            val node = q.removeFirst()
+            n++
+            val t = node.text?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+            if (node.isClickable && t in confirmTerms) return true
+            for (i in 0 until node.childCount) node.getChild(i)?.let { q.add(it) }
+        }
+        return false
+    }
+
+    private suspend fun clickConfirmDialogIfPresent(): Boolean {
+        val confirmTerms = listOf("turn off", "turn on", "agree", "allow", "enable", "ok")
+        val roots = getAllApplicationWindowsRootNodes(forceRefresh = true)
+        for (r in roots) {
+            val q = ArrayDeque<AccessibilityNodeInfo>()
+            q.add(r)
+            var n = 0
+            while (q.isNotEmpty() && n < 80) {
+                val node = q.removeFirst()
+                n++
+                val t = node.text?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                if (node.isVisibleToUser && node.isClickable && t in confirmTerms) {
+                    if (clickNodeAndTap(node)) return true
+                }
+                for (i in 0 until node.childCount) node.getChild(i)?.let { q.add(it) }
+            }
+        }
+        return false
+    }
+
+    private suspend fun dismissOpenedSettingsSurface(maxBacks: Int) {
+        val roots = getAllApplicationWindowsRootNodes(forceRefresh = true)
+        for (r in roots) {
+            val q = ArrayDeque<AccessibilityNodeInfo>()
+            q.add(r)
+            var n = 0
+            while (q.isNotEmpty() && n < 80) {
+                val node = q.removeFirst()
+                n++
+                val t = node.text?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val d = node.contentDescription?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                if (node.isVisibleToUser && node.isClickable && (t == "done" || d == "done")) {
+                    clickNodeAndTap(node)
+                    return
+                }
+                for (i in 0 until node.childCount) node.getChild(i)?.let { q.add(it) }
+            }
+        }
+        repeat(maxBacks) {
+            val pkg = getActiveRootNode()?.packageName?.toString()?.lowercase(Locale.ROOT).orEmpty()
+            if (!pkg.contains("settings") && !pkg.contains("systemui")) return
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            delay(280)
+        }
+    }
+
+    /**
+     * Waits for an opened Android Settings screen / Panel bottom sheet, locates [rowLabels],
+     * verifies or toggles the Switch into [desiredState], confirms dialogs if prompted,
+     * and cleanly dismisses the Settings panel/page (#13).
+     */
+    suspend fun toggleSettingSwitchAndDismiss(
+        settingDisplayName: String,
+        rowLabels: List<String>,
+        desiredState: Boolean?,
+        subPageLabels: List<String> = emptyList(),
+        actionButtonLabels: List<String> = emptyList(),
+        dismissAfter: Boolean = true
+    ): SettingToggleOutcome {
+        var roots = emptyList<AccessibilityNodeInfo>()
+        var target: MatchedSettingTarget? = null
+        val deadline = System.currentTimeMillis() + 2_400L
+
+        while (System.currentTimeMillis() < deadline) {
+            roots = getAllApplicationWindowsRootNodes(forceRefresh = true)
+            val inSettings = roots.any {
+                val p = it.packageName?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                p.contains("settings") || p == "com.android.systemui"
+            }
+            if (inSettings) {
+                target = findMatchedSettingTarget(roots, rowLabels, actionButtonLabels)
+                if (target != null) break
+            }
+            delay(130)
+        }
+
+        if (target == null) {
+            performSmartScrollAndAwait("down", "medium")
+            delay(360)
+            roots = getAllApplicationWindowsRootNodes(forceRefresh = true)
+            target = findMatchedSettingTarget(roots, rowLabels, actionButtonLabels)
+        }
+
+        if (target == null) {
+            return SettingToggleOutcome(
+                handled = false,
+                message = "Opened $settingDisplayName screen, but could not locate '${rowLabels.firstOrNull().orEmpty()}' toggle automatically."
+            )
+        }
+
+        var usedLevels = 1
+        // Navigate once into nested submenu (e.g. Wireless Settings -> "Wi-Fi hotspot" -> Switch page)
+        if (target.switchNode == null && target.actionButtonImpliedState == null && subPageLabels.isNotEmpty()) {
+            val clickedMenu = target.rowNode.performAction(AccessibilityNodeInfo.ACTION_CLICK) ||
+                run {
+                    val b = Rect(); target.rowNode.getBoundsInScreen(b); performClickAtRectAndAwait(b)
+                }
+            if (clickedMenu) {
+                usedLevels = 2
+                delay(520)
+                roots = getAllApplicationWindowsRootNodes(forceRefresh = true)
+                target = findMatchedSettingTarget(roots, subPageLabels + rowLabels, actionButtonLabels)
+                    ?: return SettingToggleOutcome(
+                        handled = false,
+                        message = "Opened $settingDisplayName submenu, but switch control was not exposed."
+                    )
+            }
+        }
+
+        val currentState: Boolean? = target.switchNode?.isChecked ?: target.actionButtonImpliedState
+        if (desiredState != null && currentState == desiredState) {
+            if (dismissAfter) dismissOpenedSettingsSurface(usedLevels)
+            return SettingToggleOutcome(
+                handled = true,
+                verifiedState = currentState,
+                toggled = false,
+                message = "$settingDisplayName is already ${if (currentState) "ON" else "OFF"} (verified)."
+            )
+        }
+
+        val clickNode = target.switchNode ?: target.rowNode
+        val b = Rect()
+        clickNode.getBoundsInScreen(b)
+        val clicked = (clickNode.isClickable && clickNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)) ||
+            (target.rowNode.isClickable && target.rowNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)) ||
+            performClickAtRectAndAwait(b)
+        if (!clicked) {
+            return SettingToggleOutcome(
+                handled = false,
+                message = "Could not tap $settingDisplayName toggle on Settings screen."
+            )
+        }
+
+        delay(420)
+        if (clickConfirmDialogIfPresent()) {
+            delay(400)
+        }
+
+        val afterRoots = getAllApplicationWindowsRootNodes(forceRefresh = true)
+        val afterTarget = findMatchedSettingTarget(afterRoots, subPageLabels + rowLabels, actionButtonLabels)
+        val afterState = afterTarget?.switchNode?.isChecked ?: afterTarget?.actionButtonImpliedState
+        val verified = when {
+            desiredState != null && afterState != null -> afterState == desiredState
+            currentState != null && afterState != null -> afterState != currentState
+            else -> true
+        }
+
+        if (dismissAfter) {
+            dismissOpenedSettingsSurface(usedLevels)
+        }
+
+        val stateWord = when (afterState ?: desiredState) {
+            true -> "ON"
+            false -> "OFF"
+            null -> "toggled"
+        }
+        return SettingToggleOutcome(
+            handled = verified,
+            verifiedState = afterState ?: desiredState,
+            toggled = true,
+            message = if (verified) "$settingDisplayName turned $stateWord (verified)."
+            else "$settingDisplayName toggle was tapped, current verified state is ${if (afterState == true) "ON" else "OFF"}."
+        )
     }
 
     class ScreenshotError(val code: Int) : Exception(

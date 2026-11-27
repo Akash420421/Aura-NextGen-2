@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Image
@@ -48,6 +49,8 @@ fun AttachmentSelectorBottomSheet(
     onPickImage: () -> Unit,
     onPickFile: () -> Unit,
     onPickFromFiles: () -> Unit,
+    onEnableImageMode: (() -> Unit)? = null,
+    isImageMode: Boolean = false,
     onDismiss: () -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
@@ -123,6 +126,18 @@ fun AttachmentSelectorBottomSheet(
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    if (onEnableImageMode != null) {
+                        AttachmentCard(
+                            icon = Icons.Outlined.AutoAwesome,
+                            label = if (isImageMode) "Image\nActive" else "Create\nImage",
+                            modifier = Modifier.width(96.dp),
+                            onClick = {
+                                onDismiss()
+                                onEnableImageMode()
+                            }
+                        )
+                    }
+
                     AttachmentCard(
                         icon = Icons.Outlined.PhotoCamera,
                         label = "Camera /\nPhoto",

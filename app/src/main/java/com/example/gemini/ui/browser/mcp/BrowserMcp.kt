@@ -61,7 +61,7 @@ object BrowserMcp {
         "answer it with browser_handle_dialog. Pass action_summary (a few words) on actions so the user can follow what you do. " +
         "Omit tab_id to use the active tab; browser_list_tabs lists all tabs."
 
-    private const val AGENT_VERSION = 10
+    private const val AGENT_VERSION = 11
     private const val PX_PER_TOKEN = 28
     private const val MAX_PX = 1568
     private const val MAX_TOKENS = 1568
@@ -288,7 +288,7 @@ object BrowserMcp {
 
     /** Tools that work in one tab's page: the tab is locked (keyboard, zoom) for the call. */
     private val pageTools = setOf("browser_read_page", "browser_find", "browser_get_page_text", "browser_computer", "browser_form_input",
-        "browser_eval_js", "browser_upload_file")
+        "browser_eval_js", "browser_upload_file", "browser_submit_input", "browser_viewport_media")
 
     /** Tools that still work while a page dialog has the browser paused. */
     private val dialogSafe = setOf("browser_list_tabs", "browser_handle_dialog", "browser_close_tab", "browser_switch_tab",
@@ -335,8 +335,13 @@ object BrowserMcp {
                     val query = args.optString("query").trim()
                     if (query.isEmpty()) throw ToolError("query is empty: describe the element, e.g. \"search box\"")
                     val tab = pageTab!!
+                    val kind = args.optString("kind").trim()
                     BrowserAgentIndicator.activity(tab.id, "Looking for \"${clip(query, 24)}\"")
-                    out.text(agentText(context, tab, "find", query))
+                    if (kind.isNotEmpty()) {
+                        out.text(agentText(context, tab, "find", query, JSONObject().put("kind", kind)))
+                    } else {
+                        out.text(agentText(context, tab, "find", query))
+                    }
                 }
                 "browser_get_page_text" -> {
                     val tab = pageTab!!
@@ -345,6 +350,8 @@ object BrowserMcp {
                 }
                 "browser_computer" -> computer(context, pageTab!!, args, batch, out)
                 "browser_form_input" -> formInput(context, pageTab!!, args, out)
+                "browser_submit_input" -> submitInput(context, pageTab!!, args, out)
+                "browser_viewport_media" -> viewportMedia(context, pageTab!!, args, out)
                 "browser_eval_js" -> evalJs(context, pageTab!!, args, out)
                 "browser_get_console_logs" -> consoleLogs(context, tab(context, args), args, out)
                 "browser_read_network" -> network(context, tab(context, args), args, out)
@@ -795,6 +802,11 @@ object BrowserMcp {
                 "text field first (its ref from browser_find), or set it with browser_form_input. To press keys there use action=key.")
         }
         val secret = focus.optBoolean("sensitive")
+        val clearFirst = args.optBoolean("clear_first", false)
+        if (clearFirst) {
+            agent(context, tab, "insertText", "", true)
+            delay(40)
+        }
         BrowserAgentIndicator.activity(tab.id, summary(args) ?: if (secret) "Typing a password" else "Typing \"${clip(text, 24)}\"")
         val before = pageState(tab)
         val cdp = BrowserCdp.session(tab)
@@ -1078,6 +1090,21 @@ object BrowserMcp {
         BrowserAgentIndicator.click(tab.id)
         if (!r.optBoolean("ok")) throw ToolError(r.optString("error"))
         out.text(r.optString("text") + settle(tab, before))
+    }
+
+    private suspend fun submitInput(context: Context, tab: BrowserTabSession, args: JSONObject, out: Out) = locked(tab) {
+        ensureUnlocked(tab)
+        val ref = args.optString("ref").trim()
+        val res = agent(context, tab, "submitElement", ref)
+        if (!res.optBoolean("ok")) throw ToolError(res.optString("error", "Submit failed"))
+        out.text(res.toString())
+    }
+
+    private suspend fun viewportMedia(context: Context, tab: BrowserTabSession, args: JSONObject, out: Out) {
+        val action = args.optString("action", "inspect").trim()
+        val res = agent(context, tab, "viewportMedia", action)
+        if (!res.optBoolean("ok")) throw ToolError(res.optString("error", "Viewport media inspection failed"))
+        out.text(res.toString())
     }
 
     private suspend fun evalJs(context: Context, tab: BrowserTabSession, args: JSONObject, out: Out) {

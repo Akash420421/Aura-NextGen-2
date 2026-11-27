@@ -2,8 +2,10 @@ package com.example.gemini.data.vision
 
 import android.graphics.PointF
 import android.graphics.Rect
+import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.gemini.data.automation.YouTubeSearchHelper
 import java.util.Locale
 import kotlin.math.abs
 
@@ -22,7 +24,13 @@ data class UiElementInfo(
     val isCheckable: Boolean,
     val isChecked: Boolean,
     val isEditable: Boolean,
-    val isScrollable: Boolean
+    val isScrollable: Boolean,
+    val isSelected: Boolean = false,
+    val isEnabled: Boolean = true,
+    val stateDescription: String = "",
+    val hasCheckableDescendant: Boolean = false,
+    val isDescendantChecked: Boolean = false,
+    val descendantRadioBounds: Rect? = null
 ) {
     val center: PointF
         get() = PointF(bounds.exactCenterX(), bounds.exactCenterY())
@@ -36,9 +44,20 @@ data class UiElementInfo(
         }
 
     fun isSwitchOrToggle(): Boolean {
-        return isCheckable || className.contains("Switch", ignoreCase = true) ||
-                className.contains("CheckBox", ignoreCase = true) ||
-                className.contains("ToggleButton", ignoreCase = true)
+        val stateLower = stateDescription.lowercase(Locale.ROOT)
+        return isCheckable || hasCheckableDescendant ||
+            className.contains("RadioButton", ignoreCase = true) ||
+            className.contains("Switch", ignoreCase = true) ||
+            className.contains("CheckBox", ignoreCase = true) ||
+            className.contains("ToggleButton", ignoreCase = true) ||
+            stateLower == "checked" || stateLower == "unchecked" ||
+            stateLower == "selected" || stateLower == "not selected"
+    }
+
+    fun isEffectivelyChecked(): Boolean {
+        if (isChecked || isDescendantChecked || isSelected) return true
+        val stateLower = stateDescription.lowercase(Locale.ROOT).trim()
+        return stateLower == "checked" || stateLower == "selected" || stateLower == "on" || stateLower == "true"
     }
 
     val hasTextOrDesc: Boolean
@@ -144,12 +163,29 @@ class UiGroundingEngine {
                 depth++
             }
             val isClickable = node.isClickable || parentClickable
-            val isCheckable = node.isCheckable
+            val isCheckable = node.isCheckable || cls.contains("RadioButton", ignoreCase = true) || cls.contains("CheckBox", ignoreCase = true)
+            val isSelected = node.isSelected
+            val isEnabled = node.isEnabled
+            val stateDesc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                node.stateDescription?.toString()?.trim().orEmpty()
+            } else ""
             val hasSetTextAction = node.actionList.any {
                 it.id == AccessibilityNodeInfo.ACTION_SET_TEXT || it.id == AccessibilityNodeInfo.ACTION_PASTE
             }
             val isEditable = node.isEditable || cls.contains("EditText", ignoreCase = true) || hasSetTextAction
             val isScrollable = node.isScrollable
+
+            var hasCheckableDescendant = false
+            var isDescendantChecked = false
+            var descendantRadioBounds: Rect? = null
+            if (!isCheckable && node.childCount > 0) {
+                val descInfo = inspectCheckableDescendant(node, depth = 0)
+                if (descInfo != null) {
+                    hasCheckableDescendant = true
+                    isDescendantChecked = descInfo.first
+                    descendantRadioBounds = descInfo.second
+                }
+            }
 
             // If a row/card has no direct text, extract combined text from its descendants
             if (text.isBlank() && desc.isBlank() && node.childCount > 0) {
@@ -161,7 +197,7 @@ class UiGroundingEngine {
 
             val isVisible = bounds.width() > 5 && bounds.height() > 5
             val isInteractiveOrMeaningful = isVisible && (
-                isClickable || isCheckable || isEditable || isScrollable ||
+                isClickable || isCheckable || hasCheckableDescendant || isEditable || isScrollable ||
                     text.isNotBlank() || desc.isNotBlank()
                 )
 
@@ -178,7 +214,13 @@ class UiGroundingEngine {
                         isCheckable = isCheckable,
                         isChecked = node.isChecked,
                         isEditable = isEditable,
-                        isScrollable = isScrollable
+                        isScrollable = isScrollable,
+                        isSelected = isSelected,
+                        isEnabled = isEnabled,
+                        stateDescription = stateDesc,
+                        hasCheckableDescendant = hasCheckableDescendant,
+                        isDescendantChecked = isDescendantChecked,
+                        descendantRadioBounds = descendantRadioBounds
                     )
                 )
             }
@@ -196,18 +238,42 @@ class UiGroundingEngine {
         }
     }
 
+    private fun inspectCheckableDescendant(node: AccessibilityNodeInfo, depth: Int): Pair<Boolean, Rect>? {
+        if (depth >= 2) return null
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (!child.isVisibleToUser) continue
+            val cCls = child.className?.toString().orEmpty()
+            val cCheckable = child.isCheckable ||
+                cCls.contains("RadioButton", ignoreCase = true) ||
+                cCls.contains("CheckBox", ignoreCase = true)
+            if (cCheckable) {
+                val rect = Rect().also { child.getBoundsInScreen(it) }
+                val stateDesc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    child.stateDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
+                } else ""
+                val checked = child.isChecked || child.isSelected || stateDesc == "checked" || stateDesc == "selected"
+                if (rect.width() > 4 && rect.height() > 4) {
+                    return checked to rect
+                }
+            }
+            inspectCheckableDescendant(child, depth + 1)?.let { return it }
+        }
+        return null
+    }
+
     private fun normalizeSynonymTokens(queryLower: String): List<String> {
         val extras = mutableListOf<String>()
         if (Regex("\\b(3|three|teen)\\s*(dot|dots|point|line|lines|bindu|menu)\\b").containsMatchIn(queryLower) ||
             queryLower.contains("overflow") || queryLower.contains("kebab") || queryLower.contains("hamburger") ||
             queryLower.contains("three dot") || queryLower.contains("3 dot") || queryLower.contains("3 line")
         ) {
-            extras += listOf("more options", "customize and control", "menu_button", "overflow", "more_menu", "menu", "options", "open navigation")
+            extras += listOf("menu_button", "more options", "customize and control", "overflow", "more_menu", "open navigation")
         }
         if (queryLower.contains("incognito") || queryLower.contains("inkinido") || queryLower.contains("in cognito") ||
-            queryLower.contains("private tab") || queryLower.contains("private mode")
+            queryLower.contains("cognition") || queryLower.contains("private tab") || queryLower.contains("private mode")
         ) {
-            extras += listOf("new incognito tab", "incognito", "new private tab", "private")
+            extras += listOf("new incognito tab", "incognito tab", "incognito", "new private tab", "private")
         }
         if (queryLower.contains("close") || queryLower.contains("cross") || queryLower == "x" || queryLower.contains("band")) {
             extras += listOf("close", "dismiss", "cancel", "close_button", "close_btn")
@@ -231,12 +297,17 @@ class UiGroundingEngine {
             .filter { it.isNotBlank() }
         if (labels.isEmpty()) return true
         val synonymTerms = normalizeSynonymTokens(queryLower)
-        val qTokens = queryLower.split(Regex("[^a-z0-9]+")).filter { it.length >= 3 }
+        val qTokens = McqGrounder.tokenizeUnicode(queryLower)
+        val qNorm = McqGrounder.normalizeUnicode(queryLower)
+        val optLetter = McqGrounder.parseMcqOptionLetter(queryLower)
         return labels.any { label ->
+            val lNorm = McqGrounder.normalizeUnicode(label)
             label.contains(queryLower) ||
-                (label.length >= 3 && queryLower.contains(label)) ||
+                (label.length >= 2 && queryLower.contains(label)) ||
+                (qNorm.length >= 2 && (lNorm.contains(qNorm) || (lNorm.length >= 2 && qNorm.contains(lNorm)))) ||
                 qTokens.any { t -> label.contains(t) } ||
-                synonymTerms.any { syn -> label.contains(syn) }
+                synonymTerms.any { syn -> label.contains(syn) } ||
+                (optLetter != null && Regex("""^\s*[(]?${optLetter}[).:\s]""").containsMatchIn(label))
         }
     }
 
@@ -251,8 +322,6 @@ class UiGroundingEngine {
             if (byId != null) {
                 val q = targetName.trim().lowercase(Locale.ROOT)
                 if (q.isBlank() || labelMatchesName(byId, q)) return byId
-                // The number now points at something else: the screen changed since inspect_screen.
-                // Do NOT blindly tap it. Fall through to a match by label instead.
                 Log.w(TAG, "element_id=$elementId now points to '${byId.primaryLabel}' but target_name='$targetName'. " +
                     "Screen changed since inspect_screen; matching by label instead of tapping the id.")
             }
@@ -261,23 +330,38 @@ class UiGroundingEngine {
         val query = targetName.trim().lowercase(Locale.ROOT)
         if (query.isBlank()) return null
 
-        // On Flow itself, brand text is page copy, not a navigation result. Never route
-        // a request for Google Flow to the page's own banner/help text.
         if (isGoogleFlowSurface(elements) && query.contains("google flow") &&
             !query.contains("new project") && !query.contains("open project")) {
             return null
         }
 
-        val cleanQuery = query.replace("[^a-zA-Z0-9]".toRegex(), "")
+        val cleanQuery = McqGrounder.normalizeUnicode(query)
         val strippedQuery = query
             .replace("\\b(channel|group|folder|chat|app|page|tab|telegram|whatsapp|file)\\b".toRegex(RegexOption.IGNORE_CASE), "")
             .trim()
-        val cleanStrippedQuery = strippedQuery.replace("[^a-zA-Z0-9]".toRegex(), "")
+        val cleanStrippedQuery = McqGrounder.normalizeUnicode(strippedQuery)
+
+        // MCQ Option Grounding Priority: match visible quiz/radio options BEFORE ordinal card heuristics
+        val quizState = McqGrounder.detectQuizState(elements)
+        if (quizState.isMcqScreen) {
+            if (McqGrounder.isNextNavigationTarget(query) && quizState.nextButton != null) {
+                Log.i(TAG, "Grounded MCQ Next button: '${quizState.nextButton.primaryLabel}' (enabled=${quizState.nextButton.isEnabled})")
+                return quizState.nextButton
+            }
+            if (McqGrounder.isPreviousNavigationTarget(query) && quizState.previousButton != null) {
+                Log.i(TAG, "Grounded MCQ Previous button: '${quizState.previousButton.primaryLabel}'")
+                return quizState.previousButton
+            }
+            McqGrounder.findMatchingOption(quizState, targetName)?.let { matchedOpt ->
+                Log.i(TAG, "Grounded MCQ option '${matchedOpt.letter}': '${matchedOpt.label}' (checked=${matchedOpt.isChecked})")
+                return matchedOpt.radioElement ?: matchedOpt.element
+            }
+        }
 
         // Ordinal matching (1st, 2nd, 3rd, pehli, dusri, teesri, etc.) — ONLY for card/list ordinals,
-        // NEVER hijack icon queries like "3 dots", "3 line menu", "3 bar" onto card #3!
+        // NEVER hijack icon queries ("3 dots", "3 line") and NEVER tap top Chrome chrome or small question pills.
         val isIconCountPhrase = Regex("\\b(dot|dots|line|lines|bar|bars|dash|bindu|menu)\\b").containsMatchIn(query)
-        val ordinalIndex = if (isIconCountPhrase) null else when {
+        val ordinalIndex = if (isIconCountPhrase || quizState.isMcqScreen) null else when {
             query.contains("pehli") || query.contains("first") || query.contains("1st") || query == "1" || Regex("""^(1|item\s+1|result\s+1|video\s+1|option\s+1)\b""").containsMatchIn(query) -> 1
             query.contains("dusri") || query.contains("doosri") || query.contains("second") || query.contains("2nd") || query == "2" || Regex("""^(2|item\s+2|result\s+2|video\s+2|option\s+2)\b""").containsMatchIn(query) -> 2
             query.contains("teesri") || query.contains("tisri") || query.contains("third") || query.contains("3rd") || query == "3" || Regex("""^(3|item\s+3|result\s+3|video\s+3|option\s+3)\b""").containsMatchIn(query) -> 3
@@ -285,9 +369,35 @@ class UiGroundingEngine {
             query.contains("paanchvi") || query.contains("fifth") || query.contains("5th") || query == "5" || Regex("""^(5|item\s+5|result\s+5|video\s+5|option\s+5)\b""").containsMatchIn(query) -> 5
             else -> null
         }
+        val isYouTubeScreen = elements.any { it.viewId.contains("com.google.android.youtube", ignoreCase = true) }
+        val screenH = (elements.maxOfOrNull { it.bounds.bottom } ?: 2400).coerceAtLeast(800)
+
         if (ordinalIndex != null) {
+            if (isYouTubeScreen) {
+                val ytCards = elements.filter {
+                    (it.isClickable || it.isImageOrThumbnail) &&
+                        YouTubeSearchHelper.isPlayableYouTubeVideoCard(
+                            viewId = it.viewId,
+                            text = it.text,
+                            contentDescription = it.contentDescription,
+                            topPx = it.bounds.top,
+                            heightPx = it.bounds.height(),
+                            screenHeightPx = screenH
+                        )
+                }.sortedBy { it.bounds.top }
+                if (ytCards.size >= ordinalIndex) {
+                    val card = ytCards[ordinalIndex - 1]
+                    Log.i(TAG, "Grounded YouTube playable ordinal ($ordinalIndex): '${card.primaryLabel}' (id=${card.id})")
+                    return card
+                }
+            }
             val cards = elements.filter {
-                (it.isClickable || it.isImageOrThumbnail) && it.bounds.height() >= 80 && it.bounds.top >= 80 && !it.isGenericContainer
+                (it.isClickable || it.isImageOrThumbnail) &&
+                    it.bounds.height() >= 80 &&
+                    it.bounds.top >= 200 &&
+                    !it.isGenericContainer &&
+                    !McqGrounder.isBrowserChromeUi(it) &&
+                    !McqGrounder.isQuestionPillElement(it)
             }.sortedBy { it.bounds.top }
             if (cards.size >= ordinalIndex) {
                 val card = cards[ordinalIndex - 1]
@@ -296,11 +406,42 @@ class UiGroundingEngine {
             }
         }
 
+        // Generic YouTube video selection ("song", "gaana", "video", "play song") -> pick top playable non-Ad video card (#16)
+        val isGenericYouTubeSongQuery = isYouTubeScreen && query in setOf(
+            "song", "gaana", "gana", "video", "music", "play song", "play video", "play first", "first video", "first song", "select"
+        )
+        if (isGenericYouTubeSongQuery) {
+            val topYtCard = elements.filter {
+                (it.isClickable || it.isImageOrThumbnail) &&
+                    YouTubeSearchHelper.isPlayableYouTubeVideoCard(
+                        viewId = it.viewId,
+                        text = it.text,
+                        contentDescription = it.contentDescription,
+                        topPx = it.bounds.top,
+                        heightPx = it.bounds.height(),
+                        screenHeightPx = screenH
+                    )
+            }.minByOrNull { it.bounds.top }
+            if (topYtCard != null) {
+                Log.i(TAG, "Grounded generic YouTube playable card: '${topYtCard.primaryLabel}' (id=${topYtCard.id})")
+                return topYtCard
+            }
+        }
+
         // Icon / Menu / Incognito / Overflow synonym matching (works across Chrome, Settings, Instagram, YouTube, etc.)
         val synonymTerms = normalizeSynonymTokens(query)
         if (synonymTerms.isNotEmpty()) {
-            val clickableFirst = elements.filter { !it.isEditable && (it.isClickable || it.isCheckable) } +
-                elements.filter { !it.isEditable && !it.isClickable && !it.isCheckable }
+            val isOverflowQuery = Regex("\\b(3|three|teen)\\s*(dot|dots|point|line|lines|bindu|menu)\\b").containsMatchIn(query) ||
+                query.contains("overflow") || query.contains("more options") || query.contains("3 dot")
+            val clickableFirst = (elements.filter { !it.isEditable && (it.isClickable || it.isCheckable) } +
+                elements.filter { !it.isEditable && !it.isClickable && !it.isCheckable })
+                .sortedByDescending { el ->
+                    var boost = 0
+                    if (isOverflowQuery && el.bounds.top in 0..420) boost += 20
+                    if (el.viewId.contains("menu_button", ignoreCase = true) || el.viewId.contains("menu_item", ignoreCase = true)) boost += 30
+                    if (el.primaryLabel.contains("incognito", ignoreCase = true)) boost += 30
+                    boost
+                }
             for (syn in synonymTerms) {
                 clickableFirst.firstOrNull { el ->
                     val textL = el.text.lowercase(Locale.ROOT)
@@ -520,9 +661,9 @@ class UiGroundingEngine {
                 val text = it.text.lowercase(Locale.ROOT)
                 val desc = it.contentDescription.lowercase(Locale.ROOT)
                 val vidShort = it.viewId.substringAfterLast("/").lowercase(Locale.ROOT)
-                val cleanText = text.replace("[^a-zA-Z0-9]".toRegex(), "")
-                val cleanDesc = desc.replace("[^a-zA-Z0-9]".toRegex(), "")
-                val cleanVid = vidShort.replace("[^a-zA-Z0-9]".toRegex(), "")
+                val cleanText = McqGrounder.normalizeUnicode(text)
+                val cleanDesc = McqGrounder.normalizeUnicode(desc)
+                val cleanVid = McqGrounder.normalizeUnicode(vidShort)
 
                 text == query || desc == query || vidShort == query ||
                     (cleanQuery.isNotEmpty() && (cleanText == cleanQuery || cleanDesc == cleanQuery || cleanVid == cleanQuery)) ||
@@ -530,35 +671,35 @@ class UiGroundingEngine {
             }?.let { return it }
         }
 
-        // Case 3: Normalized Substring Containment (text, desc, viewId) with non-editable priority
+        // Case 3: Normalized Substring Containment (text, desc, viewId — Unicode/Hindi safe!) with non-editable priority
         for (tier in tiers) {
             tier.filter {
                 val text = it.text.lowercase(Locale.ROOT)
                 val desc = it.contentDescription.lowercase(Locale.ROOT)
                 val vidShort = it.viewId.substringAfterLast("/").lowercase(Locale.ROOT)
-                val cleanText = text.replace("[^a-zA-Z0-9]".toRegex(), "")
-                val cleanDesc = desc.replace("[^a-zA-Z0-9]".toRegex(), "")
-                val cleanVid = vidShort.replace("[^a-zA-Z0-9]".toRegex(), "")
+                val cleanText = McqGrounder.normalizeUnicode(text)
+                val cleanDesc = McqGrounder.normalizeUnicode(desc)
+                val cleanVid = McqGrounder.normalizeUnicode(vidShort)
 
-                (cleanQuery.length >= 3 && (
+                (cleanQuery.length >= 2 && (
                     cleanText.contains(cleanQuery) || cleanDesc.contains(cleanQuery) || cleanVid.contains(cleanQuery) ||
-                        cleanQuery.contains(cleanText.takeIf { t -> t.length >= 3 } ?: "____")
+                        cleanQuery.contains(cleanText.takeIf { t -> t.length >= 2 } ?: "____")
                     )) ||
-                    (cleanStrippedQuery.length >= 3 && (
+                    (cleanStrippedQuery.length >= 2 && (
                         cleanText.contains(cleanStrippedQuery) || cleanDesc.contains(cleanStrippedQuery) || cleanVid.contains(cleanStrippedQuery) ||
-                            cleanStrippedQuery.contains(cleanText.takeIf { t -> t.length >= 3 } ?: "____")
+                            cleanStrippedQuery.contains(cleanText.takeIf { t -> t.length >= 2 } ?: "____")
                         ))
             }.minWithOrNull(
                 compareBy<UiElementInfo> { element ->
-                    val text = element.text.lowercase(Locale.ROOT).replace("[^a-zA-Z0-9]".toRegex(), "")
-                    val desc = element.contentDescription.lowercase(Locale.ROOT).replace("[^a-zA-Z0-9]".toRegex(), "")
+                    val text = McqGrounder.normalizeUnicode(element.text)
+                    val desc = McqGrounder.normalizeUnicode(element.contentDescription)
                     if (text == cleanQuery || desc == cleanQuery) 0 else element.primaryLabel.length
                 }.thenBy { it.bounds.width().toLong() * it.bounds.height().toLong() }
             )?.let { return it }
         }
 
-        // Case 4: Token/Word Overlap with non-editable priority
-        val queryTokens = query.split("\\s+".toRegex()).filter { it.length > 2 }
+        // Case 4: Unicode Token/Word Overlap with non-editable priority
+        val queryTokens = McqGrounder.tokenizeUnicode(query)
         if (queryTokens.isNotEmpty()) {
             for (tier in tiers) {
                 val bestTokenMatch = tier.filter { el ->
@@ -646,6 +787,8 @@ class UiGroundingEngine {
 
     /**
      * Compact summary of visible interactive elements to attach to prompt or context.
+     * Groups dense numeric question pills so MCQ questions, options, tick states, and nav buttons
+     * are never truncated off the screen summary.
      */
     fun formatElementsSummary(elements: List<UiElementInfo>, root: AccessibilityNodeInfo? = null): String {
         val sb = StringBuilder()
@@ -653,11 +796,47 @@ class UiGroundingEngine {
         if (pkg.isNotBlank()) sb.append("App: $pkg | ")
         if (title.isNotBlank()) sb.append("Screen Title: \"$title\"\n") else if (pkg.isNotBlank()) sb.append("\n")
 
+        val quizState = McqGrounder.detectQuizState(elements)
+        if (quizState.isMcqScreen) {
+            sb.append("[MCQ / QUIZ STATE]\n")
+            if (quizState.questionHeader.isNotBlank()) sb.append("Header: ${quizState.questionHeader}\n")
+            if (quizState.questionText.isNotBlank()) sb.append("Question: \"${quizState.questionText}\"\n")
+            if (quizState.checkedOption != null) {
+                sb.append("Selected Option: ✓ CHECKED -> [${quizState.checkedOption.letter.uppercaseChar()}] ${quizState.checkedOption.label}\n")
+            } else {
+                sb.append("Selected Option: NONE (⚠️ NO option checked — do NOT click Next yet!)\n")
+            }
+            if (!quizState.warningBanner.isNullOrBlank()) {
+                sb.append("Warning Banner: ⚠️ \"${quizState.warningBanner}\"\n")
+            }
+            quizState.options.forEach { opt ->
+                val stateMark = if (opt.isChecked) "✓ CHECKED" else "○ UNCHECKED"
+                sb.append("  Option ${opt.letter.uppercaseChar()} [#${opt.element.id}] ($stateMark): ${opt.label}\n")
+            }
+            val navParts = buildList {
+                quizState.previousButton?.let { add("[#${it.id}] Previous") }
+                quizState.nextButton?.let {
+                    add("[#${it.id}] ${it.primaryLabel.ifBlank { "Next" }} (${if (it.isEnabled) "ENABLED" else "DISABLED"})")
+                }
+                quizState.submitButton?.let { add("[#${it.id}] ${it.primaryLabel}") }
+            }
+            if (navParts.isNotEmpty()) sb.append("Quiz Nav: ${navParts.joinToString(" | ")}\n")
+            sb.append("\n")
+        }
+
         sb.append("Visible Elements:\n")
-        val meaningful = elements.filter {
+        val meaningfulAll = elements.filter {
             (it.text.isNotBlank() || it.contentDescription.isNotBlank() || it.isEditable || it.isCheckable ||
-                (it.isClickable && it.isImageOrThumbnail) || (it.isClickable && it.viewId.isNotBlank())) &&
+                it.hasCheckableDescendant || (it.isClickable && it.isImageOrThumbnail) || (it.isClickable && it.viewId.isNotBlank())) &&
                 !it.isGenericContainer
+        }
+
+        val pills = meaningfulAll.filter { McqGrounder.isQuestionPillElement(it) }
+        val collapsePills = pills.size >= 6
+        val meaningful = if (collapsePills) {
+            meaningfulAll.filterNot { McqGrounder.isQuestionPillElement(it) }
+        } else {
+            meaningfulAll
         }
 
         val screenBounds = Rect()
@@ -673,7 +852,12 @@ class UiGroundingEngine {
             sb.append("RULE: Do NOT type your generation/creative prompt into the Google search bar! Look at the clickable website result links below and click the matching result to enter the website.\n")
         }
 
-        for (el in meaningful.take(110)) {
+        if (collapsePills) {
+            val pillList = pills.joinToString(", ") { "[#${it.id}]=${it.text.trim()}" }
+            sb.append("Question Pills (${pills.size}): $pillList\n")
+        }
+
+        for (el in meaningful.take(160)) {
             val label = when {
                 el.text.isNotBlank() && el.contentDescription.isNotBlank() && !el.contentDescription.equals(el.text, true) ->
                     "${el.text} [desc: ${el.contentDescription}]"
@@ -692,9 +876,18 @@ class UiGroundingEngine {
 
             sb.append("[#${el.id}] $label")
             if (el.isSwitchOrToggle()) {
-                sb.append(" (Switch: ${if (el.isChecked) "ON" else "OFF"})")
+                val stateLabel = if (el.className.contains("Radio", ignoreCase = true) || el.hasCheckableDescendant) {
+                    if (el.isEffectivelyChecked()) "Radio: CHECKED ✓" else "Radio: UNCHECKED ○"
+                } else {
+                    if (el.isEffectivelyChecked()) "Switch: ON" else "Switch: OFF"
+                }
+                sb.append(" ($stateLabel)")
+            } else if (el.isSelected) {
+                sb.append(" (Selected ✓)")
             } else if (el.isEditable) {
                 sb.append(" (InputField)")
+            } else if (!el.isEnabled && el.isClickable) {
+                sb.append(" (DISABLED)")
             } else if (el.isImageOrThumbnail) {
                 val spatial = getSpatialPosition(el.bounds, screenWidth, screenHeight)
                 sb.append(" (Position: $spatial, bounds=[${el.bounds.left},${el.bounds.top},${el.bounds.right},${el.bounds.bottom}])")

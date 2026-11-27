@@ -188,12 +188,31 @@ fun ContactsScreen(
 
                                 // Contact Details
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = contact.name,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = contact.name,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (contact.autoReplyEnabled) {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = AppColors.accentTeal.copy(alpha = 0.14f)
+                                            ) {
+                                                Text(
+                                                    text = "Auto-Reply",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = AppColors.accentTeal,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                     Text(
                                         text = contact.number,
                                         fontSize = 13.sp,
@@ -270,12 +289,12 @@ fun ContactsScreen(
         ContactEditDialog(
             initial = editingContact,
             onDismiss = { showAddDialog = false },
-            onSave = { name, number, aliases, isWhatsApp, isPhone ->
+            onSave = { name, number, aliases, isWhatsApp, isPhone, autoReplyEnabled ->
                 if (editingContact == null) {
-                    AuraContactsManager.addContact(name, number, aliases, isWhatsApp, isPhone)
+                    AuraContactsManager.addContact(name, number, aliases, isWhatsApp, isPhone, autoReplyEnabled)
                     Toast.makeText(context, "Added $name", Toast.LENGTH_SHORT).show()
                 } else {
-                    AuraContactsManager.updateContact(editingContact!!.id, name, number, aliases, isWhatsApp, isPhone)
+                    AuraContactsManager.updateContact(editingContact!!.id, name, number, aliases, isWhatsApp, isPhone, autoReplyEnabled)
                     Toast.makeText(context, "Updated $name", Toast.LENGTH_SHORT).show()
                 }
                 showAddDialog = false
@@ -288,13 +307,14 @@ fun ContactsScreen(
 private fun ContactEditDialog(
     initial: AuraContactsManager.ContactItem?,
     onDismiss: () -> Unit,
-    onSave: (name: String, number: String, aliases: List<String>, isWhatsApp: Boolean, isPhone: Boolean) -> Unit
+    onSave: (name: String, number: String, aliases: List<String>, isWhatsApp: Boolean, isPhone: Boolean, autoReplyEnabled: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var number by remember { mutableStateOf(initial?.number ?: "") }
     var aliasesText by remember { mutableStateOf(initial?.aliases?.joinToString(", ") ?: "") }
     var isWhatsApp by remember { mutableStateOf(initial?.isWhatsApp ?: true) }
     var isPhone by remember { mutableStateOf(initial?.isPhone ?: true) }
+    var autoReplyEnabled by remember { mutableStateOf(initial?.autoReplyEnabled ?: false) }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -368,6 +388,25 @@ private fun ContactEditDialog(
                     Text("Direct Call", fontSize = 13.sp)
                 }
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = autoReplyEnabled,
+                        onCheckedChange = { autoReplyEnabled = it },
+                        enabled = isWhatsApp
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Allow Direct WhatsApp Auto-Reply", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            "Auto-replies via notifications without asking (groups & OTPs still confirm first)",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(18.dp))
 
                 Row(
@@ -382,7 +421,7 @@ private fun ContactEditDialog(
                         onClick = {
                             if (name.isBlank() || number.isBlank()) return@Button
                             val aliasesList = aliasesText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                            onSave(name, number, aliasesList, isWhatsApp, isPhone)
+                            onSave(name, number, aliasesList, isWhatsApp, isPhone, autoReplyEnabled)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = AppColors.accentTeal),
                         shape = RoundedCornerShape(12.dp),

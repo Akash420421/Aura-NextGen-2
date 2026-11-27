@@ -66,6 +66,7 @@ class GeminiLiveWebSocket(
 
     private var sessionRenewalJob: Job? = null
     private var reconnectJob: Job? = null
+    @Volatile private var setupCompatTier: Int = 0
     var promptProvider: (() -> String)? = null
 
     fun isSessionReady(): Boolean = isConnected.get() && isSetupComplete.get()
@@ -144,14 +145,19 @@ class GeminiLiveWebSocket(
                         val isModelError = reason.contains("BidiGenerateContent", ignoreCase = true) ||
                                            reason.contains("not found", ignoreCase = true) ||
                                            reason.contains("not supported", ignoreCase = true)
-                        if (isModelError) {
-                            if (activeModel != GeminiConstants.MODEL_3_8_LIVE) {
-                                Log.w(TAG, "Model $activeModel rejected ($reason). Falling back to ${GeminiConstants.MODEL_3_8_LIVE}")
-                                activeModel = GeminiConstants.MODEL_3_8_LIVE
-                                listener.onConnectionStateChanged("RECONNECTING...")
-                                scheduleReconnect()
-                                return
-                            }
+                        if (isModelError && activeModel != GeminiConstants.MODEL_3_8_LIVE) {
+                            Log.w(TAG, "Model $activeModel rejected ($reason). Falling back to ${GeminiConstants.MODEL_3_8_LIVE}")
+                            activeModel = GeminiConstants.MODEL_3_8_LIVE
+                            listener.onConnectionStateChanged("RECONNECTING...")
+                            scheduleReconnect()
+                            return
+                        }
+                        if (setupCompatTier < 2 && !isApiKeyError) {
+                            setupCompatTier++
+                            Log.w(TAG, "Setup closed with 1008 ($reason); degrading to setupCompatTier=$setupCompatTier and reconnecting.")
+                            listener.onConnectionStateChanged("RECONNECTING...")
+                            scheduleReconnect()
+                            return
                         }
                         listener.onError("Gemini setup rejected: $reason", isFatal = true, errorCode = "SETUP_REJECTED")
                         listener.onConnectionStateChanged("OFFLINE")
@@ -214,6 +220,7 @@ class GeminiLiveWebSocket(
 
     private fun sendSetupMessage(ws: WebSocket) {
         val effectivePrompt = promptProvider?.invoke() ?: systemPrompt
+        val tier = setupCompatTier
         val setup = JSONObject().apply {
             put("setup", JSONObject().apply {
                 put("model", activeModel)
@@ -229,19 +236,42 @@ class GeminiLiveWebSocket(
                             })
                         })
                     })
-                    put("temperature", 0.6)
-                    // Disabling thinking budget eliminates internal chain-of-thought delay (<1s response)
-                    put("thinking_config", JSONObject().apply {
-                        put("thinking_budget", 0)
-                    })
+                    put("temperature", 0.55)
+                    if (tier == 0 && !activeModel.contains("3.8")) {
+                        // Legacy 2.0/3.1 models benefit from zero thinking budget; 3.8 Live rejects thinking_level/budget if unsupported
+                        put("thinking_config", JSONObject().apply {
+                            put("thinking_budget", 0)
+                        })
+                    }
                 })
+                if (tier <= 1) {
+                    put("input_audio_transcription", JSONObject())
+                    put("output_audio_transcription", JSONObject())
+                }
+                if (tier == 0) {
+                    put("realtime_input_config", JSONObject().apply {
+                        put("automatic_activity_detection", JSONObject().apply {
+                            put("disabled", false)
+                            put("start_of_speech_sensitivity", "START_SENSITIVITY_HIGH")
+                            put("end_of_speech_sensitivity", "END_SENSITIVITY_LOW")
+                            put("prefix_padding_ms", 80)
+                            put("silence_duration_ms", 550)
+                        })
+                    })
+                    put("context_window_compression", JSONObject().apply {
+                        put("trigger_tokens", 65536)
+                        put("sliding_window", JSONObject().apply {
+                            put("target_tokens", 16384)
+                        })
+                    })
+                }
                 put("tools", JSONArray().put(JSONObject().apply {
                     put("functionDeclarations", buildToolDeclarations())
                 }))
             })
         }
         val json = setup.toString()
-        Log.d(TAG, "Sending BidiSetup payload to Gemini Live")
+        Log.d(TAG, "Sending BidiSetup payload to Gemini Live (compatTier=$tier)")
         ws.send(json)
     }
 
@@ -250,7 +280,7 @@ class GeminiLiveWebSocket(
             // 0. start_new_chat_task
             put(JSONObject().apply {
                 put("name", "start_new_chat_task")
-                put("description", "Instructs the app to create a new chat and build the requested website, app, local server, or complex task there. The task will run in that dedicated chat, keeping the voice session responsive. Provide the complete request as 'prompt'.")
+                put("description", "Instructs the app to create ONE dedicated new chat and start a brand-new coding task/website/app build there. Provide the complete request as 'prompt'. STRICT RULE (#9): NEVER call this to answer a Questionnaire/Mode card (like 'Standard mode', 'Agent mode', 'Submit', 'Skip' — ALWAYS use answer_chat_question instead!) and NEVER call it repeatedly for a task that is already running (use check_task_status or send_task_update).")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -342,13 +372,13 @@ class GeminiLiveWebSocket(
             // 0f-3. open_chat_by_name
             put(JSONObject().apply {
                 put("name", "open_chat_by_name")
-                put("description", "Opens a specific chat, voice session, or renamed conversation on screen by searching its name or title. Call when user asks to open a specific chat, e.g. 'Project Alpha wala chat kholo', 'Meeting Notes chat open karo', 'wo wala chat kholo jiska naam X hai', or 'open session X'.")
+                put("description", "Opens ANY specific chat, pinned chat, archived chat, old project chat, or renamed conversation inside Aura on screen by searching title, project, pinned status, or database metadata (closes Drawer/Settings/Voice tab cleanly and verifies the active chat switched). Call when user asks e.g. 'jo chat pin hai wo kholo', 'pinned chat open karo', 'Flipkart E-Commerce website wala chat kholo', 'Project Alpha wala chat kholo', or 'Meeting Notes chat open karo'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("chat_name", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "The name or title of the chat or session to open (e.g. 'Project Alpha', 'Meeting Notes', 'Voice Session • 10:49 AM')")
+                            put("description", "The name, project, keyword, or pin reference of the chat to open (e.g. 'pinned chat', 'Flipkart E-Commerce Website Design', 'Project Alpha')")
                         })
                     })
                     put("required", JSONArray().apply { put("chat_name") })
@@ -453,7 +483,7 @@ class GeminiLiveWebSocket(
             // 2. open_website
             put(JSONObject().apply {
                 put("name", "open_website")
-                put("description", "Opens one or more websites/URLs. Defaults to opening inside Aura AI's In-Built Web Browser. Set external=true ONLY if the user explicitly commanded 'Chrome mein kholo' or 'external browser'.")
+                put("description", "Opens multiple website URLs in Chrome (when external=true) or Aura In-Built Browser. For opening/controlling ONE site or search inside Aura's In-Built Browser, prefer `open_in_app_browser` so DOM controls (`browser_click`, `browser_type`, `browser_scroll`) work immediately.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -481,7 +511,7 @@ class GeminiLiveWebSocket(
             // 3. search_in_chrome
             put(JSONObject().apply {
                 put("name", "search_in_chrome")
-                put("description", "Opens Google Chrome and searches for a topic/question, or opens a website URL in a tab (e.g. \"search xyz in Chrome\", \"google xyz\").")
+                put("description", "Opens the EXTERNAL Google Chrome app and searches there. ONLY call if user EXPLICITLY says 'Chrome mein search karo' or 'Chrome app mein kholo'. NEVER use for Aura's In-Built Browser (use `open_in_app_browser` or `browser_type` instead).")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -513,7 +543,7 @@ class GeminiLiveWebSocket(
             // 5. search_youtube
             put(JSONObject().apply {
                 put("name", "search_youtube")
-                put("description", "Opens YouTube search results page for a query without auto-playing.")
+                put("description", "Opens YouTube search results page WITHOUT auto-playing. Use ONLY when the user explicitly wants to browse results ('sirf search results dikhao, play mat karo'). To PLAY any song/video, ALWAYS use search_and_play_youtube instead.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -590,6 +620,56 @@ class GeminiLiveWebSocket(
                 })
             })
 
+            // 7b. reply_whatsapp_notification (#18)
+            put(JSONObject().apply {
+                put("name", "reply_whatsapp_notification")
+                put("description", "Replies to an incoming WhatsApp message from notification Smart Confirm queue in background using RemoteInput (fast, without opening WhatsApp), or dismisses it. Use when user confirms sending a suggested draft ('haan bhej do') or dictates a reply ('Rahul ko reply karo...').")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("sender_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Sender name to reply to (leave blank to reply to the latest pending WhatsApp notification).")
+                        })
+                        put("message", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Reply message text. Omit or leave blank to send the pre-generated suggested draft.")
+                        })
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "'send' (default) to reply now, or 'dismiss' to ignore/clear the pending message.")
+                        })
+                    })
+                })
+            })
+
+            // 7c. configure_whatsapp_auto_reply (#18)
+            put(JSONObject().apply {
+                put("name", "configure_whatsapp_auto_reply")
+                put("description", "Checks or configures WhatsApp Notification Auto-Reply mode: Smart Confirm Mode (default, asks before sending) vs Direct Auto-Reply for Saved Contacts (replies automatically with 120s cooldown; OTP/groups still confirm first) vs Off.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("mode", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "'status' (read current mode & permission), 'smart_confirm' (ask before sending), 'direct_saved_contacts' (auto-reply to saved 1:1 contacts), or 'off'.")
+                        })
+                        put("ai_draft", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Optional toggle for AI contextual draft generation.")
+                        })
+                        put("fallback_template", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional custom fallback reply message template.")
+                        })
+                        put("open_permission_settings", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Set true if Notification Reader permission is missing and user asked to open Settings.")
+                        })
+                    })
+                })
+            })
+
             // 8. whatsapp_call
             put(JSONObject().apply {
                 put("name", "whatsapp_call")
@@ -630,10 +710,10 @@ class GeminiLiveWebSocket(
                 })
             })
 
-            // 10. set_volume
+            // 10. set_volume (#11)
             put(JSONObject().apply {
                 put("name", "set_volume")
-                put("description", "Instantly controls device volume across streams ('music'/'media', 'ring', 'alarm', 'notification', 'call', 'all'): 'set', 'increase', 'decrease', 'mute', 'unmute', or 'get'.")
+                put("description", "Instantly controls and readback-verifies device volume across streams ('music'/'media', 'ring', 'alarm', 'notification', 'call', 'all'): 'set', 'increase', 'decrease', 'mute', 'unmute', or 'get'. Always returns verified actual_percent and capped_by_system if Android Safe Volume or DND restricts it.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -646,34 +726,42 @@ class GeminiLiveWebSocket(
                         })
                         put("percentage", JSONObject().apply {
                             put("type", "INTEGER")
-                            put("description", "Target volume percentage (0-100) for 'set'.")
+                            put("description", "Target volume percentage (0-100) for 'set' (e.g., 100 for full/max, 50 for half).")
+                        })
+                        put("step_percent", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional increment/decrement step (5-50, default 15) for 'increase' or 'decrease'.")
                         })
                         put("stream", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Optional stream: 'music' (default), 'ring', 'alarm', 'notification', 'call', or 'all'.")
+                            put("description", "Optional stream: 'music' (default media), 'ring', 'alarm', 'notification', 'call', or 'all'.")
                         })
                     })
                     put("required", JSONArray().put("action"))
                 })
             })
 
-            // 11. set_brightness
+            // 11. set_brightness (#13)
             put(JSONObject().apply {
                 put("name", "set_brightness")
-                put("description", "Controls screen brightness: 'set', 'increase', 'decrease', 'auto_on', or 'auto_off'.")
+                put("description", "Controls and readback-verifies screen brightness: 'set', 'increase', 'decrease', 'auto_on', 'auto_off', or 'get'. Returns verified percentage and permission_required if Modify System Settings is missing.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("action", JSONObject().apply {
                             put("type", "STRING")
                             put("enum", JSONArray().apply {
-                                put("set"); put("increase"); put("decrease"); put("auto_on"); put("auto_off")
+                                put("set"); put("increase"); put("decrease"); put("auto_on"); put("auto_off"); put("get")
                             })
-                            put("description", "Action: 'set', 'increase', 'decrease', 'auto_on', or 'auto_off'.")
+                            put("description", "Action: 'set', 'increase', 'decrease', 'auto_on', 'auto_off', or 'get'.")
                         })
                         put("percentage", JSONObject().apply {
                             put("type", "INTEGER")
-                            put("description", "Target percentage level from 0 to 100 for 'set'.")
+                            put("description", "Target brightness percentage (0-100) for 'set'.")
+                        })
+                        put("step_percent", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional step size (5-50, default 20) for increase/decrease.")
                         })
                     })
                     put("required", JSONArray().put("action"))
@@ -715,16 +803,16 @@ class GeminiLiveWebSocket(
                 })
             })
 
-            // 13b. get_device_status
+            // 13b. get_device_status (#12)
             put(JSONObject().apply {
                 put("name", "get_device_status")
-                put("description", "Instantly reads real-time phone hardware status: battery percentage, charging status & temperature, all volume levels (media/ring/alarm/call), ringer mode, DND, screen brightness, RAM, storage, Wi-Fi/cellular network, and flashlight state.")
+                put("description", "Instantly reads real-time phone hardware status: battery percentage, charging status & temperature, all volume levels (media/ring/alarm/call), ringer mode, DND, screen brightness, RAM, storage, Wi-Fi/cellular network, and flashlight state. ALWAYS call this immediately whenever asked for battery percentage or phone status.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("sections", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Comma-separated sections (default all): 'battery,audio,display,network,memory,storage,system'.")
+                            put("description", "Comma-separated sections (fast default: 'battery,audio,system'; full: 'battery,audio,display,network,memory,storage,system').")
                         })
                     })
                 })
@@ -746,20 +834,24 @@ class GeminiLiveWebSocket(
                 })
             })
 
-            // 13d. set_device_setting
+            // 13d. set_device_setting (#13)
             put(JSONObject().apply {
                 put("name", "set_device_setting")
-                put("description", "Controls or opens quick device settings/panels: Do Not Disturb ('dnd' with enabled=true/false), 'wifi', 'internet', 'bluetooth', 'mobile_data', 'location', 'airplane', 'hotspot', 'battery_saver', 'dark_mode', 'display', 'volume_panel', 'settings'.")
+                put("description", "Directly changes or auto-toggles phone settings and verifies the final state: 'wifi', 'bluetooth', 'mobile_data', 'location' (GPS), 'dnd', 'airplane', 'hotspot', 'battery_saver', 'dark_mode', 'auto_rotate', 'screen_timeout', 'auto_brightness', 'flashlight', 'nfc', 'volume_panel', 'display', 'storage', 'settings'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("setting", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Target setting name: 'dnd', 'wifi', 'internet', 'bluetooth', 'location', 'airplane', 'hotspot', 'battery_saver', 'display', 'volume_panel', etc.")
+                            put("description", "Target setting name: 'wifi', 'bluetooth', 'mobile_data', 'location', 'dnd', 'airplane', 'hotspot', 'battery_saver', 'dark_mode', 'auto_rotate', 'screen_timeout', 'auto_brightness', 'flashlight', 'nfc', 'volume_panel', etc.")
                         })
                         put("enabled", JSONObject().apply {
                             put("type", "BOOLEAN")
-                            put("description", "Optional true/false toggle (supported directly for DND).")
+                            put("description", "True to turn ON, false to turn OFF (omit to toggle).")
+                        })
+                        put("value", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional setting value such as screen timeout duration ('30s', '1 min', '2 min', '5 min').")
                         })
                     })
                     put("required", JSONArray().put("setting"))
@@ -788,7 +880,7 @@ class GeminiLiveWebSocket(
             // 13f. read_notifications
             put(JSONObject().apply {
                 put("name", "read_notifications")
-                put("description", "Reads recent Android notifications and automatically extracts incoming OTP verification codes.")
+                put("description", "Reads recent Android notifications, pending WhatsApp messages awaiting Smart Confirm reply, and automatically extracts incoming OTP verification codes.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -1038,13 +1130,13 @@ class GeminiLiveWebSocket(
             // 26. open_in_app_browser (Primary)
             put(JSONObject().apply {
                 put("name", "open_in_app_browser")
-                put("description", "Opens ANY website, URL, or Google search inside Aura's own In-Built Browser and waits for the page to load cleanly so you can immediately read or control it with browser_read_page/browser_find/browser_click/browser_type.")
+                put("description", "Opens ANY website, URL, shortcut (e.g. 'google flow' opens labs.google/fx/tools/flow directly, 'youtube', 'amazon', 'flipkart'), or Google search inside Aura's own In-Built Browser and waits for the page to load cleanly so you can control it with browser_read_page/browser_find/browser_click/browser_type.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("url", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Website URL, shorthand ('youtube', 'github', 'vercel'), localhost:3000, or search query.")
+                            put("description", "Website URL, shorthand ('google flow', 'amazon', 'youtube', 'github', 'vercel'), localhost:3000, or search query.")
                         })
                         put("new_tab", JSONObject().apply {
                             put("type", "BOOLEAN")
@@ -1062,14 +1154,14 @@ class GeminiLiveWebSocket(
             // 26b-26j: Complete In-Built Browser DOM Control Suite (powered by BrowserMcp)
             put(JSONObject().apply {
                 put("name", "browser_read_page")
-                put("description", "Reads the current page inside Aura's In-Built Browser: returns URL, title, interactive element refs (like ref_12 for buttons/links/inputs), OR full readable article/search text when mode='text'.")
+                put("description", "Reads the current page inside Aura's In-Built Browser: returns URL, title, interactive element refs (like ref_12), full readable text ('text'), or live viewport image & section verification ('images' — checks whether product images, reviews, sponsored ads, or sign-in are actually visible in viewport).")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("mode", JSONObject().apply {
                             put("type", "STRING")
-                            put("enum", JSONArray().apply { put("interactive"); put("all"); put("text") })
-                            put("description", "'interactive' (default: clickable links/buttons/inputs with refs), 'all' (full structure), or 'text' (article/plain text).")
+                            put("enum", JSONArray().apply { put("interactive"); put("all"); put("text"); put("images") })
+                            put("description", "'interactive' (default: clickable links/buttons/inputs with refs), 'images' (verify visible non-sponsored images & current viewport section), 'all' (full structure), or 'text' (article/plain text).")
                         })
                         put("tab_id", JSONObject().apply {
                             put("type", "STRING")
@@ -1081,7 +1173,7 @@ class GeminiLiveWebSocket(
 
             put(JSONObject().apply {
                 put("name", "browser_find")
-                put("description", "Finds elements on the current In-Built Browser page by plain description (e.g. 'search box', 'login button', 'first video', 'add to cart'), returning element refs (ref_X).")
+                put("description", "Finds elements on the current In-Built Browser page by plain description (e.g. 'search box', 'login button', 'first video', 'add to cart'), returning element refs (ref_X) with domain host and sponsored tags.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -1100,7 +1192,7 @@ class GeminiLiveWebSocket(
 
             put(JSONObject().apply {
                 put("name", "browser_click")
-                put("description", "Clicks ANY button, link, menu item, checkbox, or element inside Aura's In-Built Browser using real DOM/touch input! Pass either 'ref' (from browser_find/browser_read_page) OR 'target_name' (e.g. 'Sign in button', 'first result link', 'Videos tab').")
+                put("description", "Clicks ANY button, organic link, menu item, checkbox, or element inside Aura's In-Built Browser while skipping Sponsored ads and search-bar inputs automatically unless explicitly requested. Pass either 'ref' OR 'target_name' (e.g. 'Google Flow official link', 'Sign in button', 'Go button').")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -1122,13 +1214,13 @@ class GeminiLiveWebSocket(
 
             put(JSONObject().apply {
                 put("name", "browser_type")
-                put("description", "Types text into ANY input field, search box, login box, or form inside Aura's In-Built Browser and optionally submits/presses Enter! Pass 'text' and optional 'ref' or 'target_name' (e.g. 'search box', 'email input').")
+                put("description", "Atomically clears existing text, types cleanly into ANY input field (search box, email/login input, form) inside Aura's In-Built Browser, verifies the DOM input value matches (no duplicate/partial chars), and when submit=true submits the form / clicks Go & verifies URL/page navigation! Pass submit=false when only filling an email/form field without submitting.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("text", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Text to type or search for.")
+                            put("description", "Exact text to type or search for.")
                         })
                         put("ref", JSONObject().apply {
                             put("type", "STRING")
@@ -1136,11 +1228,15 @@ class GeminiLiveWebSocket(
                         })
                         put("target_name", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Description of input field (defaults to search/input box).")
+                            put("description", "Description of input field (e.g. 'search box', 'Email or phone input').")
                         })
                         put("submit", JSONObject().apply {
                             put("type", "BOOLEAN")
-                            put("description", "Press Enter / submit after typing (default true).")
+                            put("description", "Press Enter / submit form / click Go after typing (default true for search; pass false for email fields until user says Next/submit).")
+                        })
+                        put("clear_first", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Clear existing text in the input field before typing (default true to prevent partial character glitches).")
                         })
                         put("tab_id", JSONObject().apply {
                             put("type", "STRING")
@@ -1153,13 +1249,14 @@ class GeminiLiveWebSocket(
 
             put(JSONObject().apply {
                 put("name", "browser_scroll")
-                put("description", "Scrolls the webpage inside Aura's In-Built Browser up, down, left, or right.")
+                put("description", "Scrolls the webpage inside Aura's In-Built Browser ('down', 'up', 'left', 'right') OR jumps directly to main non-sponsored images ('images'), and returns live verified viewport section + visible images report so you never misread reviews/ads as product photos.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("direction", JSONObject().apply {
                             put("type", "STRING")
-                            put("enum", JSONArray().apply { put("down"); put("up"); put("left"); put("right") })
+                            put("enum", JSONArray().apply { put("down"); put("up"); put("left"); put("right"); put("images") })
+                            put("description", "Scroll direction, or 'images' to jump to main non-sponsored product/article images.")
                         })
                         put("amount", JSONObject().apply {
                             put("type", "INTEGER")
@@ -1195,7 +1292,7 @@ class GeminiLiveWebSocket(
 
             put(JSONObject().apply {
                 put("name", "browser_tabs")
-                put("description", "Manages tabs and view mode in Aura's In-Built Browser: 'list', 'new', 'switch', 'close', 'desktop', 'mobile'.")
+                put("description", "Manages tabs and view mode in Aura's In-Built Browser: 'list', 'new', 'switch', 'close', 'desktop', 'mobile'. For 'switch' or 'close', pass 'tab_name' (e.g. 'amazon', 'google', 'first', 'previous', '2') or 'tab_id' so the exact right tab is chosen.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -1206,6 +1303,10 @@ class GeminiLiveWebSocket(
                         put("tab_id", JSONObject().apply {
                             put("type", "STRING")
                             put("description", "Target tab_id for switch/close/desktop/mobile.")
+                        })
+                        put("tab_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Tab title, website/domain keyword, or position ('amazon', 'first', 'previous', 'last', '2') for switch/close.")
                         })
                         put("url", JSONObject().apply {
                             put("type", "STRING")
@@ -1238,42 +1339,12 @@ class GeminiLiveWebSocket(
                 })
             })
 
-            // 26b. open_inbuilt_browser (Alias)
-            put(JSONObject().apply {
-                put("name", "open_inbuilt_browser")
-                put("description", "Alias for open_in_app_browser. Opens a website or URL inside Aura AI's In-Built Web Browser.")
-                put("parameters", JSONObject().apply {
-                    put("type", "OBJECT")
-                    put("properties", JSONObject().apply {
-                        put("url", JSONObject().apply {
-                            put("type", "STRING")
-                            put("description", "The website URL or query to open.")
-                        })
-                    })
-                    put("required", JSONArray().put("url"))
-                })
-            })
-
-            // 26c. open_url (Alias)
-            put(JSONObject().apply {
-                put("name", "open_url")
-                put("description", "Opens a URL inside Aura AI's In-Built Web Browser.")
-                put("parameters", JSONObject().apply {
-                    put("type", "OBJECT")
-                    put("properties", JSONObject().apply {
-                        put("url", JSONObject().apply {
-                            put("type", "STRING")
-                            put("description", "The URL to open.")
-                        })
-                    })
-                    put("required", JSONArray().put("url"))
-                })
-            })
+            // Canonical open_in_app_browser is declared above (#26); aliases open_inbuilt_browser/open_url route identically without schema bloat.
 
             // 27. close_in_app_browser
             put(JSONObject().apply {
                 put("name", "close_in_app_browser")
-                put("description", "Closes the In-Built Browser / website preview immediately and returns to the chat or voice screen. Use whenever the user commands to close browser, exit website preview, or close in-built browser (e.g. 'browser band karo', 'browser close karo', 'preview close karo').")
+                put("description", "Closes the ENTIRE In-Built Browser / website preview and returns to Chat. ONLY call when user explicitly commands to close/exit the whole browser ('browser band karo', 'browser close karo', 'preview band karo'). NEVER call on words like 'one', 'open', 'aur dikhao', and NEVER call when user asks to close just ONE tab (use browser_tabs action='close' instead).")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject())
@@ -1367,13 +1438,69 @@ class GeminiLiveWebSocket(
                         })
                         put("steps", JSONObject().apply {
                             put("type", "ARRAY")
-                            put("description", "Ordered list of automation steps to execute sequentially. Each item is an object with 'action' ('open_app', 'send_whatsapp_message', 'click_ui_element', 'type_text', 'scroll_screen', 'swipe_reel', 'close_app', 'close_current_app', 'press_key', 'wait', 'inspect_screen') and parameters ('app_name', 'target_name', 'text', 'recipient_name', 'message', 'direction', 'submit', 'key', 'wait_ms').")
+                            put("description", "Ordered list of automation steps to execute sequentially. Each item is an object with 'action' ('open_in_app_browser', 'browser_read_page', 'browser_find', 'browser_click', 'browser_type', 'browser_scroll', 'browser_navigate', 'browser_tabs', 'browser_media_control', 'close_in_app_browser', 'answer_chat_question', 'navigate_app_screen', 'open_chat_by_name', 'open_app', 'send_whatsapp_message', 'reply_whatsapp_notification', 'configure_whatsapp_auto_reply', 'click_ui_element', 'answer_quiz_question', 'generate_image', 'type_text', 'scroll_screen', 'swipe_reel', 'search_and_play_youtube', 'youtube_action', 'set_volume', 'set_brightness', 'set_flashlight', 'set_ringer_mode', 'set_device_setting', 'system_action', 'media_playback_control', 'get_device_status', 'close_app', 'close_current_app', 'press_key', 'wait', 'inspect_screen') and parameters ('url', 'query', 'mode', 'tab_name', 'answer', 'screen_name', 'chat_name', 'app_name', 'target_name', 'text', 'recipient_name', 'sender_name', 'message', 'direction', 'submit', 'key', 'wait_ms', 'option', 'click_next', 'prompt', 'aspect_ratio', 'percentage', 'stream', 'step_percent', 'sections', 'setting', 'enabled', 'value').")
                             put("items", JSONObject().apply {
                                 put("type", "OBJECT")
                                 put("properties", JSONObject().apply {
                                     put("action", JSONObject().apply {
                                         put("type", "STRING")
-                                        put("description", "Step action type: 'open_app', 'send_whatsapp_message', 'click_ui_element', 'type_text', 'scroll_screen', 'swipe_reel', 'youtube_action', 'close_app', 'close_current_app', 'press_key', 'wait', 'inspect_screen'.")
+                                        put("description", "Step action type: 'open_in_app_browser', 'browser_read_page', 'browser_find', 'browser_click', 'browser_type', 'browser_scroll', 'browser_navigate', 'browser_tabs', 'browser_media_control', 'close_in_app_browser', 'answer_chat_question', 'navigate_app_screen', 'open_chat_by_name', 'open_app', 'send_whatsapp_message', 'reply_whatsapp_notification', 'configure_whatsapp_auto_reply', 'click_ui_element', 'answer_quiz_question', 'generate_image', 'type_text', 'scroll_screen', 'swipe_reel', 'search_and_play_youtube', 'youtube_action', 'set_volume', 'set_brightness', 'set_flashlight', 'set_ringer_mode', 'set_device_setting', 'system_action', 'media_playback_control', 'get_device_status', 'close_app', 'close_current_app', 'press_key', 'wait', 'inspect_screen'.")
+                                    })
+                                    put("percentage", JSONObject().apply {
+                                        put("type", "INTEGER")
+                                        put("description", "Target volume/brightness percentage (0-100).")
+                                    })
+                                    put("setting", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Target setting name for 'set_device_setting' ('wifi', 'bluetooth', 'location', 'dnd', 'airplane', 'hotspot', 'battery_saver', 'dark_mode', 'auto_rotate', 'screen_timeout', etc.).")
+                                    })
+                                    put("enabled", JSONObject().apply {
+                                        put("type", "BOOLEAN")
+                                        put("description", "True/false toggle for 'set_device_setting' or 'set_flashlight'.")
+                                    })
+                                    put("value", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Optional setting value such as screen timeout ('30s', '2 min').")
+                                    })
+                                    put("stream", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Volume stream ('music', 'ring', 'alarm', 'notification', 'call', 'all') for 'set_volume'.")
+                                    })
+                                    put("step_percent", JSONObject().apply {
+                                        put("type", "INTEGER")
+                                        put("description", "Volume step percent (5-50) for increase/decrease.")
+                                    })
+                                    put("sections", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Sections for 'get_device_status' step (default 'battery,audio,system').")
+                                    })
+                                    put("url", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Website URL or shortcut for open_in_app_browser.")
+                                    })
+                                    put("query", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Query for browser_find or browser_type.")
+                                    })
+                                    put("mode", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Mode for browser_read_page ('interactive', 'text', 'images') or browser_tabs.")
+                                    })
+                                    put("tab_name", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Tab name or index for browser_tabs switch/close.")
+                                    })
+                                    put("answer", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Option label/choice for answer_chat_question.")
+                                    })
+                                    put("screen_name", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Internal Aura screen/drawer/plugin/settings name for navigate_app_screen.")
+                                    })
+                                    put("chat_name", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Target chat/pinned chat name for open_chat_by_name.")
                                     })
                                     put("app_name", JSONObject().apply {
                                         put("type", "STRING")
@@ -1399,9 +1526,13 @@ class GeminiLiveWebSocket(
                                         put("type", "STRING")
                                         put("description", "Contact or chat name for send_whatsapp_message.")
                                     })
+                                    put("sender_name", JSONObject().apply {
+                                        put("type", "STRING")
+                                        put("description", "Sender name for reply_whatsapp_notification.")
+                                    })
                                     put("message", JSONObject().apply {
                                         put("type", "STRING")
-                                        put("description", "Message content for send_whatsapp_message.")
+                                        put("description", "Message content for send_whatsapp_message or reply_whatsapp_notification.")
                                     })
                                     put("direction", JSONObject().apply {
                                         put("type", "STRING")
@@ -1475,6 +1606,91 @@ class GeminiLiveWebSocket(
                             put("description", "True to swipe cards away one by one instead of tapping Clear All / Close All.")
                         })
                     })
+                })
+            })
+
+            // 37. answer_quiz_question
+            put(JSONObject().apply {
+                put("name", "answer_quiz_question")
+                put("description", "Fast, verified MCQ & quiz answer tool for Chrome and web exams: finds the requested option ('a', 'b', 'c', 'd', 'option 2', or Hindi/English text — scrolling if below fold), taps it cleanly, verifies the radio/checkbox tick is actually CHECKED, and optionally clicks 'Next' ONLY if tick verification passed so questions are never skipped.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("option", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "MCQ option to tick: 'a', 'b', 'c', 'd', 'option 2', or the option's Hindi/English text.")
+                        })
+                        put("click_next", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "Set true to automatically tap Next and load the next question after verifying the option tick; set false to only tick and verify the option.")
+                        })
+                        put("goal", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional user instruction context.")
+                        })
+                    })
+                    put("required", JSONArray().put("option"))
+                })
+            })
+
+            // 38. generate_image
+            put(JSONObject().apply {
+                put("name", "generate_image")
+                put("description", "Generates a real AI image/artwork/photo immediately from a prompt and saves/displays it inside Aura's Chat & Images Gallery. ALWAYS call this when the user asks to generate, create, draw, or make any picture or image (e.g., 'ek cat ki image banao', 'draw a sunset', 'thumbnail banao'). NEVER refuse or claim you cannot generate images.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("prompt", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Detailed visual description of the image to generate (in clear English for best quality while preserving every detail the user asked for).")
+                        })
+                        put("aspect_ratio", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional aspect ratio: '1:1' (default), '16:9', '9:16', '4:3', '3:4'.")
+                        })
+                        put("show_in_chat", JSONObject().apply {
+                            put("type", "BOOLEAN")
+                            put("description", "If true (default when inside Aura), immediately open/show the generated image in chat.")
+                        })
+                    })
+                    put("required", JSONArray().put("prompt"))
+                })
+            })
+
+            // 39. navigate_app_screen
+            put(JSONObject().apply {
+                put("name", "navigate_app_screen")
+                put("description", "Natively opens or closes ANY internal screen, side drawer, drawer tab, plugins page, modal, or settings section inside Aura AI without Android Accessibility clicks. ALWAYS call this when user asks to open Side Drawer, Pinned/Archive/Project drawer tab, Custom AntiGem Plugins, Skills & Plugins, MCP, Settings (or any subsection), Customize, Images Gallery, Projects picker, Themes, Accounts, Model selector, IDE, Terminal, Notes, Files, or to close Drawer/Settings overlays.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("screen_name", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Internal screen/tab target name, e.g. 'Custom AntiGem Plugins', 'Skills & Plugins', 'MCP', 'Drawer', 'Drawer Pin Tab', 'Drawer Archive Tab', 'Drawer Project Tab', 'Close Drawer', 'Settings', 'Aura Voice Settings', 'Customize', 'Images Gallery', 'Projects', 'Themes', 'Accounts', 'Model Selector', 'IDE', 'Terminal', 'Notes', 'Files', 'Browser', 'Chat', 'Close Overlays'.")
+                        })
+                    })
+                    put("required", JSONArray().put("screen_name"))
+                })
+            })
+
+            // 40. answer_chat_question (#9)
+            put(JSONObject().apply {
+                put("name", "answer_chat_question")
+                put("description", "Answers, selects options on, submits, skips, or cancels an active interactive Questionnaire / Choice Card ('Antigravity has a question', 'Standard mode', 'Agent Mode', 'Recommended', 'Submit') inside Aura's chat UI! ALWAYS call this instead of click_ui_element or start_new_chat_task whenever the user selects an option or asks to submit/skip/cancel a chat question.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("answer", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Chosen option label, number, or 'recommended' (e.g. 'Standard mode', '1', 'recommended', 'Agent mode').")
+                        })
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply { put("submit"); put("skip"); put("cancel"); put("inspect") })
+                            put("description", "Action to perform on the Questionnaire card: 'submit' (default: select option + submit), 'skip', 'cancel', or 'inspect' (read options without submitting).")
+                        })
+                    })
+                    put("required", JSONArray().put("answer"))
                 })
             })
         }
@@ -1727,13 +1943,14 @@ class GeminiLiveWebSocket(
     private var mediaChunksSent = 0
     private val lastVideoFrameSentAt = AtomicLong(0L)
 
-    fun sendMediaChunk(jpegBytes: ByteArray) {
+    fun sendMediaChunk(jpegBytes: ByteArray, forceImmediate: Boolean = false) {
         if (!isConnected.get() || !isSetupComplete.get() || jpegBytes.isEmpty()) return
 
         val now = android.os.SystemClock.elapsedRealtime()
+        val minGap = if (forceImmediate) 120L else 1000L
         while (true) {
             val previous = lastVideoFrameSentAt.get()
-            if (now - previous < 1000L) return
+            if (now - previous < minGap) return
             if (lastVideoFrameSentAt.compareAndSet(previous, now)) break
         }
         try {

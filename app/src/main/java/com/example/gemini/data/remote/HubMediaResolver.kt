@@ -1,6 +1,7 @@
 package com.example.gemini.data.remote
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -17,13 +18,129 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object HubMediaResolver {
     private const val TAG = "HubMediaResolver"
+    private const val FAILED_CACHE_TTL_MS = 60_000L
+    private val IMAGE_EXT_REGEX = Regex(""".*\.(png|jpe?g|webp|gif|svg|bmp|heic)(?:[?#].*)?$""", RegexOption.IGNORE_CASE)
+
     private val imageRamCache = ConcurrentHashMap<String, String>()          // normalizedUri -> data:image/xxx;base64,...
     private val imageBytesCache = ConcurrentHashMap<String, ByteArray>()     // normalizedUri -> ByteArray
+    private val imageAspectRatioCache = ConcurrentHashMap<String, Float>()   // normalizedUri -> width / height
+    private val failedMediaCache = ConcurrentHashMap<String, Long>()         // normalizedUri -> failed timestamp
     private val documentRamCache = ConcurrentHashMap<String, String>()       // normalizedUri -> content string
     private val downloadMutex = Mutex()
 
     fun normalizeKey(uriOrPath: String): String {
         return uriOrPath.trim().removePrefix("file://")
+    }
+
+    /**
+     * True only when [raw] looks like an image data URI, content URI, HTTP(S) image URL,
+     * or single-line local image path — never multi-line command stdout or plain prose.
+     */
+    fun isRenderableImageSource(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed.startsWith("data:image/", ignoreCase = true)) return true
+        if (trimmed.contains('\n') || trimmed.contains('\r') || trimmed.length > 2048) return false
+        if (trimmed.startsWith("content://", ignoreCase = true)) return true
+        return (trimmed.startsWith("file://", ignoreCase = true) ||
+            trimmed.startsWith("/") ||
+            trimmed.startsWith("http://", ignoreCase = true) ||
+            trimmed.startsWith("https://", ignoreCase = true)) &&
+            trimmed.matches(IMAGE_EXT_REGEX)
+    }
+
+    private fun isLikelyHubMediaPath(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed.startsWith("data:image/", ignoreCase = true)) return true
+        if (trimmed.contains('\n') || trimmed.contains('\r') || trimmed.length > 2048) return false
+        return trimmed.startsWith("file://", ignoreCase = true) ||
+            trimmed.startsWith("/") ||
+            trimmed.startsWith("http://", ignoreCase = true) ||
+            trimmed.startsWith("https://", ignoreCase = true) ||
+            trimmed.startsWith("content://", ignoreCase = true)
+    }
+
+    fun hasFailedRecently(uriOrPath: String): Boolean {
+        if (uriOrPath.isBlank()) return false
+        val key = normalizeKey(uriOrPath)
+        val ts = failedMediaCache[key] ?: return false
+        if (System.currentTimeMillis() - ts > FAILED_CACHE_TTL_MS) {
+            failedMediaCache.remove(key, ts)
+            return false
+        }
+        return true
+    }
+
+    fun markFailed(uriOrPath: String) {
+        if (uriOrPath.isBlank()) return
+        failedMediaCache[normalizeKey(uriOrPath)] = System.currentTimeMillis()
+    }
+
+    fun clearFailed(uriOrPath: String) {
+        if (uriOrPath.isBlank()) return
+        failedMediaCache.remove(normalizeKey(uriOrPath))
+    }
+
+    fun putAspectRatio(uriOrPath: String, width: Int, height: Int) {
+        if (uriOrPath.isBlank() || width <= 0 || height <= 0) return
+        val ratio = (width.toFloat() / height.toFloat()).coerceIn(0.4f, 3.0f)
+        imageAspectRatioCache[normalizeKey(uriOrPath)] = ratio
+    }
+
+    fun getCachedAspectRatio(uriOrPath: String): Float? {
+        if (uriOrPath.isBlank()) return null
+        return imageAspectRatioCache[normalizeKey(uriOrPath)]
+    }
+
+    /**
+     * Synchronously returns the cached aspect ratio, or peeks local file / in-RAM bytes bounds
+     * without allocating pixel memory so LazyColumn containers know exact image height on frame 0.
+     */
+    fun getOrPeekAspectRatio(context: Context, uriOrPath: String): Float? {
+        if (uriOrPath.isBlank()) return null
+        val key = normalizeKey(uriOrPath)
+        imageAspectRatioCache[key]?.let { return it }
+
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val bytes = imageBytesCache[key]
+        if (bytes != null && bytes.isNotEmpty()) {
+            runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) }
+            if (opts.outWidth > 0 && opts.outHeight > 0) {
+                val ratio = (opts.outWidth.toFloat() / opts.outHeight.toFloat()).coerceIn(0.4f, 3.0f)
+                imageAspectRatioCache[key] = ratio
+                return ratio
+            }
+        }
+
+        val trimmed = uriOrPath.trim()
+        if (trimmed.startsWith("data:image/", ignoreCase = true)) {
+            val b64 = trimmed.substringAfter("base64,", "")
+            if (b64.isNotBlank()) {
+                runCatching {
+                    val decoded = Base64.decode(b64, Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(decoded, 0, decoded.size, opts)
+                }
+                if (opts.outWidth > 0 && opts.outHeight > 0) {
+                    val ratio = (opts.outWidth.toFloat() / opts.outHeight.toFloat()).coerceIn(0.4f, 3.0f)
+                    imageAspectRatioCache[key] = ratio
+                    return ratio
+                }
+            }
+        }
+
+        val localFile = File(key)
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://") &&
+            localFile.isFile && localFile.canRead()
+        ) {
+            runCatching { BitmapFactory.decodeFile(localFile.absolutePath, opts) }
+            if (opts.outWidth > 0 && opts.outHeight > 0) {
+                val ratio = (opts.outWidth.toFloat() / opts.outHeight.toFloat()).coerceIn(0.4f, 3.0f)
+                imageAspectRatioCache[key] = ratio
+                return ratio
+            }
+        }
+        return null
     }
 
     fun getCachedDocument(path: String): String? = documentRamCache[normalizeKey(path)]
@@ -210,6 +327,8 @@ object HubMediaResolver {
     fun clearRamCache() {
         imageRamCache.clear()
         imageBytesCache.clear()
+        imageAspectRatioCache.clear()
+        failedMediaCache.clear()
         documentRamCache.clear()
     }
 
@@ -218,6 +337,8 @@ object HubMediaResolver {
 
     /**
      * Checks if the URI is already local or already cached in RAM memory.
+     * Note: remote HTTP(S) URLs do not require Hub resolution, so they also return true here;
+     * use [isInMemoryOrLocalDisk] to check whether the image bytes/file are immediately local.
      */
     fun isLocalOrCached(context: Context, uriOrPath: String): Boolean {
         if (uriOrPath.isBlank()) return false
@@ -230,7 +351,33 @@ object HubMediaResolver {
             return true
         }
         val directFile = File(key)
-        return directFile.exists() && directFile.canRead()
+        return directFile.isFile && directFile.canRead()
+    }
+
+    /**
+     * True when the media bytes/file are already on local storage or decoded in RAM
+     * (never true for unverified remote paths or non-existent files).
+     */
+    fun isInMemoryOrLocalDisk(uriOrPath: String): Boolean {
+        if (uriOrPath.isBlank()) return false
+        if (uriOrPath.startsWith("data:image/", ignoreCase = true)) return true
+        val key = normalizeKey(uriOrPath)
+        if (imageBytesCache.containsKey(key) || imageRamCache[key]?.startsWith("data:") == true) return true
+        if (uriOrPath.startsWith("http://", ignoreCase = true) || uriOrPath.startsWith("https://", ignoreCase = true)) {
+            return false
+        }
+        val directFile = File(key)
+        return directFile.isFile && directFile.canRead()
+    }
+
+    /**
+     * True only when [uriOrPath] still needs asynchronous Hub/Bridge resolution and has not
+     * recently failed resolution.
+     */
+    fun needsAsyncResolution(context: Context, uriOrPath: String): Boolean {
+        if (!isLikelyHubMediaPath(uriOrPath)) return false
+        if (hasFailedRecently(uriOrPath)) return false
+        return !isLocalOrCached(context, uriOrPath)
     }
 
     /**
@@ -247,7 +394,7 @@ object HubMediaResolver {
         imageRamCache[key]?.let { return it }
 
         val directFile = File(key)
-        if (directFile.exists() && directFile.canRead()) {
+        if (directFile.isFile && directFile.canRead()) {
             val res = "file://${directFile.absolutePath}"
             imageRamCache[key] = res
             return res
@@ -266,13 +413,25 @@ object HubMediaResolver {
         agyHubClient: AgyHubClient = AgyHubClient(),
         hubUrl: String = com.example.gemini.data.preferences.AuthPreferences.currentHubUrl
     ): String = withContext(Dispatchers.IO) {
-        if (rawUri.isBlank()) return@withContext ""
+        if (!isLikelyHubMediaPath(rawUri)) return@withContext ""
+        if (hasFailedRecently(rawUri)) return@withContext ""
+
         if (isBridgeFileUrl(rawUri)) {
             val key = normalizeKey(rawUri)
             imageRamCache[key]?.let { return@withContext it }
-            val bytes = fetchBridgeFile(rawUri) ?: return@withContext ""
+            val bytes = fetchBridgeFile(rawUri)
+            if (bytes == null) {
+                markFailed(rawUri)
+                return@withContext ""
+            }
+            clearFailed(rawUri)
             val mime = java.net.URLConnection.guessContentTypeFromName(rawUri.substringAfterLast("%2F")) ?: "image/jpeg"
             imageBytesCache[key] = bytes
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) }
+            if (opts.outWidth > 0 && opts.outHeight > 0) {
+                putAspectRatio(key, opts.outWidth, opts.outHeight)
+            }
             return@withContext "data:$mime;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}".also { imageRamCache[key] = it }
         }
         if (rawUri.startsWith("data:image/") || rawUri.startsWith("http://") || rawUri.startsWith("https://") || rawUri.startsWith("content://")) {
@@ -283,14 +442,16 @@ object HubMediaResolver {
         imageRamCache[key]?.let { return@withContext it }
 
         val directFile = File(key)
-        if (directFile.exists() && directFile.canRead()) {
+        if (directFile.isFile && directFile.canRead()) {
             val localUri = "file://${directFile.absolutePath}"
             imageRamCache[key] = localUri
+            clearFailed(rawUri)
             return@withContext localUri
         }
 
         downloadMutex.withLock {
             imageRamCache[key]?.let { return@withContext it }
+            if (hasFailedRecently(rawUri)) return@withLock ""
 
             try {
                 val formattedUri = "file://$key"
@@ -304,9 +465,15 @@ object HubMediaResolver {
                         try {
                             val bytes = Base64.decode(base64Data, Base64.DEFAULT)
                             imageBytesCache[key] = bytes
+                            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                            if (opts.outWidth > 0 && opts.outHeight > 0) {
+                                putAspectRatio(key, opts.outWidth, opts.outHeight)
+                            }
                         } catch (_: Exception) {}
                         imageRamCache[key] = dataUri
                         documentRamCache[key] = base64Data
+                        clearFailed(rawUri)
                         Log.d("ANTI_MEDIA", "HubMediaResolver: Cached in RAM for $rawUri (len=${dataUri.length})")
                         return@withContext dataUri
                     }
@@ -316,9 +483,10 @@ object HubMediaResolver {
             } catch (e: Exception) {
                 Log.e("ANTI_MEDIA", "HubMediaResolver: Error resolving media $rawUri: ${e.message}")
             }
+            markFailed(rawUri)
         }
 
-        return@withContext rawUri
+        return@withContext ""
     }
 }
 

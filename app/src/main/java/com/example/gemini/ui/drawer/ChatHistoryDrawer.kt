@@ -243,6 +243,26 @@ fun ChatHistoryDrawer(
     }
     var activeTabFilter by remember { mutableStateOf(if (showArchived) DrawerTabFilter.ARCHIVE else DrawerTabFilter.ALL) }
 
+    LaunchedEffect(isOpen) {
+        if (isOpen) {
+            pinnedIds = com.example.gemini.data.preferences.AuraCustomizePreferences.getPinnedConversationIds(context)
+        }
+    }
+
+    val requestedDrawerTab by com.example.gemini.data.live.ChatContextBridge.requestedDrawerTab.collectAsState()
+    LaunchedEffect(requestedDrawerTab, isOpen) {
+        val tabName = requestedDrawerTab ?: return@LaunchedEffect
+        activeTabFilter = when (tabName.uppercase()) {
+            "PIN", "PINNED" -> DrawerTabFilter.PIN
+            "PROJECT", "PROJECTS" -> DrawerTabFilter.PROJECT
+            "VOICE" -> DrawerTabFilter.VOICE
+            "ARCHIVE", "ARCHIVED" -> DrawerTabFilter.ARCHIVE
+            else -> DrawerTabFilter.ALL
+        }
+        pinnedIds = com.example.gemini.data.preferences.AuraCustomizePreferences.getPinnedConversationIds(context)
+        com.example.gemini.data.live.ChatContextBridge.consumeDrawerTabRequest()
+    }
+
     LaunchedEffect(showArchived) {
         if (showArchived && activeTabFilter != DrawerTabFilter.ARCHIVE) {
             activeTabFilter = DrawerTabFilter.ARCHIVE

@@ -611,6 +611,13 @@ class BrowserSessionManager private constructor() {
         return array
     }
 
+    private val tabHistory = ArrayDeque<String>()
+
+    fun findTabExact(tabId: String?): BrowserTabSession? {
+        if (tabId.isNullOrBlank()) return null
+        return tabs.firstOrNull { it.id == tabId }
+    }
+
     fun getMainHandler(): Handler = mainHandler
 
     fun addNewTab(url: String = "", title: String = "New Tab", activate: Boolean = true, desktopMode: Boolean? = null): BrowserTabSession {
@@ -624,6 +631,10 @@ class BrowserSessionManager private constructor() {
         }
         tabs.add(newTab)
         if (activate || activeTabId == null) {
+            activeTabId?.let { prevId ->
+                tabHistory.remove(prevId)
+                tabHistory.addLast(prevId)
+            }
             activeTabId = newTab.id
         }
         if (formatted.isNotBlank()) {
@@ -634,11 +645,16 @@ class BrowserSessionManager private constructor() {
 
     fun switchTab(tabId: String): Boolean {
         val tab = tabs.find { it.id == tabId } ?: return false
+        if (activeTabId != null && activeTabId != tabId) {
+            tabHistory.remove(activeTabId)
+            tabHistory.addLast(activeTabId!!)
+        }
         activeTabId = tab.id
         return true
     }
 
     fun closeAllTabs() {
+        tabHistory.clear()
         mainHandler.post {
             tabs.forEach { tabToRemove ->
                 try {
@@ -662,6 +678,7 @@ class BrowserSessionManager private constructor() {
         val index = tabs.indexOfFirst { it.id == tabId }
         if (index == -1) return false
         val tabToRemove = tabs[index]
+        tabHistory.remove(tabId)
         setAutomationInput(tabToRemove, false)
         tabToRemove.pendingDialog?.answer(false)
         tabToRemove.pendingDialog = null
@@ -685,8 +702,8 @@ class BrowserSessionManager private constructor() {
         if (tabs.isEmpty()) {
             activeTabId = null
         } else if (activeTabId == tabId) {
-            val nextIndex = (index - 1).coerceAtLeast(0)
-            activeTabId = tabs[nextIndex].id
+            val prevFromHistory = tabHistory.lastOrNull { prevId -> tabs.any { it.id == prevId } }
+            activeTabId = prevFromHistory ?: tabs[(index - 1).coerceAtLeast(0)].id
         }
         return true
     }
@@ -1080,6 +1097,9 @@ class BrowserSessionManager private constructor() {
                     }
                     setAutomationInput(tab, tab.aiBusy)
                     if (tab.agentInputLock) view?.evaluateJavascript(BrowserAutomationScripts.agentInputLock(true, tab.agentZoomPinned), null)
+                    if (url != null && (url.contains("youtube.com", ignoreCase = true) || url.contains("youtu.be", ignoreCase = true))) {
+                        injectYouTubeAutoAdSkip(view)
+                    }
                     view?.postDelayed({
                         tab.capturePreview()
                     }, 400)
@@ -1258,6 +1278,13 @@ class BrowserSessionManager private constructor() {
                             return true
                         }
                         // Prevent opening external apps/Chrome
+                        return true
+                    }
+
+                    val allowExplicitScheme = scheme == "tel" || scheme == "mailto" || scheme == "upi"
+                    val isBlockedAdScheme = scheme == "amzn" || scheme == "amazon" || scheme == "flipkart" || scheme == "market" || scheme == "myntra"
+                    if (!allowExplicitScheme && (isBlockedAdScheme || tab.aiBusy || BrowserAgentLock.isAgentActive(tab))) {
+                        Log.i(TAG, "Blocked unintended external app launch from In-Built Browser: $uriString")
                         return true
                     }
 
@@ -1443,6 +1470,39 @@ class BrowserSessionManager private constructor() {
         }
     }
 
+    private fun injectYouTubeAutoAdSkip(view: WebView?) {
+        val script = """
+            (function(){
+              if (window.__auraYtAdSkipInstalled) return;
+              window.__auraYtAdSkipInstalled = true;
+              function trySkip(){
+                try {
+                  var player = document.querySelector('#movie_player, .html5-video-player, ytm-player');
+                  if (!player) return;
+                  var btn = player.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, [aria-label*="Skip ad" i], [aria-label*="Skip ads" i]');
+                  if (!btn) {
+                    var btns = player.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                      var txt = (btns[i].innerText || btns[i].textContent || '').trim().toLowerCase();
+                      if (txt === 'skip' || txt === 'skip ad' || txt === 'skip ads') { btn = btns[i]; break; }
+                    }
+                  }
+                  if (btn && btn.offsetParent !== null) { btn.click(); return; }
+                  if (player.classList && player.classList.contains('ad-showing')) {
+                    var v = player.querySelector('video');
+                    if (v && isFinite(v.duration) && v.duration > 0 && v.currentTime < v.duration - 0.3) {
+                      v.muted = true;
+                      v.currentTime = v.duration;
+                    }
+                  }
+                } catch(e) {}
+              }
+              setInterval(trySkip, 750);
+            })();
+        """.trimIndent()
+        view?.evaluateJavascript(script, null)
+    }
+
     /**
      * Controls HTML5 audio/video playback or YouTube player actions (play, pause, play_pause,
      * mute, unmute, seek, fullscreen, skip_ad, next) directly inside the active WebView tab.
@@ -1462,7 +1522,7 @@ class BrowserSessionManager private constructor() {
             "unmute" -> "(function(){var v=document.querySelectorAll('video,audio');if(!v.length)return 'No media element found on page';v.forEach(function(m){m.muted=false;});return 'Unmuted web media';})()"
             "forward", "seek_forward" -> "(function(){var v=document.querySelector('video,audio');if(!v)return 'No media element found on page';v.currentTime=Math.min((v.duration||1e9),v.currentTime+$delta);return 'Seeked forward to '+Math.round(v.currentTime)+'s';})()"
             "rewind", "seek_back", "backward" -> "(function(){var v=document.querySelector('video,audio');if(!v)return 'No media element found on page';v.currentTime=Math.max(0,v.currentTime-$delta);return 'Rewound to '+Math.round(v.currentTime)+'s';})()"
-            "skip_ad", "skip", "skip_ads", "ad_skip" -> "(function(){var sel='.ytp-ad-skip-button,.ytp-skip-ad-button,.ytp-ad-skip-button-modern,button[class*=\"skip\"],[aria-label*=\"Skip ad\" i],[aria-label*=\"Skip ads\" i]';var b=document.querySelector(sel);if(b){b.click();return 'Clicked Skip Ad in browser';}var v=document.querySelector('.ad-showing video');if(v&&isFinite(v.duration)){v.currentTime=v.duration;return 'Fast-forwarded browser ad';}return 'No skippable ad button found right now';})()"
+            "skip_ad", "skip", "skip_ads", "ad_skip" -> "(function(){var p=document.querySelector('#movie_player,.html5-video-player,ytm-player')||document;var sel='.ytp-ad-skip-button,.ytp-skip-ad-button,.ytp-ad-skip-button-modern,[aria-label*=\"Skip ad\" i],[aria-label*=\"Skip ads\" i]';var b=p.querySelector(sel);if(!b){var bs=p.querySelectorAll('button');for(var i=0;i<bs.length;i++){var t=(bs[i].innerText||'').trim().toLowerCase();if(t==='skip'||t==='skip ad'||t==='skip ads'){b=bs[i];break;}}}if(b){b.click();return 'Clicked Skip Ad in browser';}var v=document.querySelector('.ad-showing video');if(v&&isFinite(v.duration)){v.currentTime=v.duration;return 'Fast-forwarded browser ad';}return 'No skippable ad button found right now';})()"
             "next" -> "(function(){var b=document.querySelector('.ytp-next-button,a[aria-label*=\"Next\" i],button[aria-label*=\"Next\" i]');if(b){b.click();return 'Triggered next video';}return 'No next button found on page';})()"
             "fullscreen" -> "(function(){var b=document.querySelector('.ytp-fullscreen-button,.fullscreen-icon,button[aria-label*=\"full screen\" i]');if(b){b.click();return 'Toggled fullscreen';}var v=document.querySelector('video');if(v&&v.requestFullscreen){v.requestFullscreen();return 'Requested fullscreen';}return 'No fullscreen control found';})()"
             else -> return "Failed: Unknown web media action '$action'."

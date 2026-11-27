@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
@@ -15,6 +16,7 @@ import com.example.gemini.data.automation.AutomationAccessibilityService
 import com.example.gemini.data.automation.BuiltInChromeEngine
 import com.example.gemini.data.automation.ContactCaller
 import com.example.gemini.data.automation.PhoneControlManager
+import com.example.gemini.data.automation.WhatsAppAutoReplyManager
 import com.example.gemini.data.automation.WhatsAppMessenger
 import com.example.gemini.data.automation.YouTubeController
 import com.example.gemini.data.jarvis.JarvisPreferences
@@ -64,6 +66,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     private val _lastTranscript = MutableStateFlow("")
     val lastTranscript: StateFlow<String> = _lastTranscript.asStateFlow()
+
+    @Volatile
+    private var lastUserUtterance: String = ""
+    @Volatile
+    private var lastUserUtteranceMs: Long = 0L
 
     private val _spokenSentence = MutableStateFlow("")
     val spokenSentence: StateFlow<String> = _spokenSentence.asStateFlow()
@@ -228,8 +235,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
             // Human near-field speech profile: strong vocal mid-band (300Hz-3400Hz) relative to bass rumble,
             // and amplitude clearly above the rolling ambient TV/room noise floor.
-            val speechThreshold = maxOf(0.062f, ambientNoiseFloor * 2.15f)
-            val hasHumanVocalMidBand = freq.mid >= (freq.bass * 0.48f) && (freq.pitchHz in 75f..1400f || freq.mid >= 0.05f)
+            val speechThreshold = maxOf(0.068f, ambientNoiseFloor * 2.25f)
+            val hasHumanVocalMidBand = freq.mid >= (freq.bass * 0.50f) && (freq.pitchHz in 75f..1400f || freq.mid >= 0.055f)
             val isNearFieldHumanSpeech = amp >= speechThreshold && hasHumanVocalMidBand
 
             if (isMuted) {
@@ -312,9 +319,9 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
             }
 
-            // Stream audio to Gemini Live when user is actively speaking or during post-speech tail (1.4s),
-            // or attenuate far-field TV background chatter to near-silence so Gemini's server VAD is never confused by TV audio.
-            val withinSpeechHangover = (now - lastUserSpeechTimestamp.get()) < 1400L
+            // Stream audio to Gemini Live when user is actively speaking or during short post-speech tail (650ms),
+            // feeding clean silence otherwise so trailing noise never triggers foreign/Spanish ASR hallucinations.
+            val withinSpeechHangover = (now - lastUserSpeechTimestamp.get()) < 650L
             if (!isAedpActive || hasHeadset) {
                 if (isNearFieldHumanSpeech || withinSpeechHangover || currentPhase == Phase.LISTENING) {
                     webSocket?.sendAudioChunk(chunk)
@@ -380,11 +387,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     fun sendScreenFrame(jpegBytes: ByteArray) {
-        webSocket?.sendMediaChunk(jpegBytes)
+        webSocket?.sendMediaChunk(jpegBytes, forceImmediate = false)
     }
 
     fun sendImmediateVideoFrame(jpegBytes: ByteArray) {
-        sendScreenFrame(jpegBytes)
+        webSocket?.sendMediaChunk(jpegBytes, forceImmediate = true)
     }
 
     private fun buildSystemPrompt(): String {
@@ -394,11 +401,23 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("IDENTITY LOCK: NEVER refer to yourself as 'Jarvis', 'sub-agent', 'chat agent', 'background agent', or 'Antigravity' as a separate entity. You ARE Aura — always speak in first person ('Maine...', 'Main abhi...').\n")
         sb.append("BRAND RECOGNITION: In Hindi/Hinglish speech, users call this app 'Aura', 'Aura AI', or 'Aura Pro' (which ASR may occasionally mishear as 'aur app', 'ora', 'aora', 'oura', 'aurya pro'). Understand those as Aura / Aura Pro when used as an app name, while keeping normal Hindi 'aur' ('and'/'more') untouched.\n\n")
 
-        sb.append("### CRITICAL SPOKEN LANGUAGE DIRECTIVE:\n")
+        sb.append("### CRITICAL SPOKEN LANGUAGE, ANTI-HALLUCINATION & HINDI ASR DISAMBIGUATION:\n")
         sb.append("- You MUST ALWAYS speak in conversational Hindi or Hinglish (Hindi mixed with natural English words as spoken in India).\n")
         sb.append("- Speak warmly, confidently, and keep your replies brief and direct (1-2 crisp sentences).\n")
+        sb.append("- SPOKEN LANGUAGE LOCK: The user speaks ONLY Hindi, Hinglish, or Indian English. NEVER misinterpret unclear Hindi vowels, short clicks, or background noise as Spanish, Portuguese, French, Russian, or Welsh — NEVER ask 'Aap Spanish mein kyun bol rahe hain?'! If a phrase is unclear, politely ask 'Aawaz clear nahi aayi, ek baar phir bolna?'.\n")
+        sb.append("- HINDI/HINGLISH PHONETIC CONTEXT RULES:\n")
+        sb.append("  * On MCQs, exams, tests, or lists: phrases like '15 rupaye', '14 rupaye', 'pandrahve', '15ve ka' ALWAYS mean ordinal Question # (15th / 14th), NEVER rupees/money!\n")
+        sb.append("  * Short option letters: 'be'/'bee' = Option B, 'see'/'sea' = Option C, 'di'/'dee' = Option D.\n")
+        sb.append("  * App & UI phonetic recognition: while discussing Aura plugins/tools/extensions, 'melt' / 'sweet' = 'Meta Suite' (NOT melting ice!). 'Cognito'/'cognitive' = 'Incognito'. 'In bill' = 'In-Built Browser'. NEVER confuse 'one' or 'open' with 'band' (close)!\n")
+        sb.append("- STRICT GROUNDING (NO STALE SCREEN / NO FAKE CONTEXT): Ignore unrelated old chat topics (GTA 6, Flipkart, old websites) when helping on Chrome/MCQs/WhatsApp/YouTube. ALWAYS trust ONLY the newest `[LIVE SCREEN SNAPSHOT #...]` from `inspect_screen()` (never read an older question like Q13 when the newest snapshot shows Q14!), and NEVER invent fake states like 'Next button cooldown'.\n")
         sb.append("- Ignore ambient background noise, live TV dialogue, news broadcasts, or unrelated room chatter completely. Only respond to direct near-field user requests.\n")
         sb.append("- If the user interrupts you while you are speaking (barge-in), immediately stop your previous topic, listen to their new instruction, and respond to what they just said.\n\n")
+
+        sb.append("### DIRECT IMAGE GENERATION (NEVER REFUSE!):\n")
+        sb.append("- You HAVE native AI image generation right here in Voice! Whenever the user asks to generate, create, draw, or make ANY image, picture, photo, cat/dog/character art, poster, wallpaper, or thumbnail ('mere liye ek cat ki image banao', 'draw a sunset', 'thumbnail banao'):\n")
+        sb.append("  -> IMMEDIATELY call `generate_image(prompt=\"...\", aspect_ratio=\"1:1\"|\"16:9\"|...)`!\n")
+        sb.append("  -> Convert Hindi/Hinglish descriptions into clear, rich English prompts inside `prompt` for the highest quality result.\n")
+        sb.append("  -> NEVER say 'Main directly images nahi bana sakta', 'main sirf search kar sakta hoon', or ask the user to use text chat manually.\n\n")
 
         sb.append("### MULTI-STEP AUTONOMOUS APP CONTROL & SEQUENTIAL WORKFLOWS:\n")
         sb.append("- When the user gives a multi-step command (e.g. 'WhatsApp kholo, Rahul ka contact dhundho, usko message karo Hi, uske baad WhatsApp close kar do, Instagram open karke Reels laga do, aur jab main swipe kahun toh reel swipe kar do'):\n")
@@ -437,30 +456,45 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- When the user asks to open native phone apps (YouTube, WhatsApp, Instagram, Camera, Settings, Phone, Chrome, Pinterest): call `open_app(app_name=\"...\")`.\n")
         sb.append("- When the user asks to browse a website, open a URL, search Google in-app, or use the In-Built Browser -> call `open_in_app_browser(url=...)`.\n")
         sb.append("- COMPLETE IN-BUILT BROWSER DOM CONTROL: Once inside Aura's In-Built Browser, you control EVERY webpage element cleanly without Screen Share or refusals!\n")
-        sb.append("  -> Read links/buttons/inputs on page: `browser_read_page(mode=\"interactive\")` or article text: `browser_read_page(mode=\"text\")`.\n")
+        sb.append("  -> Read links/buttons/inputs on page: `browser_read_page(mode=\"interactive\")`, article text: `browser_read_page(mode=\"text\")`, or verify visible images & section (Product Gallery vs Reviews vs Ads): `browser_read_page(mode=\"images\")`.\n")
         sb.append("  -> Search for a specific link/button/video: `browser_find(query=\"...\")`.\n")
-        sb.append("  -> Click any link/button/menu inside the webpage: `browser_click(target_name=\"...\")` or `browser_click(ref=\"ref_...\")`.\n")
-        sb.append("  -> Type & submit into webpage search bars/forms: `browser_type(text=\"...\", target_name=\"...\", submit=true)`.\n")
-        sb.append("  -> Scroll webpage: `browser_scroll(direction=\"down\"|\"up\")`, navigate: `browser_navigate(action=\"back\"|\"forward\"|\"reload\")`, manage tabs/desktop view: `browser_tabs(...)`, control web audio/video/skip ad: `browser_media_control(action=...)`.\n")
+        sb.append("  -> Click organic link/button/menu inside webpage (skips Sponsored ads & search boxes automatically): `browser_click(target_name=\"...\")` or `browser_click(ref=\"ref_...\")`.\n")
+        sb.append("  -> GOOGLE FLOW & SIGN-IN RULES (#8): To open Google Flow, ALWAYS call `open_in_app_browser(url=\"google flow\")` (goes directly to labs.google/fx/tools/flow!). If on search results, click the `labs.google` / `flow.google` organic link — NEVER Sponsored ads! When typing email/password (e.g. 'Email or phone'), pass `browser_type(text=\"...\", target_name=\"email\", submit=false, clear_first=true)` unless asked to submit/press Next.\n")
+        sb.append("  -> SEARCH SUBMIT & IMAGE VERIFICATION RULES (#7): When typing into Amazon/Flipkart/search boxes (`browser_type(..., submit=true)`), check the verified result URL/page before assuming search results loaded; if URL did not change, click the Search/Go button! When asked to show/scroll to product images ('scroll kar image dikha'), ALWAYS call `browser_scroll(direction=\"images\")` (or verify `visibleImages` in `browser_read_page(mode=\"images\")`) — NEVER claim product images are visible if viewport section is `CUSTOMER_REVIEWS`, `SPONSORED_ADS`, or `SIGN_IN`!\n")
+        sb.append("  -> Manage tabs safely: `browser_tabs(action=\"list\"|\"new\"|\"switch\"|\"close\", tab_name=\"...\")` — pass `tab_name` ('amazon', 'google', 'first', 'previous') so you NEVER close the wrong tab!\n")
+        sb.append("  -> Scroll/navigate/media: `browser_scroll(direction=\"down\"|\"up\"|\"images\")`, `browser_navigate(action=\"back\"|\"forward\"|\"reload\")`, `browser_media_control(action=...)`.\n")
+        sb.append("  -> FIRST-ATTEMPT BROWSER CONTROL (#10): Execute browser commands immediately on the 1st call — NEVER ask user to repeat! Use `open_in_app_browser` (NEVER `open_app(\"browser\")` or `search_in_chrome`) to open sites/searches in-app; use `execute_app_workflow` to chain `open_in_app_browser` -> `browser_type` -> `browser_click` seamlessly in one turn!\n")
         sb.append("  -> NEVER refuse clicks, typing, scrolling, or reading inside Aura's In-Built Browser! NEVER call `builtin_chrome_search` when the user wants to control or see the In-Built Browser.\n")
-        sb.append("- Close In-Built Browser or web preview ('browser band karo', 'browser close karo', 'preview band karo'): ALWAYS call `close_in_app_browser()`!\n\n")
+        sb.append("- Close ENTIRE In-Built Browser ONLY when explicitly asked to exit/close the browser ('browser band karo', 'browser close karo', 'preview band karo'): call `close_in_app_browser()`! NEVER call it on 'one', 'open', or single-tab close commands.\n\n")
 
-        sb.append("### YOUTUBE SONGS, SHORTS & AUTO AD SKIP:\n")
-        sb.append("- Play ANY song/video (named like 'Tum Hi Ho lagao' OR vague like 'apni marzi se koi accha gaana laga do', 'best song bajao', or 'in-built browser mein song lagao'): ALWAYS call `search_and_play_youtube(query=\"...\")`! It resolves the direct video immediately with zero endless scrolling and arms automatic ad-skip.\n")
+        sb.append("### YOUTUBE SONGS, SHORTS & AUTO AD SKIP (#16):\n")
+        sb.append("- Play ANY song/video (named like 'Tum Hi Ho lagao' OR vague like 'apni marzi se koi accha gaana laga do', 'YouTube pe gaana bajao', or 'in-built browser mein song lagao'): ALWAYS call `search_and_play_youtube(query=\"...\")`! It resolves the direct video immediately and arms automatic ad-skip — NEVER open YouTube and scroll endlessly without selecting!\n")
+        sb.append("- If a YouTube feed/search list is ALREADY open on screen and user asks to select/play the top or specific visible song ('pehla gaana chalao', 'ye wala bajao', '<song title> select karo'), call `youtube_action(action=\"play_first\")` or `click_ui_element(target_name=\"<exact song title>\" | \"first video\")` directly!\n")
         sb.append("- Skip YouTube ads / like / subscribe / fullscreen / play first video on feed: call `youtube_action(action=\"skip_ad\"|\"like\"|\"subscribe\"|\"fullscreen\"|\"play_first\"|\"pause\"|\"play\"|\"next\")`! Notice `skip_ad` works in both the native YouTube app AND Aura's In-Built Browser.\n\n")
 
         sb.append("### ADVANCE DEVICE CONTROL (INSTANT HARDWARE & SYSTEM SETTINGS):\n")
-        sb.append("- Check battery percentage, charging status, temperature, volume levels, Wi-Fi/network, RAM, storage, brightness, or DND -> call `get_device_status()` IMMEDIATELY.\n")
-        sb.append("- Change volume ('volume kam karo', 'media volume 50% karo', 'ringtone full karo', 'alarm volume kam karo', 'mute karo') -> call `set_volume(action=..., stream=..., percentage=...)`.\n")
+        sb.append("- Check battery percentage, charging status, temperature, volume levels, Wi-Fi/network, RAM, storage, brightness, or DND -> call `get_device_status()` IMMEDIATELY (fast default reads `battery,audio,system`). NEVER guess battery % or volume — ALWAYS call `get_device_status()` first and report the exact returned percentage!\n")
+        sb.append("- Change volume ('volume full karo', 'volume 50% set kar', 'volume kam/zyada karo', 'ringtone full karo', 'alarm volume kam karo', 'mute karo') -> ALWAYS call `set_volume(action=..., stream=..., percentage=...)` directly (`percentage=100` for full/max, `50` for half/50%). Always read the returned `verified`, `actual_percent`, and `capped_by_system`: if `verified=false` or `capped_by_system=true` (e.g., Android Safe Volume warning capped headphones at 67% or DND blocked change), honestly inform the user with the actual verified percentage instead of claiming it changed!\n")
         sb.append("- Switch ringer ('silent karo', 'vibrate mode lagao', 'ring mode on karo') -> call `set_ringer_mode(mode=\"silent\"|\"vibrate\"|\"normal\")`.\n")
-        sb.append("- Brightness ('brightness badhao', '50% karo', 'auto brightness on karo') -> call `set_brightness(...)`.\n")
+        sb.append("- Brightness ('brightness badhao', '50% karo', 'full brightness', 'auto brightness on/off karo') -> call `set_brightness(...)`.\n")
         sb.append("- Flashlight/torch ('torch on/off/toggle') -> call `set_flashlight(...)`.\n")
-        sb.append("- Wi-Fi / Bluetooth / DND / Location / Airplane / Hotspot / Battery Saver / Dark Mode -> call `set_device_setting(setting=..., enabled=...)` (DND toggles directly; radios open the native Android quick panel so user/automation can switch cleanly).\n")
+        sb.append("- Wi-Fi / Bluetooth / Mobile Data / GPS Location / DND / Airplane / Hotspot / Battery Saver / Dark Mode / Auto-Rotate / Screen Timeout -> call `set_device_setting(setting=..., enabled=true|false, value=...)`! It executes directly or auto-toggles the Android switch via Accessibility and returns `verified=true/false`. If `verified=false` or `permission_required=true`, report the true blocker/screen instead of faking success!\n")
         sb.append("- Notification panel, Quick Settings / Control Center, Lock screen, Screenshot, Split screen -> call `system_action(action=\"notifications\"|\"quick_settings\"|\"lock_screen\"|\"take_screenshot\"|\"split_screen\")`.\n")
-        sb.append("- Check recent notifications or OTP codes -> call `read_notifications()`.\n\n")
+        sb.append("- Check recent notifications, pending WhatsApp messages, or OTP codes -> call `read_notifications()`.\n")
+        sb.append("- WHATSAPP NOTIFICATION AUTO-REPLY (#18 — SMART CONFIRM DEFAULT):\n")
+        sb.append("  -> When an incoming WhatsApp notification triggers Smart Confirm Mode, read the sender and message clearly in Hindi/Hinglish and suggest the reply draft, then wait for confirmation before calling `reply_whatsapp_notification(sender_name=\"...\", message=\"...\", action=\"send\")` (or `action=\"dismiss\"`). Notice `reply_whatsapp_notification` sends quietly via Android RemoteInput without opening WhatsApp!\n")
+        sb.append("  -> Toggle Direct Auto-Reply / Smart Confirm Mode / check status -> call `configure_whatsapp_auto_reply(mode=\"smart_confirm\"|\"direct_saved_contacts\"|\"off\"|\"status\")`.\n\n")
 
-        sb.append("### UNIVERSAL CLICKING & EXTERNAL CHROME POPUP MENUS (ZERO REFUSALS ON REAL APPS):\n")
-        sb.append("- On Chrome or any external Android app: menus like '3 dots' / '3 line' / 'More options', popup options like 'New Incognito tab', toolbar buttons, and list cards are ALL clickable via `click_ui_element(target_name=...)`! Call `inspect_screen()` after clicking a menu icon so you see the opened popup items clearly.\n\n")
+        sb.append("### UNIVERSAL CLICKING & EXTERNAL CHROME POPUP MENUS (#15 INCOGNITO & MENUS):\n")
+        sb.append("- On Chrome or any external Android app: menus like '3 dots' / '3 line' / 'More options', popup options like 'New Incognito tab', toolbar buttons, and list cards are ALL clickable via `click_ui_element(target_name=...)`! To turn on Chrome Incognito ('incognito mode on karo', 'new incognito tab kholo'), call `click_ui_element(target_name=\"New Incognito tab\")` directly (it automatically opens 3 dots and verifies Incognito!) — or if Chrome isn't open yet, chain `open_app(\"chrome\")` -> `click_ui_element(\"New Incognito tab\")` in `execute_app_workflow`. When tapping '3 dots' alone, popup items are immediately returned in `current_state`.\n\n")
+
+        sb.append("### CHROME MCQ EXAMS, QUIZZES & FORMS (ZERO HESITATION + VERIFIED TICKS):\n")
+        sb.append("- Whenever solving an MCQ / online assessment in Chrome:\n")
+        sb.append("  -> ACT DECISIVELY WITHOUT HESITATION: NEVER ask 'Kya main tick kar doon?' or say 'lagta hai tick nahi hua' when solving a test. Once the user picks an option or asks you to answer/advance, immediately call `answer_quiz_question(option=\"...\", click_next=true|false)`!\n")
+        sb.append("  -> Set `click_next=true` when the user says 'B lagao aur next karo' or 'answer tick karke next question par chalo'; set `click_next=false` when they only want the option ticked.\n")
+        sb.append("  -> NEVER SKIP A QUESTION: Wait for `verified=true` (`Selected Option: ✓ CHECKED`) before advancing `Next`. Never manually say 'option screen par nahi dikh raha' without scrolling once (`answer_quiz_question` handles scrolling automatically!).\n")
+        sb.append("  -> TEST RESULT BREAKDOWN: After submitting, if asked which questions were wrong ('kaunsa question galat gaya'), scroll down and open 'View Answer Sheet' / 'Review' / 'Incorrect' via `click_ui_element` / `scroll_screen` / `inspect_screen` to report actual wrong answers.\n")
+        sb.append("  -> Always confirm before tapping final 'Submit Assessment' / 'Submit Test'.\n\n")
 
         sb.append("### PHONE CALLS & NUMERIC DIALING (NATIVE ACTION_DIAL ONLY):\n")
         sb.append("- When asked to dial or call a numeric phone number (e.g. '9876543210 dial karo', 'call 1234567890', Hindi spoken digits like 'nau aath saat cheh paanch...'): convert spoken Hindi/English digits cleanly into the exact 10-digit / E.164 phone number, ALWAYS call `dial_number(phone_number=\"...\", auto_call=false)` (or `auto_call=true` only if explicitly told to place the call immediately), and read the dialed number back cleanly. NEVER type phone numbers into Phone/Contacts search bars!\n")
@@ -476,12 +510,14 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
         sb.append("### NATIVE APP & CHAT CONTROL (NEVER USE ACCESSIBILITY OR SCREEN SHARE ON AURA):\n")
         sb.append("- You have 100% direct internal programmatic control over Aura AI's own interface!\n")
+        sb.append("- To open ANY internal screen, Drawer, Plugins page, or Settings section inside Aura: ALWAYS call `navigate_app_screen(screen_name=\"...\")` — supported targets include `'Custom AntiGem Plugins'`, `'Skills & Plugins'`, `'MCP'`, `'Slash Commands'`, `'Drawer'`, `'Drawer Pin Tab'`, `'Drawer Archive Tab'`, `'Drawer Project Tab'`, `'Close Drawer'`, `'Settings'`, `'Aura Voice Settings'`, `'Live API'`, `'Persistent Memory'`, `'Customize'`, `'Images Gallery'`, `'Projects'`, `'Themes'`, `'Accounts'`, `'Model Selector'`, `'IDE'`, `'Terminal'`, `'Notes'`, `'Files'`, `'Browser'`, `'Chat'`, `'Close Overlays'`. NEVER refuse with 'accessibility click nahi kar sakta' or tell the user to open Drawer/Settings/Plugins manually!\n")
         sb.append("- To send a message or task to chat: call `send_message_to_chat(message=\"...\", target=\"CURRENT\" | \"NEW\" | \"<chat_id>\")`.\n")
         sb.append("- To open a new chat: call `create_new_chat()` or `send_message_to_chat(..., target=\"NEW\")`.\n")
         sb.append("- To list recent chats or remember past projects: call `list_recent_chats()`.\n")
-        sb.append("- To open any chat by ID or name: call `open_chat_by_id(chat_id=\"...\")` or `open_chat_by_name(chat_name=\"...\")`.\n")
+        sb.append("- To open any chat (including pinned, archived, or SQLite-stored chats) by name or ID: call `open_chat_by_name(chat_name=\"...\")` or `open_chat_by_id(chat_id=\"...\")`.\n")
+        sb.append("- TRUTHFULNESS RULE (#5): ONLY confirm opening a chat or screen AFTER the tool returns `status=\"success\"` (`verified=true`). If it returns `not_found` or `error`, report accurately (or check `list_recent_chats()`) — NEVER claim 'maine chat/screen khol diya' on failure!\n")
         sb.append("- To close the In-Built Browser / web preview: call `close_in_app_browser()`.\n")
-        sb.append("- For Aura's Chat/Drawer UI, NEVER use Accessibility or Screen Share (use `send_message_to_chat`, `create_new_chat`, `open_chat_by_name`). For Aura's In-Built Browser, use native DOM tools (`browser_read_page`, `browser_find`, `browser_click`, `browser_type`, `browser_scroll`, `browser_media_control`)! Android Accessibility tools (`click_ui_element`, `type_text`, `scroll_screen`, `inspect_screen`) are for third-party Android apps (Chrome, YouTube, Instagram, WhatsApp, Settings, etc.).\n\n")
+        sb.append("- For Aura's Chat/Drawer/Settings/Plugins UI, NEVER use Accessibility or Screen Share (use `navigate_app_screen`, `send_message_to_chat`, `create_new_chat`, `open_chat_by_name`). For Aura's In-Built Browser, use native DOM tools (`browser_read_page`, `browser_find`, `browser_click`, `browser_type`, `browser_scroll`, `browser_media_control`)! Android Accessibility tools (`click_ui_element`, `type_text`, `scroll_screen`, `inspect_screen`) are for third-party Android apps (Chrome, YouTube, Instagram, WhatsApp, etc.).\n\n")
 
         sb.append("### OPENING SYSTEM APPS & DIALER:\n")
         sb.append("- When asked to open phone dialer, phone app, or calling app (e.g. 'phone dialer kholo', 'calling app open karo', 'phone open karo'): ALWAYS call `open_app(app_name=\"phone\")` or `call_contact(contact_name=\"...\")`! DO NOT open PhonePe! DO NOT open Chrome!\n")
@@ -491,7 +527,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("1. NORMAL CONVERSATIONS & CAPABILITY QUESTIONS (ANSWER DIRECTLY IN VOICE):\n")
         sb.append("   - Casual talk, greetings, general questions, explanations, discussions, advice, and asking what you can do:\n")
         sb.append("   - You MUST answer IMMEDIATELY and DIRECTLY in voice (Hindi/Hinglish).\n")
-        sb.append("   - When asked what you can do (e.g. 'tum kya kya kar sakte ho?', 'kya kar sakte ho?'): Answer naturally in voice describing phone automation, playing music, web search, and coding capabilities. DO NOT CALL ANY TOOLS! DO NOT START BUILDING OR CREATING ANYTHING!\n")
+        sb.append("   - When asked what you can do (e.g. 'tum kya kya kar sakte ho?', 'kya kar sakte ho?'): Answer naturally in voice describing phone automation, generating AI images directly, playing music, web browsing, and coding capabilities. DO NOT CALL ANY TOOLS! DO NOT START BUILDING OR CREATING ANYTHING!\n")
         sb.append("   - NEVER boast or mention internal app features! NEVER say: 'main new chat shuru kar sakta hoon', 'main new chat create karta hoon', or 'task delegate karta hoon'. All internal workflows are completely SILENT to the user!\n\n")
 
         sb.append("2. DISCOVERY-FIRST PROJECT PLANNING & STRICT REQUIREMENTS CONTRACT (#11 & #12):\n")
@@ -510,39 +546,52 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("   - NEVER ask for screen share! Call `check_task_status()` immediately and report back in first-person Hindi/Hinglish.\n")
         sb.append("   - CROSS-SCREEN CONTINUITY (#14): You automatically share `ActiveProjectContext` (active project name, path, theme, stack, and preview URL) even when the user switches to Pinterest, Dribbble, Chrome, or other apps! If the user says 'ye design dekh kar hamari website mein apply karo' or 'hamari site par ye color lagao', ALWAYS bind the visual inspiration directly to the active project listed in `[ACTIVE PROJECT CONTEXT]` — NEVER ask 'kaunsi website?' if an active project exists!\n\n")
 
-        sb.append("4. OPENING VOICE CHATS & CREATING NEW CHATS ON SCREEN (#7):\n")
+        sb.append("4. OPENING VOICE CHATS, PINNED CHATS & INTERNAL SCREENS (#5, #6):\n")
         sb.append("   - 'new chat open karo' / 'nayi chat shuru karo' -> Call `create_new_chat()`.\n")
-        sb.append("   - Open a specific past/renamed chat ('Project Alpha wala chat kholo', 'Gym website wala chat kholo') -> Call `open_chat_by_name(chat_name=\"...\")` or `list_recent_chats(query=\"...\")` then `open_chat_by_id(chat_id=\"...\")`.\n")
+        sb.append("   - Open a specific pinned/past/renamed chat ('jo chat pin hai wo kholo', 'Flipkart E-Commerce website wala chat kholo', 'Project Alpha wala chat kholo') -> Call `open_chat_by_name(chat_name=\"...\")` or `list_recent_chats(query=\"...\")` then `open_chat_by_id(chat_id=\"...\")`.\n")
+        sb.append("   - Open internal screens ('Drawer kholo', 'Pin tab dikhao', 'Custom AntiGem Plugins kholo', 'Skills & Plugins open karo', 'Settings kholo', 'Customize kholo', 'Images Gallery dikhao', 'IDE / Terminal / Notes / Files open karo') -> Call `navigate_app_screen(screen_name=\"...\")`.\n")
         sb.append("   - 'live chat open karo' / 'chat dikhao' -> Call `open_live_chat()`.\n")
         sb.append("   - 'pichhli chat kholo' -> Call `open_previous_voice_chat()`.\n\n")
 
-        sb.append("5. UPDATING OR MODIFYING RUNNING TASKS:\n")
+        sb.append("5. CHAT QUESTIONNAIRE & CHOICE CARDS (#9 — ZERO DUPLICATE CHATS):\n")
+        sb.append("   - Whenever the active chat shows a Questionnaire / Question Card ('Antigravity has a question', 'Standard mode (without Agent)', 'Agent Mode', 'Recommended', 'Submit'):\n")
+        sb.append("   - ALWAYS call `answer_chat_question(answer=\"...\", action=\"submit\"|\"skip\"|\"cancel\"|\"inspect\")`! (e.g. 'Standard mode' -> `answer_chat_question(answer=\"Standard mode\", action=\"submit\")`).\n")
+        sb.append("   - NEVER call `start_new_chat_task` or `click_ui_element` when answering or submitting a Questionnaire option, and NEVER start duplicate chats for an ongoing build task!\n\n")
+
+        sb.append("6. UPDATING OR MODIFYING RUNNING TASKS:\n")
         sb.append("   - When the user asks to modify the active website/app -> Call `send_task_update(instruction=...)`.\n\n")
 
-        sb.append("6. INSPECTING APP STATE:\n")
+        sb.append("7. INSPECTING APP STATE:\n")
         sb.append("   - When the user asks what tasks, chats, or servers are running in Aura -> Call `inspect_app_state()`.\n\n")
 
-        sb.append("7. SCREEN SHARE:\n")
+        sb.append("8. SCREEN SHARE:\n")
         sb.append("   - ONLY call `request_screen_share` if the user explicitly asks to see visual designs on an external app (Pinterest, Dribbble, Chrome) or explicitly says 'screen share chalu karo'. NEVER for Aura's own chat or task status.\n\n")
 
-        sb.append("8. FIRST-PERSON PERSONAL OWNERSHIP (#8):\n")
+        sb.append("9. FIRST-PERSON PERSONAL OWNERSHIP (#8):\n")
         sb.append("   - NEVER say: 'Antigravity ka response aaya hai', 'Agent ne bola', 'Delegating to agent', or 'Chat mein ye likha hai'. You ARE Aura. Speak with complete first-person ownership!\n\n")
 
         sb.append("### ZERO-HALLUCINATION ACTION EXECUTION:\n")
+        sb.append("- Answer active chat Questionnaire card -> `answer_chat_question(answer=\"...\", action=\"submit\"|\"skip\"|\"cancel\")`.\n")
         sb.append("- Open native app -> `open_app(app_name)`.\n")
         sb.append("- Open website / search in Aura In-Built Browser -> `open_in_app_browser(url=\"...\")`.\n")
         sb.append("- Control Aura In-Built Browser -> `browser_read_page`, `browser_find`, `browser_click`, `browser_type`, `browser_scroll`, `browser_navigate`, `browser_tabs`, `browser_media_control`, `close_in_app_browser`.\n")
         sb.append("- Play song/video on YouTube -> `search_and_play_youtube(query=\"...\")`; Skip Ad / Like / Subscribe / Play Visible -> `youtube_action(action=\"skip_ad\"|...)`.\n")
-        sb.append("- Send WhatsApp message -> `send_whatsapp_message(recipient_name=\"...\", message=\"...\")`.\n")
+        sb.append("- Send WhatsApp message -> `send_whatsapp_message(recipient_name=\"...\", message=\"...\")`; Reply / Dismiss WhatsApp notification -> `reply_whatsapp_notification(sender_name=\"...\", message=\"...\", action=\"send\"|\"dismiss\")`; Toggle WhatsApp Auto-Reply mode -> `configure_whatsapp_auto_reply(mode=...)`.\n")
         sb.append("- Call saved contact -> `call_contact(contact_name=\"...\")`; Dial numeric number -> `dial_number(phone_number=\"...\")`.\n")
         sb.append("- Device Telemetry & Control -> `get_device_status()`, `set_volume`, `set_ringer_mode`, `set_brightness`, `set_flashlight`, `set_device_setting`, `system_action`, `read_notifications`.\n")
         sb.append("- Scroll / Short-Video Swipe -> `scroll_screen(direction=\"down\"|\"up\")`, `swipe_reel(direction=\"up\"|\"down\")`.\n")
         sb.append("- Tap / Type in external apps (Chrome, Settings, IG, etc.) -> `click_ui_element(target_name=\"...\")`, `type_text(text=\"...\", submit=true)`, `inspect_screen()`.\n")
+        sb.append("- Navigate inside Aura AI (Drawer, Pin/Archive tab, Custom AntiGem Plugins, Skills & Plugins, MCP, Settings, Customize, Images Gallery, Projects, IDE, Terminal, Notes, Files) -> `navigate_app_screen(screen_name=\"...\")`.\n")
+        sb.append("- Generate AI Image / Artwork -> `generate_image(prompt=\"...\", aspect_ratio=\"1:1\")`.\n")
         sb.append("- System keys -> `press_key(key=\"back\"|\"home\"|\"recents\")`.\n")
         sb.append("- Local Web Preview (#13): NEVER run `python3 index.html` or `python <file>.html`! To preview ANY web project, ALWAYS call `start_local_preview_server(project_dir=\"...\", port=3000, open_in_browser=true)`.\n\n")
 
         sb.append(AuraMemoryManager.getSystemPromptContext())
         sb.append(ChatContextBridge.getActiveChatPromptContext())
+        runCatching { phoneControlManager?.getQuickBatteryAndAudioLine() }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { sb.append("\n").append(it).append("\n") }
 
         return sb.toString()
     }
@@ -585,6 +634,14 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                     is AuraAgentEvent.RealError -> {
                         "A real execution error occurred (${ev.errorTitle}): ${ev.errorMessage.take(180)}. Briefly inform the user honestly in first-person Hindi/Hinglish and suggest the fix."
+                    }
+                    is AuraAgentEvent.WhatsAppIncoming -> {
+                        val grp = if (ev.isGroupChat && !ev.groupName.isNullOrBlank()) " in group '${ev.groupName}'" else ""
+                        val sensitiveNote = if (ev.isSensitive) " IMPORTANT: Message looks sensitive (OTP/payment/emergency) so NEVER auto-send." else ""
+                        "WhatsApp Smart Confirm notification: '${ev.cleanSenderName}'$grp sent: \"${ev.messageText.take(200)}\".$sensitiveNote Suggested reply: \"${ev.suggestedDraft}\". Tell the user in 1-2 short Hindi/Hinglish sentences who messaged and what they said, mention the suggested reply briefly, and ask if they want to send it or say a custom reply using `reply_whatsapp_notification`."
+                    }
+                    is AuraAgentEvent.WhatsAppAutoReplied -> {
+                        "Direct WhatsApp Auto-Reply sent in background to '${ev.senderName}' (for \"${ev.incomingText.take(120)}\"): sent \"${ev.sentReply}\". Inform the user in 1 crisp Hindi/Hinglish sentence."
                     }
                 }
                 waitUntilSafeToAnnounce()
@@ -669,11 +726,25 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     override fun onUserTextReceived(textChunk: String) {
-        val normalized = AuraBrandAliasNormalizer.normalize(textChunk)
+        if (HindiAsrNormalizer.isNoiseOrForeignHallucination(textChunk)) {
+            Log.d(TAG, "Filtered noise/foreign ASR hallucination chunk: ${textChunk.take(60)}")
+            return
+        }
+        val svc = AutomationAccessibilityService.instance
+        val fgPkg = svc?.foregroundPackage.orEmpty()
+        val lastObs = com.example.gemini.data.automation.agent.AgentTaskEngine.current()?.lastObservation.orEmpty()
+        val hint = HindiAsrNormalizer.ScreenContextHint(
+            foregroundPackage = fgPkg,
+            isMcqOrExam = lastObs.contains("[MCQ / QUIZ STATE]"),
+            isBrowser = fgPkg.contains("chrome", ignoreCase = true) || ChatContextBridge.isInBuiltBrowserActive(),
+            isAuraForeground = appContext?.let { isAuraPackage(fgPkg, it.packageName) } == true
+        )
+        val normalized = HindiAsrNormalizer.normalize(textChunk, hint)
+        lastUserUtterance = normalized
+        lastUserUtteranceMs = System.currentTimeMillis()
         _lastTranscript.value = normalized
         _spokenSentence.value = ""
         // Instant voice stop hook for continuous auto-scroll (#17)
-        val svc = AutomationAccessibilityService.instance
         if (svc != null && svc.isContinuousScrolling) {
             val lower = normalized.lowercase(Locale.ROOT)
             if (lower.contains("ruko") || lower.contains("stop") || lower.contains("bas") ||
@@ -682,19 +753,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 svc.stopContinuousScroll("user_voice_stop")
             }
         }
-        if (!isNoiseOrForeignHallucination(normalized)) {
-            ChatContextBridge.recordVoiceUserTurn(normalized)
-            AuraMemoryManager.learnFromConversation(normalized)
-        }
-    }
-
-    private fun isNoiseOrForeignHallucination(text: String): Boolean {
-        val t = text.trim()
-        if (t.length < 2) return true
-        if (t.contains("¿") || t.contains("¡")) return true
-        val lower = t.lowercase()
-        val foreignGlitches = listOf("yo calla", "pero bien", "esto qué es", "qué ha pasado", "habla", "gracias por ver", "subtítulos por", "amara.org")
-        return foreignGlitches.any { lower.contains(it) }
+        ChatContextBridge.recordVoiceUserTurn(normalized)
+        AuraMemoryManager.learnFromConversation(normalized)
     }
 
     override fun onInterrupted() {
@@ -726,9 +786,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     private val FAST_DEVICE_TOOLS = setOf(
-        "get_device_status", "set_volume", "set_brightness", "set_flashlight",
+        "get_device_status", "get_battery_level", "get_battery_status", "check_battery",
+        "set_volume", "set_brightness", "set_flashlight",
         "set_ringer_mode", "read_notifications", "system_action", "set_device_setting",
-        "media_playback_control", "close_in_app_browser"
+        "media_playback_control", "close_in_app_browser",
+        "reply_whatsapp_notification", "configure_whatsapp_auto_reply"
     )
 
     override fun onToolCallsBatch(calls: List<GeminiLiveWebSocket.ToolCallItem>) {
@@ -820,6 +882,22 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                 }
 
+                "answer_chat_question", "submit_chat_question", "answer_questionnaire" -> {
+                    val answer = args.optString("answer", "")
+                        .ifBlank { args.optString("choice", "") }
+                        .ifBlank { args.optString("option", "") }
+                        .ifBlank { args.optString("target_name", "") }
+                        .trim()
+                    val action = args.optString("action", "submit").ifBlank { "submit" }
+                    val res = ChatContextBridge.answerActiveChatQuestion(answer, action)
+                    if (res.success) bringAuraToForeground(context)
+                    JSONObject().apply {
+                        put("status", if (res.success) "success" else "error")
+                        put("verified", res.success)
+                        put("message", res.message)
+                    }
+                }
+
                 "create_new_chat" -> {
                     val msg = ChatContextBridge.createNewChat()
                     JSONObject().apply {
@@ -837,28 +915,81 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
 
                 "open_previous_voice_chat" -> {
-                    val msg = ChatContextBridge.openPreviousVoiceChat()
+                    val res = ChatContextBridge.openPreviousVoiceChat()
+                    if (res.success) bringAuraToForeground(context)
                     JSONObject().apply {
-                        put("status", "success")
-                        put("message", msg)
+                        put("status", if (res.success) "success" else "error")
+                        put("message", res.message)
+                        put("verified", res.success)
                     }
                 }
 
                 "open_chat_by_name", "open_chat" -> {
                     val name = args.optString("chat_name").ifBlank { args.optString("name").ifBlank { args.optString("title").ifBlank { args.optString("id") } } }.trim()
-                    val msg = ChatContextBridge.openChatByName(name)
+                    val res = ChatContextBridge.openChatByName(name)
+                    if (res.success) bringAuraToForeground(context)
                     JSONObject().apply {
-                        put("status", if (msg.startsWith("Could not find")) "not_found" else "success")
-                        put("message", msg)
+                        put(
+                            "status",
+                            when {
+                                res.success -> "success"
+                                res.message.startsWith("Could not find", ignoreCase = true) -> "not_found"
+                                else -> "error"
+                            }
+                        )
+                        put("message", res.message)
+                        put("verified", res.success)
+                        if (res.matchedId != null) put("chat_id", res.matchedId)
+                        if (res.matchedTitle != null) put("chat_title", res.matchedTitle)
+                        put("is_pinned", res.isPinned)
                     }
                 }
 
                 "open_chat_by_id" -> {
                     val chatId = args.optString("chat_id", "").ifBlank { args.optString("id", "") }.trim()
-                    val msg = ChatContextBridge.openChatById(chatId)
+                    val res = ChatContextBridge.openChatById(chatId)
+                    if (res.success) bringAuraToForeground(context)
                     JSONObject().apply {
-                        put("status", if (msg.startsWith("Could not find")) "not_found" else "success")
-                        put("message", msg)
+                        put(
+                            "status",
+                            when {
+                                res.success -> "success"
+                                res.message.startsWith("Could not find", ignoreCase = true) -> "not_found"
+                                else -> "error"
+                            }
+                        )
+                        put("message", res.message)
+                        put("verified", res.success)
+                    }
+                }
+
+                "navigate_app_screen", "open_drawer", "close_drawer", "open_plugins", "open_settings", "open_gallery", "open_customize" -> {
+                    val defaultTarget = when (name) {
+                        "open_drawer" -> "drawer"
+                        "close_drawer" -> "close drawer"
+                        "open_plugins" -> "Custom AntiGem Plugins"
+                        "open_settings" -> "settings"
+                        "open_gallery" -> "images gallery"
+                        "open_customize" -> "customize"
+                        else -> ""
+                    }
+                    val screenTarget = args.optString("screen_name", "")
+                        .ifBlank { args.optString("target_name", "") }
+                        .ifBlank { args.optString("screen", "") }
+                        .ifBlank { args.optString("tab", "") }
+                        .ifBlank { defaultTarget }
+                        .trim()
+                    if (screenTarget.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "screen_name is required.")
+                    } else {
+                        val navRes = ChatContextBridge.navigateToInternalScreen(screenTarget)
+                        if (navRes.success) bringAuraToForeground(context)
+                        JSONObject().apply {
+                            put("status", if (navRes.success) "success" else "error")
+                            put("message", navRes.message)
+                            put("verified", navRes.success)
+                            if (navRes.screenLabel.isNotBlank()) put("screen", navRes.screenLabel)
+                        }
                     }
                 }
 
@@ -889,11 +1020,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
 
                 "close_in_app_browser", "close_browser", "close_inbuilt_browser", "close_preview" -> {
-                    val msg = ChatContextBridge.closeInAppBrowser()
-                    JSONObject().apply {
-                        put("status", "success")
-                        put("message", msg)
-                    }
+                    tryCloseWholeBrowserSafely()
                 }
 
                 "send_task_update" -> {
@@ -920,6 +1047,64 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                 }
 
+                "generate_image" -> {
+                    val prompt = args.optString("prompt", "").ifBlank { args.optString("description", "") }.trim()
+                    val aspectRatio = args.optString("aspect_ratio", "1:1").ifBlank { "1:1" }
+                    val showInChat = args.optBoolean("show_in_chat", true)
+                    if (prompt.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "Image prompt cannot be empty.")
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            _phase.value = Phase.WORKING
+                            _statusText.value = "Generating image..."
+                        }
+                        val genRes = VoiceImageGenerator.generateAndSave(context, prompt, aspectRatio)
+                        if (genRes.success) {
+                            com.example.gemini.data.remote.HubMediaResolver.clearFailed(genRes.filePath)
+                            ChatContextBridge.recordVoiceGeneratedImage(
+                                prompt = prompt,
+                                filePath = genRes.filePath,
+                                caption = genRes.caption
+                            )
+                            val fgPkg = AutomationAccessibilityService.instance?.foregroundPackage.orEmpty()
+                            val auraInForeground = fgPkg.isBlank() || isAuraPackage(fgPkg, context.packageName)
+                            if (showInChat && auraInForeground) {
+                                ChatContextBridge.openCurrentVoiceChat()
+                            }
+                            JSONObject().apply {
+                                put("status", "success")
+                                put("file_path", genRes.filePath)
+                                put("model", genRes.modelUsed)
+                                put(
+                                    "message",
+                                    if (showInChat && auraInForeground) {
+                                        "Image generated and displayed in chat (${File(genRes.filePath).name}). Saved to AURA_Vision gallery too."
+                                    } else {
+                                        "Image generated and saved in your chat and Pictures/AURA_Vision (${File(genRes.filePath).name})."
+                                    }
+                                )
+                            }
+                        } else {
+                            // Automatic fallback to connected chat/hub backend if direct key lacks image quota
+                            val canDelegateToChat = ChatContextBridge.viewModel?.systemConnectionState?.value?.canSend == true
+                            if (canDelegateToChat) {
+                                val delegatedReply = ChatContextBridge.startNewChatTask("Generate an image and display it in chat: $prompt (aspect ratio $aspectRatio)")
+                                startProactiveTaskProgressMonitor()
+                                JSONObject().apply {
+                                    put("status", "success")
+                                    put("delegated", true)
+                                    put("message", "Image generation started via Hub backend: ${delegatedReply.take(180)}")
+                                }
+                            } else {
+                                JSONObject().apply {
+                                    put("status", "error")
+                                    put("message", "Image generation failed: ${genRes.error}")
+                                }
+                            }
+                        }
+                    }
+                }
+
                 "delegate_task_to_app_agent", "execute_in_app_chat" -> {
                     val prompt = args.optString("prompt", "").ifBlank { args.optString("task", "") }.trim()
                     if (prompt.isBlank()) {
@@ -942,10 +1127,16 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 "open_app" -> {
                     val appName = args.optString("app_name", "").ifBlank { args.optString("name", "") }.trim()
                     val appNumber = if (args.has("app_number")) args.optInt("app_number") else null
+                    val lowerApp = appName.lowercase(Locale.ROOT).trim()
 
                     if (AuraBrandAliasNormalizer.isAuraAppAlias(appName) || appName.equals("antigem", true)) {
                         bringAuraToForeground(context)
                         JSONObject().put("status", "success").put("message", "Opened Aura AI and brought to foreground")
+                    } else if (lowerApp in setOf("browser", "in-built browser", "inbuilt browser", "in built browser", "in build browser", "aura browser", "antigem browser", "web preview")) {
+                        ensureBrowserOpen(context)
+                        JSONObject().put("status", "success")
+                            .put("target", "IN_APP_BROWSER")
+                            .put("message", "Opened Aura In-Built Browser on screen. Ready for open_in_app_browser, browser_type, browser_click, and browser_scroll.")
                     } else if (appName.equals("youtube", true) || appName.equals("yt", true)) {
                         // #21: Always launch native YouTube app first via packageManager; NEVER auto-search "Trending music"
                         val ytIntent = context.packageManager.getLaunchIntentForPackage("com.google.android.youtube")?.apply {
@@ -1008,8 +1199,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     if (appName.isBlank()) {
                         JSONObject().put("status", "error").put("message", "app_name is required for close_specific_app.")
                     } else if (appName.lowercase(Locale.ROOT).let { it == "browser" || it.contains("in-built browser") || it.contains("inbuilt browser") || it == "preview" }) {
-                        val msg = ChatContextBridge.closeInAppBrowser()
-                        JSONObject().put("status", "success").put("message", msg)
+                        tryCloseWholeBrowserSafely()
                     } else {
                         val svc = AutomationAccessibilityService.instance
                         svc?.pauseMediaPlayback()
@@ -1045,11 +1235,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     val appName = args.optString("app_name", "").ifBlank { null }
                     val appLower = appName?.lowercase(java.util.Locale.ROOT)?.trim()
                     if (appLower != null && (appLower == "browser" || appLower.contains("in-built browser") || appLower.contains("inbuilt browser") || appLower == "preview" || appLower.contains("web preview"))) {
-                        val msg = ChatContextBridge.closeInAppBrowser()
-                        return JSONObject().apply {
-                            put("status", "success")
-                            put("message", msg)
-                        }
+                        return tryCloseWholeBrowserSafely()
                     }
                     val removeFromRecents = args.optBoolean("remove_from_recents", false)
                     val clearAllRecents = args.optBoolean("clear_all_recents", false)
@@ -1135,21 +1321,38 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     ensureBrowserOpen(context)
                     val tabId = args.optString("tab_id").takeIf { it.isNotBlank() }
                     val mode = args.optString("mode", "interactive").lowercase(Locale.ROOT)
-                    if (mode == "text") {
-                        val mcpArgs = JSONObject().apply {
-                            if (tabId != null) put("tab_id", tabId)
-                            put("max_chars", 14_000)
+                    when (mode) {
+                        "text" -> {
+                            val mcpArgs = JSONObject().apply {
+                                if (tabId != null) put("tab_id", tabId)
+                                put("max_chars", 14_000)
+                            }
+                            val (ok, txt) = callBrowserMcpText(context, "browser_get_page_text", mcpArgs)
+                            JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
                         }
-                        val (ok, txt) = callBrowserMcpText(context, "browser_get_page_text", mcpArgs)
-                        JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
-                    } else {
-                        val mcpArgs = JSONObject().apply {
-                            if (tabId != null) put("tab_id", tabId)
-                            put("filter", if (mode == "all") "all" else "interactive")
-                            put("max_chars", 14_000)
+                        "images", "media", "viewport" -> {
+                            val (ok, summary, reportJson) = inspectBrowserViewportMedia(context, "inspect", tabId)
+                            JSONObject().apply {
+                                put("status", if (ok) "success" else "error")
+                                put("verified", ok)
+                                put("message", summary)
+                                if (reportJson != null) {
+                                    put("section", reportJson.optString("section"))
+                                    put("organic_visible_images", reportJson.optInt("organicVisibleImageCount"))
+                                    put("images_above", reportJson.optInt("imagesAbove"))
+                                    put("images_below", reportJson.optInt("imagesBelow"))
+                                }
+                            }
                         }
-                        val (ok, txt) = callBrowserMcpText(context, "browser_read_page", mcpArgs)
-                        JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
+                        else -> {
+                            val mcpArgs = JSONObject().apply {
+                                if (tabId != null) put("tab_id", tabId)
+                                put("filter", if (mode == "all") "all" else "interactive")
+                                put("max_chars", 14_000)
+                            }
+                            val (ok, txt) = callBrowserMcpText(context, "browser_read_page", mcpArgs)
+                            JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
+                        }
                     }
                 }
 
@@ -1185,6 +1388,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         refArg = args.optString("ref").takeIf { it.isNotBlank() },
                         targetName = args.optString("target_name").ifBlank { args.optString("query") }.takeIf { it.isNotBlank() },
                         submit = args.optBoolean("submit", true),
+                        clearFirst = args.optBoolean("clear_first", true),
                         tabId = args.optString("tab_id").takeIf { it.isNotBlank() }
                     )
                 }
@@ -1192,16 +1396,40 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 "browser_scroll" -> {
                     ensureBrowserOpen(context)
                     val dir = args.optString("direction", "down").lowercase(Locale.ROOT)
-                    val amount = args.optInt("amount", 5).coerceIn(1, 10)
-                    val mcpArgs = JSONObject()
-                        .put("action", "scroll")
-                        .put("scroll_direction", dir)
-                        .put("scroll_amount", amount)
-                        .apply {
-                            args.optString("tab_id").takeIf { it.isNotBlank() }?.let { put("tab_id", it) }
+                    val tabId = args.optString("tab_id").takeIf { it.isNotBlank() }
+                    if (dir == "images" || dir == "gallery" || dir == "photos") {
+                        val (ok, summary, reportJson) = inspectBrowserViewportMedia(context, "scroll_to_images", tabId)
+                        val hasImages = (reportJson?.optInt("organicVisibleImageCount") ?: 0) > 0
+                        JSONObject().apply {
+                            put("status", if (ok) "success" else "error")
+                            put("verified", hasImages)
+                            put("message", summary)
+                            if (reportJson != null) {
+                                put("section", reportJson.optString("section"))
+                                put("organic_visible_images", reportJson.optInt("organicVisibleImageCount"))
+                            }
                         }
-                    val (ok, txt) = callBrowserMcpText(context, "browser_computer", mcpArgs)
-                    JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
+                    } else {
+                        val amount = args.optInt("amount", 5).coerceIn(1, 10)
+                        val mcpArgs = JSONObject()
+                            .put("action", "scroll")
+                            .put("scroll_direction", dir)
+                            .put("scroll_amount", amount)
+                            .apply { if (tabId != null) put("tab_id", tabId) }
+                        val (ok, txt) = callBrowserMcpText(context, "browser_computer", mcpArgs)
+                        val (mediaOk, mediaSummary, reportJson) = inspectBrowserViewportMedia(context, "inspect", tabId)
+                        val fullMsg = if (mediaOk) "$txt\n$mediaSummary" else txt
+                        JSONObject().apply {
+                            put("status", if (ok) "success" else "error")
+                            put("message", fullMsg)
+                            if (reportJson != null) {
+                                put("section", reportJson.optString("section"))
+                                put("organic_visible_images", reportJson.optInt("organicVisibleImageCount"))
+                                put("images_above", reportJson.optInt("imagesAbove"))
+                                put("images_below", reportJson.optInt("imagesBelow"))
+                            }
+                        }
+                    }
                 }
 
                 "browser_navigate" -> {
@@ -1228,7 +1456,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
                 "browser_tabs" -> {
                     val action = args.optString("action", "list").lowercase(Locale.ROOT)
-                    val tabId = args.optString("tab_id").takeIf { it.isNotBlank() }
+                    val tabIdArg = args.optString("tab_id").takeIf { it.isNotBlank() }
+                    val tabNameArg = args.optString("tab_name", "")
+                        .ifBlank { args.optString("target", "") }
+                        .ifBlank { args.optString("title", "") }
+                        .trim()
                     val bm = BrowserSessionManager.instance
                     when (action) {
                         "list" -> {
@@ -1249,19 +1481,46 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         }
                         "switch" -> {
                             ensureBrowserOpen(context)
-                            val mcpArgs = JSONObject().put("tab_id", tabId ?: bm.getActiveTab()?.id.orEmpty())
-                            val (ok, txt) = callBrowserMcpText(context, "browser_switch_tab", mcpArgs)
-                            JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
+                            val targetTab = resolveBrowserTabOrError(tabNameArg.ifBlank { tabIdArg.orEmpty() })
+                            val chosen = targetTab.tab
+                            if (chosen == null) {
+                                JSONObject().put("status", "error").put("verified", false).put("message", targetTab.error ?: "Tab not found.")
+                            } else {
+                                val (ok, txt) = callBrowserMcpText(context, "browser_switch_tab", JSONObject().put("tab_id", chosen.id))
+                                JSONObject().put("status", if (ok) "success" else "error")
+                                    .put("verified", ok)
+                                    .put("tab_id", chosen.id)
+                                    .put("message", if (ok) "Switched to tab #${chosen.index + 1}: '${chosen.title}' (${chosen.url})." else txt)
+                            }
                         }
                         "close" -> {
-                            val mcpArgs = JSONObject().put("tab_id", tabId ?: bm.getActiveTab()?.id.orEmpty())
-                            val (ok, txt) = callBrowserMcpText(context, "browser_close_tab", mcpArgs)
-                            JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
+                            val targetTab = resolveBrowserTabOrError(tabNameArg.ifBlank { tabIdArg.orEmpty() })
+                            val chosen = targetTab.tab
+                            if (chosen == null) {
+                                JSONObject().put("status", "error").put("verified", false).put("message", targetTab.error ?: "Tab not found.")
+                            } else {
+                                val (ok, txt) = callBrowserMcpText(context, "browser_close_tab", JSONObject().put("tab_id", chosen.id))
+                                val remainingInfo = if (ok) {
+                                    withContext(Dispatchers.Main) {
+                                        if (bm.tabs.isEmpty()) {
+                                            ChatContextBridge.closeInAppBrowser()
+                                            "No tabs left; closed browser and returned to chat."
+                                        } else {
+                                            val activeNow = bm.getActiveTab()
+                                            "Active tab is now '${activeNow?.title ?: "Tab"}' (${activeNow?.url.orEmpty()})."
+                                        }
+                                    }
+                                } else ""
+                                JSONObject().put("status", if (ok) "success" else "error")
+                                    .put("verified", ok)
+                                    .put("closed_tab_id", chosen.id)
+                                    .put("message", if (ok) "Closed tab #${chosen.index + 1} '${chosen.title}' (${chosen.url}). $remainingInfo" else txt)
+                            }
                         }
                         "desktop", "mobile" -> {
                             ensureBrowserOpen(context)
                             val mcpArgs = JSONObject().put("mode", action).apply {
-                                if (tabId != null) put("tab_id", tabId)
+                                if (tabIdArg != null) put("tab_id", tabIdArg)
                             }
                             val (ok, txt) = callBrowserMcpText(context, "browser_set_view_mode", mcpArgs)
                             JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
@@ -1429,6 +1688,103 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                 }
 
+                "reply_whatsapp_notification" -> {
+                    val senderName = args.optString("sender_name", "")
+                        .ifBlank { args.optString("recipient_name", "") }
+                        .trim()
+                    val customMsg = args.optString("message", "").trim()
+                    val replyAction = args.optString("action", "send").trim().lowercase(Locale.ROOT)
+                    audioPlayer?.flush()
+
+                    if (replyAction == "dismiss" || replyAction == "ignore" || replyAction == "cancel") {
+                        val cleared = WhatsAppAutoReplyManager.dismissPending(context, senderName.ifBlank { null })
+                        JSONObject().apply {
+                            put("status", if (cleared > 0) "success" else "error")
+                            put("cleared", cleared)
+                            put("remaining_pending", WhatsAppAutoReplyManager.pendingReplies.value.size)
+                            put(
+                                "message",
+                                if (cleared > 0) "Dismissed $cleared pending WhatsApp message(s)." else "No matching pending WhatsApp message found to dismiss."
+                            )
+                        }
+                    } else {
+                        val execRes = WhatsAppAutoReplyManager.confirmAndSendReply(
+                            context = context,
+                            senderOrId = senderName.ifBlank { null },
+                            customMessage = customMsg.ifBlank { null }
+                        )
+                        JSONObject().apply {
+                            put("status", if (execRes.success) "success" else "error")
+                            put("sent", execRes.success)
+                            put("method", execRes.method)
+                            put("recipient", execRes.recipientName)
+                            put("sent_message", execRes.sentMessage)
+                            put("remaining_pending", WhatsAppAutoReplyManager.pendingReplies.value.size)
+                            put(
+                                "message",
+                                if (execRes.success) {
+                                    "Reply sent to ${execRes.recipientName} via ${execRes.method}: \"${execRes.sentMessage}\""
+                                } else {
+                                    execRes.errorMessage ?: "Failed to reply to WhatsApp notification."
+                                }
+                            )
+                        }
+                    }
+                }
+
+                "configure_whatsapp_auto_reply" -> {
+                    JarvisPreferences.init(context.applicationContext)
+                    val modeArg = args.optString("mode", "status").trim().lowercase(Locale.ROOT)
+                    when (modeArg) {
+                        "off", "disable", "disabled" -> {
+                            JarvisPreferences.waAutoReplyEnabled.set(false)
+                        }
+                        "smart_confirm", "smart", "confirm", "ask" -> {
+                            JarvisPreferences.waAutoReplyEnabled.set(true)
+                            JarvisPreferences.waDirectSavedContacts.set(false)
+                        }
+                        "direct_saved_contacts", "direct", "auto", "on" -> {
+                            JarvisPreferences.waAutoReplyEnabled.set(true)
+                            JarvisPreferences.waDirectSavedContacts.set(true)
+                        }
+                    }
+                    if (args.has("ai_draft")) {
+                        JarvisPreferences.waAutoReplyAiDraft.set(args.optBoolean("ai_draft", true))
+                    }
+                    val customTpl = args.optString("fallback_template", "").trim()
+                    if (customTpl.isNotBlank()) {
+                        JarvisPreferences.waAutoReplyTemplate.set(customTpl.take(220))
+                    }
+
+                    val listenerEnabled = WhatsAppAutoReplyManager.isNotificationListenerEnabled(context)
+                    if (!listenerEnabled && args.optBoolean("open_permission_settings", false)) {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    }
+                    val modeLabel = WhatsAppAutoReplyManager.currentModeLabel()
+                    JSONObject().apply {
+                        put("status", "success")
+                        put("enabled", JarvisPreferences.waAutoReplyEnabled.value)
+                        put("direct_saved_contacts", JarvisPreferences.waDirectSavedContacts.value)
+                        put("ai_draft", JarvisPreferences.waAutoReplyAiDraft.value)
+                        put("mode", modeLabel)
+                        put("listener_enabled", listenerEnabled)
+                        put("permission_required", !listenerEnabled)
+                        put("pending_count", WhatsAppAutoReplyManager.pendingReplies.value.size)
+                        put(
+                            "message",
+                            if (!listenerEnabled && modeArg != "off") {
+                                "WhatsApp Auto-Reply mode set to '$modeLabel', lekin Notification Reader Access abhi enabled nahi hai — user ko Settings -> System Authorizations -> Notification Reader Access on karna hoga."
+                            } else {
+                                "WhatsApp Auto-Reply is set to '$modeLabel' (Notification Reader: ${if (listenerEnabled) "Active" else "Not granted"})."
+                            }
+                        )
+                    }
+                }
+
                 "execute_app_workflow" -> {
                     val workflowGoal = args.optString("workflow_goal", "Multi-step app control workflow")
                     val stepsArray = args.optJSONArray("steps") ?: JSONArray()
@@ -1449,9 +1805,19 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         }
 
                         val stepResult: JSONObject = when (action) {
+                            "open_in_app_browser", "open_inbuilt_browser", "open_url", "browse", "open_website" -> executeTool(action, stepObj)
+                            "browser_read_page", "browser_find", "browser_click", "browser_type", "browser_scroll", "browser_navigate", "browser_tabs", "browser_media_control", "close_in_app_browser" -> executeTool(action, stepObj)
+                            "answer_chat_question", "submit_chat_question", "answer_questionnaire" -> executeTool("answer_chat_question", stepObj)
+                            "navigate_app_screen", "open_drawer", "close_drawer", "open_plugins", "open_settings", "open_gallery", "open_customize" -> executeTool(action, stepObj)
+                            "open_chat_by_name", "open_chat" -> executeTool("open_chat_by_name", stepObj)
                             "open_app" -> executeTool("open_app", stepObj)
                             "send_whatsapp_message", "send_whatsapp" -> executeTool("send_whatsapp_message", stepObj)
+                            "reply_whatsapp_notification", "reply_whatsapp" -> executeTool("reply_whatsapp_notification", stepObj)
+                            "configure_whatsapp_auto_reply" -> executeTool("configure_whatsapp_auto_reply", stepObj)
+                            "read_notifications" -> executeTool("read_notifications", stepObj)
                             "click_ui_element", "click" -> executeTool("click_ui_element", stepObj)
+                            "answer_quiz_question" -> executeTool("answer_quiz_question", stepObj)
+                            "generate_image" -> executeTool("generate_image", stepObj)
                             "type_text", "type" -> {
                                 val typeArgs = JSONObject(stepObj.toString()).apply {
                                     if (!has("target_input_name") && has("target_name")) {
@@ -1470,6 +1836,12 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                                     .ifBlank { "skip_ad" }
                                 executeTool("youtube_action", JSONObject().put("action", subAction))
                             }
+                            "search_and_play_youtube", "play_youtube" -> {
+                                val ytQuery = stepObj.optString("query", "")
+                                    .ifBlank { stepObj.optString("text", "") }
+                                    .ifBlank { stepObj.optString("target_name", "") }
+                                executeTool("search_and_play_youtube", JSONObject().put("query", ytQuery))
+                            }
                             "close_app" -> {
                                 val closeArgs = JSONObject(stepObj.toString()).apply {
                                     if (!has("remove_from_recents")) put("remove_from_recents", true)
@@ -1478,6 +1850,14 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                             }
                             "close_current_app" -> executeTool("close_current_app", stepObj)
                             "press_key" -> executeTool("press_key", stepObj)
+                            "set_volume", "volume" -> executeTool("set_volume", stepObj)
+                            "set_brightness", "brightness" -> executeTool("set_brightness", stepObj)
+                            "set_flashlight", "flashlight", "torch" -> executeTool("set_flashlight", stepObj)
+                            "set_ringer_mode", "ringer_mode" -> executeTool("set_ringer_mode", stepObj)
+                            "set_device_setting", "device_setting" -> executeTool("set_device_setting", stepObj)
+                            "system_action" -> executeTool("system_action", stepObj)
+                            "media_playback_control" -> executeTool("media_playback_control", stepObj)
+                            "get_device_status", "get_battery_level", "get_battery_status", "check_battery" -> executeTool(action, stepObj)
                             "inspect_screen", "read_screen" -> executeTool("inspect_screen", stepObj)
                             "wait" -> {
                                 val waitMs = stepObj.optLong("wait_ms", 1000L).coerceIn(200L, 8000L)
@@ -1655,87 +2035,178 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         .put("message", if (stopped) "Continuous scrolling stopped." else "Continuous scroll was not active.")
                 }
 
-                "get_device_status" -> {
-                    val sections = args.optString("sections", "battery,audio,display,network,memory,storage,system").ifBlank {
-                        "battery,audio,display,network,memory,storage,system"
-                    }
+                "get_device_status", "get_battery_level", "get_battery_status", "check_battery" -> {
+                    val defaultSections = if (name == "get_device_status") "battery,audio,system" else "battery"
+                    val sections = args.optString("sections", defaultSections).ifBlank { defaultSections }
                     val statusJson = phoneControl.getDeviceStatusJson(sections)
+                    val humanSummary = DeviceControlHelper.formatHumanDeviceSummary(statusJson)
+                    val batObj = statusJson.optJSONObject("battery")
                     JSONObject().apply {
                         put("status", "success")
+                        if (batObj != null) {
+                            val pct = batObj.optInt("level_percent", -1)
+                            val bState = batObj.optString("status", "unknown")
+                            val plugged = batObj.optString("plugged", "unplugged")
+                            put("battery_percent", pct)
+                            put("battery_status", bState)
+                            put("plugged", plugged)
+                            put("battery_summary", "$pct% ($bState, $plugged)")
+                        }
+                        put("summary", humanSummary)
                         put("device_status", statusJson)
-                        put("message", statusJson.toString())
+                        put("message", humanSummary)
                     }
                 }
 
                 "set_volume" -> {
-                    val action = args.optString("action", "").trim().lowercase(Locale.ROOT)
-                    val stream = args.optString("stream", "music").ifBlank { "music" }
-                    val pct = if (args.has("percentage")) args.optInt("percentage", 50) else null
-                    val voiceActive = webSocket != null
-                    val msg = when {
-                        action == "get" -> {
-                            val current = phoneControl.getStreamVolumePercent()
-                            "Current media volume is $current%."
-                        }
-                        action == "set" && pct != null -> phoneControl.setVolumePercent(pct, stream = stream, silentFeedback = voiceActive)
-                        action == "increase" -> phoneControl.adjustVolume(true, stream = stream, silentFeedback = voiceActive)
-                        action == "decrease" -> phoneControl.adjustVolume(false, stream = stream, silentFeedback = voiceActive)
-                        action == "mute" -> phoneControl.setStreamMuted(true, stream = stream, silentFeedback = true)
-                        action == "unmute" -> phoneControl.setStreamMuted(false, stream = stream, silentFeedback = voiceActive)
-                        else -> "Volume unchanged."
+                    val rawAction = args.optString("action", "")
+                    val rawStream = args.optString("stream", "music").ifBlank { "music" }
+                    val rawPct: Any? = when {
+                        args.has("percentage") -> args.opt("percentage")
+                        args.has("percent") -> args.opt("percent")
+                        args.has("volume") -> args.opt("volume")
+                        args.has("level") -> args.opt("level")
+                        args.has("value") -> args.opt("value")
+                        else -> null
                     }
-                    JSONObject().put("status", "success").put("message", msg)
+                    val rawStep: Any? = when {
+                        args.has("step_percent") -> args.opt("step_percent")
+                        args.has("step") -> args.opt("step")
+                        else -> null
+                    }
+                    val parsed = DeviceControlHelper.parseVolumeArgs(
+                        rawAction = rawAction,
+                        rawPercentage = rawPct,
+                        rawStream = rawStream,
+                        rawStepPercent = rawStep
+                    )
+                    if (parsed.parseError != null) {
+                        JSONObject()
+                            .put("status", "error")
+                            .put("verified", false)
+                            .put("message", parsed.parseError)
+                    } else {
+                        val voiceActive = webSocket != null
+                        val batch = when (parsed.action) {
+                            "get" -> phoneControl.getVolumeSummaryDetailed(parsed.stream)
+                            "set" -> phoneControl.setVolumePercentDetailed(
+                                percent = parsed.percentage ?: 50,
+                                stream = parsed.stream,
+                                silentFeedback = voiceActive
+                            )
+                            "increase" -> phoneControl.adjustVolumeDetailed(
+                                increase = true,
+                                stream = parsed.stream,
+                                stepPercent = parsed.stepPercent,
+                                silentFeedback = voiceActive
+                            )
+                            "decrease" -> phoneControl.adjustVolumeDetailed(
+                                increase = false,
+                                stream = parsed.stream,
+                                stepPercent = parsed.stepPercent,
+                                silentFeedback = voiceActive
+                            )
+                            "mute" -> phoneControl.setStreamMutedDetailed(
+                                mute = true,
+                                stream = parsed.stream,
+                                silentFeedback = true
+                            )
+                            "unmute" -> phoneControl.setStreamMutedDetailed(
+                                mute = false,
+                                stream = parsed.stream,
+                                silentFeedback = voiceActive
+                            )
+                            else -> phoneControl.getVolumeSummaryDetailed(parsed.stream)
+                        }
+                        JSONObject().apply {
+                            put("status", if (batch.verified) "success" else "error")
+                            put("verified", batch.verified)
+                            put("action", parsed.action)
+                            put("stream", parsed.stream)
+                            put("actual_percent", batch.actualPercent)
+                            put("capped_by_system", batch.cappedBySystem)
+                            put("message", batch.message)
+                        }
+                    }
                 }
 
                 "set_ringer_mode" -> {
                     val mode = args.optString("mode", "normal")
-                    val msg = phoneControl.setRingerMode(mode)
-                    JSONObject().put("status", "success").put("message", msg)
+                    deviceControlResultToJson(phoneControl.setRingerModeDetailed(mode))
                 }
 
                 "set_brightness" -> {
-                    val action = args.optString("action", "").trim().lowercase(Locale.ROOT)
-                    val pct = if (args.has("percentage")) args.optInt("percentage", 50) else null
-                    val msg = when {
-                        action == "set" && pct != null -> phoneControl.setBrightnessPercent(pct)
-                        action == "increase" -> phoneControl.adjustBrightness(true)
-                        action == "decrease" -> phoneControl.adjustBrightness(false)
-                        action == "auto_on" -> phoneControl.setAutoBrightness(true)
-                        action == "auto_off" -> phoneControl.setAutoBrightness(false)
-                        else -> "Brightness unchanged."
+                    val rawPct: Any? = when {
+                        args.has("percentage") -> args.opt("percentage")
+                        args.has("percent") -> args.opt("percent")
+                        args.has("brightness") -> args.opt("brightness")
+                        args.has("level") -> args.opt("level")
+                        args.has("value") -> args.opt("value")
+                        else -> null
                     }
-                    JSONObject().put("status", "success").put("message", msg)
+                    val rawStep: Any? = when {
+                        args.has("step_percent") -> args.opt("step_percent")
+                        args.has("step") -> args.opt("step")
+                        else -> null
+                    }
+                    val parsed = DeviceControlHelper.parseBrightnessArgs(
+                        rawAction = args.optString("action", ""),
+                        rawPercentage = rawPct,
+                        rawStepPercent = rawStep,
+                        rawEnabled = if (args.has("enabled")) args.opt("enabled") else null
+                    )
+                    if (parsed.parseError != null) {
+                        JSONObject()
+                            .put("status", "error")
+                            .put("verified", false)
+                            .put("message", parsed.parseError)
+                    } else {
+                        val res = when (parsed.action) {
+                            "get" -> phoneControl.getBrightnessSummaryDetailed()
+                            "set" -> phoneControl.setBrightnessPercentDetailed(parsed.percentage ?: 50)
+                            "increase" -> phoneControl.adjustBrightnessDetailed(true, stepPercent = parsed.stepPercent)
+                            "decrease" -> phoneControl.adjustBrightnessDetailed(false, stepPercent = parsed.stepPercent)
+                            "auto_on" -> phoneControl.setAutoBrightnessDetailed(true)
+                            "auto_off" -> phoneControl.setAutoBrightnessDetailed(false)
+                            else -> phoneControl.getBrightnessSummaryDetailed()
+                        }
+                        deviceControlResultToJson(res)
+                    }
                 }
 
                 "set_flashlight" -> {
-                    val msg = if (args.optBoolean("toggle", false) || !args.has("enabled")) {
-                        phoneControl.toggleFlashlight()
-                    } else {
-                        phoneControl.setFlashlight(args.optBoolean("enabled", true))
+                    val desired: Boolean? = when {
+                        args.optBoolean("toggle", false) || !args.has("enabled") -> null
+                        else -> DeviceControlHelper.parseBooleanAny(args.opt("enabled")) ?: args.optBoolean("enabled", true)
                     }
-                    JSONObject().put("status", "success").put("message", msg)
+                    deviceControlResultToJson(phoneControl.setFlashlightDetailed(desired))
                 }
 
                 "set_device_setting" -> {
-                    val setting = args.optString("setting", "settings").trim().lowercase(Locale.ROOT)
-                    val msg = if (setting == "dnd" || setting == "do_not_disturb") {
-                        phoneControl.setDndEnabled(args.optBoolean("enabled", true))
-                    } else {
-                        phoneControl.openDevicePanel(setting)
+                    val setting = args.optString("setting", "settings")
+                    val rawEnabled: Any? = when {
+                        args.has("enabled") -> args.opt("enabled")
+                        args.has("state") -> args.opt("state")
+                        else -> null
                     }
-                    JSONObject().put("status", "success").put("message", msg)
+                    val rawValue: Any? = if (args.has("value")) args.opt("value") else null
+                    deviceControlResultToJson(phoneControl.setDeviceSettingDetailed(setting, rawEnabled as? Boolean ?: DeviceControlHelper.parseBooleanAny(rawEnabled), rawValue))
                 }
 
                 "system_action" -> {
                     val action = args.optString("action", "")
-                    val msg = phoneControl.performSystemAction(action)
-                    val ok = msg.startsWith("Executed")
-                    JSONObject().put("status", if (ok) "success" else "error").put("message", msg)
+                    deviceControlResultToJson(phoneControl.performSystemActionDetailed(action))
                 }
 
                 "read_notifications" -> {
                     val limit = args.optInt("limit", 10)
                     val json = AndroidAutomation.readRecentNotificationsJson(limit = limit)
+                    val waPending = WhatsAppAutoReplyManager.getPendingSummaryJson(limit = 5)
+                    json.put("wa_auto_reply_mode", WhatsAppAutoReplyManager.currentModeLabel())
+                    json.put("wa_listener_enabled", WhatsAppAutoReplyManager.isNotificationListenerEnabled(context))
+                    if (waPending.length() > 0) {
+                        json.put("pending_whatsapp_messages", waPending)
+                    }
                     JSONObject().apply {
                         put("status", "success")
                         put("notifications_data", json)
@@ -1759,8 +2230,51 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                             tabId = args.optString("tab_id").takeIf { it.isNotBlank() }
                         )
                     } else if (isAuraPackage(fgPkg, context.packageName)) {
-                        JSONObject().put("status", "error")
-                            .put("message", "Accessibility click is disabled on Aura's own chat UI. Use native Aura tools (create_new_chat, open_chat_by_id, open_chat_by_name, send_message_to_chat, open_in_app_browser, close_in_app_browser).")
+                        val target = args.optString("target_name", "")
+                            .ifBlank { args.optString("text", "") }
+                            .ifBlank { args.optString("description", "") }
+                            .trim()
+                        val goal = args.optString("goal", "").trim()
+                        val activeQn = ChatContextBridge.getActivePendingQuestionnaire()
+                        if (activeQn != null && ChatQuestionnaireHelper.isQuestionnaireClickPhrase(target, goal, activeQn)) {
+                            val qnRes = ChatContextBridge.answerActiveChatQuestion(target.ifBlank { goal }, "submit")
+                            if (qnRes.success) bringAuraToForeground(context)
+                            JSONObject().apply {
+                                put("status", if (qnRes.success) "success" else "error")
+                                put("verified", qnRes.success)
+                                put("message", qnRes.message)
+                            }
+                        } else {
+                            val navQuery = when {
+                                target.isNotBlank() && AppNavigationRouter.resolve(target) != null -> target
+                                goal.isNotBlank() && AppNavigationRouter.resolve(goal) != null -> goal
+                                else -> ""
+                            }
+                            if (navQuery.isNotBlank()) {
+                                val navRes = ChatContextBridge.navigateToInternalScreen(navQuery)
+                                if (navRes.success) bringAuraToForeground(context)
+                                JSONObject().apply {
+                                    put("status", if (navRes.success) "success" else "error")
+                                    put("message", navRes.message)
+                                    put("verified", navRes.success)
+                                    if (navRes.screenLabel.isNotBlank()) put("screen", navRes.screenLabel)
+                                }
+                            } else if ((target.isNotBlank() && ChatMatcher.isLikelyChatOpenPhrase(target)) ||
+                                (goal.isNotBlank() && ChatMatcher.isLikelyChatOpenPhrase(goal))
+                            ) {
+                                val chatQuery = target.ifBlank { goal }
+                                val chatRes = ChatContextBridge.openChatByName(chatQuery)
+                                if (chatRes.success) bringAuraToForeground(context)
+                                JSONObject().apply {
+                                    put("status", if (chatRes.success) "success" else "error")
+                                    put("message", chatRes.message)
+                                    put("verified", chatRes.success)
+                                }
+                            } else {
+                                JSONObject().put("status", "error")
+                                    .put("message", "Accessibility click is disabled on Aura's own chat UI. Use native Aura tools instead (answer_chat_question, navigate_app_screen, create_new_chat, open_chat_by_id, open_chat_by_name, send_message_to_chat, open_in_app_browser, close_in_app_browser).")
+                            }
+                        }
                     } else {
                         val target = args.optString("target_name", "").ifBlank { args.optString("text", "") }.trim()
                         val elementId = if (args.has("element_id")) args.optInt("element_id") else null
@@ -1792,6 +2306,39 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                 }
 
+                "answer_quiz_question" -> {
+                    val option = args.optString("option", "").ifBlank { args.optString("target_name", "") }.trim()
+                    val clickNext = args.optBoolean("click_next", false)
+                    val goal = args.optString("goal", "").ifBlank { "answer quiz option $option" }
+                    if (option.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "option parameter is required.")
+                    } else if (ChatContextBridge.isInBuiltBrowserActive()) {
+                        val selectRes = performBrowserClick(
+                            context = context,
+                            refArg = null,
+                            targetName = option,
+                            tabId = null
+                        )
+                        if (selectRes.optString("status") == "success" && clickNext) {
+                            performBrowserClick(context = context, refArg = null, targetName = "Next", tabId = null)
+                        } else selectRes
+                    } else {
+                        val res = VisualTaskOrchestrator.getInstance().handleAnswerMcqQuestion(
+                            optionTarget = option,
+                            clickNext = clickNext,
+                            taskGoal = goal
+                        )
+                        JSONObject().put("status", if (res.success) "success" else "error")
+                            .put("message", res.message)
+                            .put("verified", res.verified ?: false)
+                            .apply {
+                                if (res.currentStateSummary.isNotBlank()) {
+                                    put("current_state", res.currentStateSummary)
+                                }
+                            }
+                    }
+                }
+
                 "type_text" -> {
                     val text = args.optString("text", "")
                     val targetInput = args.optString("target_input_name", "").ifBlank { null }
@@ -1808,6 +2355,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                             refArg = args.optString("ref").takeIf { it.isNotBlank() },
                             targetName = targetInput,
                             submit = submit,
+                            clearFirst = clearExisting,
                             tabId = null
                         )
                     } else if (isAuraPackage(fgPkg, context.packageName)) {
@@ -1840,18 +2388,25 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 "scroll_screen" -> {
                     if (ChatContextBridge.isInBuiltBrowserActive()) {
                         val dir = args.optString("direction", "down").lowercase(Locale.ROOT)
-                        val dist = args.optString("distance", "medium").lowercase(Locale.ROOT)
-                        val amount = when (dist) {
-                            "small", "short" -> 3
-                            "large", "long" -> 8
-                            else -> 5
+                        if (dir == "images" || dir == "gallery" || dir == "photos") {
+                            val (ok, mediaSummary, _) = inspectBrowserViewportMedia(context, "scroll_to_images", null)
+                            JSONObject().put("status", if (ok) "success" else "error").put("message", mediaSummary)
+                        } else {
+                            val dist = args.optString("distance", "medium").lowercase(Locale.ROOT)
+                            val amount = when (dist) {
+                                "small", "short" -> 3
+                                "large", "long" -> 8
+                                else -> 5
+                            }
+                            val (ok, txt) = callBrowserMcpText(
+                                context,
+                                "browser_computer",
+                                JSONObject().put("action", "scroll").put("scroll_direction", dir).put("scroll_amount", amount)
+                            )
+                            val (mediaOk, mediaSummary, _) = inspectBrowserViewportMedia(context, "inspect", null)
+                            val fullMsg = if (mediaOk) "$txt\n$mediaSummary" else txt
+                            JSONObject().put("status", if (ok) "success" else "error").put("message", fullMsg)
                         }
-                        val (ok, txt) = callBrowserMcpText(
-                            context,
-                            "browser_computer",
-                            JSONObject().put("action", "scroll").put("scroll_direction", dir).put("scroll_amount", amount)
-                        )
-                        JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
                     } else {
                         val dir = args.optString("direction", "down")
                         val dist = args.optString("distance", "medium")
@@ -2066,12 +2621,21 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     private suspend fun ensureBrowserOpen(context: Context) {
-        if (!ChatContextBridge.isInBuiltBrowserActive()) {
-            withContext(Dispatchers.Main) {
+        val bm = BrowserSessionManager.instance
+        val activeTab = withContext(Dispatchers.Main) {
+            if (!ChatContextBridge.isInBuiltBrowserActive()) {
                 ChatContextBridge.requestViewMode("BROWSER")
                 bringAuraToForeground(context)
             }
-            delay(180L)
+            val t = bm.getActiveTab() ?: bm.openUrl("https://www.google.com", newTab = false)
+            if (t.webView == null) {
+                bm.ensureWebViewAttached(context, t, isDark = false)
+            }
+            t
+        }
+        delay(180L)
+        if (activeTab.isLoading && activeTab.progress < 75) {
+            bm.waitForPageLoad(activeTab.id, timeoutMs = 2_200L)
         }
     }
 
@@ -2099,16 +2663,125 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         return !isErr to sb.toString().ifBlank { if (isErr) "Browser tool failed." else "Done." }
     }
 
+    private suspend fun tryCloseWholeBrowserSafely(): JSONObject {
+        val tabsCount = withContext(Dispatchers.Main) { BrowserSessionManager.instance.tabs.size }
+        val ageMs = if (lastUserUtteranceMs > 0L) System.currentTimeMillis() - lastUserUtteranceMs else Long.MAX_VALUE
+        val guardReason = BrowserTargetHelper.getCloseBrowserGuardReason(lastUserUtterance, ageMs, tabsCount)
+        if (guardReason != null) {
+            return JSONObject().apply {
+                put("status", "error")
+                put("verified", false)
+                put("message", guardReason)
+            }
+        }
+        val msg = ChatContextBridge.closeInAppBrowser()
+        return JSONObject().apply {
+            put("status", "success")
+            put("verified", true)
+            put("message", msg)
+        }
+    }
+
+    private suspend fun resolveBrowserTabOrError(rawTarget: String): BrowserTargetHelper.TabResolveResult {
+        val bm = BrowserSessionManager.instance
+        val (candidates, activeId) = withContext(Dispatchers.Main) {
+            val list = bm.tabs.mapIndexed { idx, t ->
+                BrowserTargetHelper.TabCandidate(
+                    id = t.id,
+                    title = t.title,
+                    url = t.webView?.url ?: t.url,
+                    isActive = t.id == bm.activeTabId,
+                    index = idx
+                )
+            }
+            list to bm.activeTabId
+        }
+        return BrowserTargetHelper.resolveTargetTab(rawTarget, candidates, activeId)
+    }
+
+    private suspend fun inspectBrowserViewportMedia(
+        context: Context,
+        action: String,
+        tabId: String?
+    ): Triple<Boolean, String, JSONObject?> {
+        val mcpArgs = JSONObject().put("action", action).apply {
+            if (tabId != null) put("tab_id", tabId)
+        }
+        val (ok, txt) = callBrowserMcpText(context, "browser_viewport_media", mcpArgs)
+        if (!ok) return Triple(false, txt, null)
+        val json = runCatching { JSONObject(txt) }.getOrNull() ?: return Triple(true, txt, null)
+        val section = json.optString("section", "PAGE_CONTENT")
+        val visImgs = json.optJSONArray("visibleImages")
+        val orgCount = json.optInt("organicVisibleImageCount", 0)
+        val above = json.optInt("imagesAbove", 0)
+        val below = json.optInt("imagesBelow", 0)
+        val headingsArr = json.optJSONArray("headings")
+        val headings = buildList {
+            if (headingsArr != null) {
+                for (i in 0 until headingsArr.length()) {
+                    val h = headingsArr.optString(i).trim()
+                    if (h.isNotBlank()) add(h)
+                }
+            }
+        }
+        val imgDesc = buildList {
+            if (visImgs != null) {
+                for (i in 0 until visImgs.length()) {
+                    val im = visImgs.optJSONObject(i) ?: continue
+                    val tag = if (im.optBoolean("sponsored")) " [Sponsored]" else ""
+                    add("${im.optString("label", "image")} (${im.optInt("w")}x${im.optInt("h")}$tag)")
+                }
+            }
+        }
+        val sb = StringBuilder()
+        sb.append("Viewport Section: $section | URL: ${json.optString("url")}")
+        sb.append("\nVisible organic images: $orgCount (images above: $above, below: $below)")
+        if (imgDesc.isNotEmpty()) {
+            sb.append("\nVisible image details: ${imgDesc.joinToString("; ")}")
+        }
+        if (headings.isNotEmpty()) {
+            sb.append("\nVisible headings: ${headings.joinToString(" | ")}")
+        }
+        val snippet = json.optString("visibleText").trim()
+        if (snippet.isNotBlank()) {
+            sb.append("\nVisible text: ${snippet.take(550)}")
+        }
+        return Triple(true, sb.toString(), json)
+    }
+
     private suspend fun resolveBrowserRef(
         context: Context,
         query: String,
-        tabId: String?
+        tabId: String?,
+        kind: String? = null
     ): Pair<String?, String> {
         val findArgs = JSONObject().put("query", query).apply {
             if (tabId != null) put("tab_id", tabId)
+            if (!kind.isNullOrBlank()) put("kind", kind)
         }
-        val (ok, txt) = callBrowserMcpText(context, "browser_find", findArgs)
-        val ref = if (ok) Regex("""\b(ref_\d+)\b""").find(txt)?.groupValues?.get(1) else null
+        var (ok, txt) = callBrowserMcpText(context, "browser_find", findArgs)
+        var picked = if (ok) {
+            when (kind) {
+                "editable" -> BrowserTargetHelper.pickBestInputCandidate(query, txt)
+                else -> BrowserTargetHelper.pickBestClickCandidate(query, txt)
+            }
+        } else null
+
+        if (picked == null) {
+            // Wait briefly for SPA hydration / page finish and retry once automatically
+            BrowserSessionManager.instance.waitForPageLoad(tabId, timeoutMs = 1_500L)
+            delay(350L)
+            val retry = callBrowserMcpText(context, "browser_find", findArgs)
+            ok = retry.first
+            txt = retry.second
+            if (ok) {
+                picked = when (kind) {
+                    "editable" -> BrowserTargetHelper.pickBestInputCandidate(query, txt)
+                    else -> BrowserTargetHelper.pickBestClickCandidate(query, txt)
+                }
+            }
+        }
+        val ref = picked?.ref ?: if (ok) Regex("""\b(ref_\d+)\b""").find(txt)?.groupValues?.get(1) else null
         return ref to txt
     }
 
@@ -2125,7 +2798,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             if (query.isBlank()) {
                 return JSONObject().put("status", "error").put("message", "Give either 'ref' or 'target_name' to click in the browser.")
             }
-            val (foundRef, findTxt) = resolveBrowserRef(context, query, tabId)
+            val (foundRef, findTxt) = resolveBrowserRef(context, query, tabId, kind = "clickable")
             ref = foundRef
             discoveryNote = findTxt
         }
@@ -2139,7 +2812,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             )
             return JSONObject().apply {
                 put("status", "error")
-                put("message", "Could not find element '$targetName' on current browser page. Search output: $discoveryNote")
+                put("verified", false)
+                put("message", "Could not find clickable element '$targetName' on current browser page. Search output: $discoveryNote")
                 put("current_state", pageTxt.take(4000))
             }
         }
@@ -2149,7 +2823,22 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             .put("action_summary", "Clicking ${targetName ?: ref}")
             .apply { if (tabId != null) put("tab_id", tabId) }
         val (ok, txt) = callBrowserMcpText(context, "browser_computer", clickArgs)
-        return JSONObject().put("status", if (ok) "success" else "error").put("message", txt)
+        if (ok) {
+            delay(350L)
+            BrowserSessionManager.instance.waitForPageLoad(tabId, 4_000L)
+        }
+        val tab = BrowserSessionManager.instance.getTab(tabId)
+        val (finalUrl, title) = withContext(Dispatchers.Main) {
+            (tab?.webView?.url ?: tab?.url.orEmpty()) to tab?.title.orEmpty()
+        }
+        val (mediaOk, mediaSummary, _) = inspectBrowserViewportMedia(context, "inspect", tabId)
+        return JSONObject().apply {
+            put("status", if (ok) "success" else "error")
+            put("verified", ok)
+            put("url", finalUrl)
+            put("title", title)
+            put("message", if (ok && mediaOk) "$txt\n$mediaSummary" else txt)
+        }
     }
 
     private suspend fun performBrowserType(
@@ -2158,6 +2847,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         refArg: String?,
         targetName: String?,
         submit: Boolean,
+        clearFirst: Boolean = true,
         tabId: String?
     ): JSONObject {
         if (text.isEmpty()) {
@@ -2166,8 +2856,8 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         var ref = refArg?.trim()?.takeIf { it.isNotBlank() }
         if (ref == null) {
             val searchQuery = targetName?.takeIf { it.isNotBlank() } ?: "search box input field textarea"
-            ref = resolveBrowserRef(context, searchQuery, tabId).first
-                ?: resolveBrowserRef(context, "input", tabId).first
+            ref = resolveBrowserRef(context, searchQuery, tabId, kind = "editable").first
+                ?: resolveBrowserRef(context, "input", tabId, kind = "editable").first
         }
         if (ref == null) {
             val (_, pageTxt) = callBrowserMcpText(
@@ -2179,61 +2869,122 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             )
             return JSONObject().apply {
                 put("status", "error")
+                put("verified", false)
                 put("message", "Could not find a text input box on current browser page.")
                 put("current_state", pageTxt.take(4000))
             }
         }
+
+        val tab = BrowserSessionManager.instance.getTab(tabId)
+        val beforeUrl = withContext(Dispatchers.Main) { tab?.webView?.url ?: tab?.url.orEmpty() }
+        val beforeMedia = if (submit) inspectBrowserViewportMedia(context, "inspect", tabId).third else null
+        val beforeSig = beforeMedia?.optString("sig").orEmpty()
 
         val formArgs = JSONObject()
             .put("ref", ref)
             .put("value", text)
             .put("action_summary", "Typing into ${targetName ?: ref}")
             .apply { if (tabId != null) put("tab_id", tabId) }
-        val (setOk, setMsg) = callBrowserMcpText(context, "browser_form_input", formArgs)
-        if (!setOk) {
-            // Fallback: focus element via click then send real DevTools/WebView keyboard text
+        var (setOk, setMsg) = callBrowserMcpText(context, "browser_form_input", formArgs)
+        if (!setOk || setMsg.contains("did not accept that value", ignoreCase = true)) {
+            // Focus atomically and clear existing stale text (e.g. partial chars) before typing
             callBrowserMcpText(
                 context,
                 "browser_computer",
                 JSONObject().put("action", "left_click").put("ref", ref).apply { if (tabId != null) put("tab_id", tabId) }
             )
-            val typedText = if (submit) "$text\n" else text
+            delay(80L)
             val (typeOk, typeMsg) = callBrowserMcpText(
                 context,
                 "browser_computer",
-                JSONObject().put("action", "type").put("text", typedText).apply { if (tabId != null) put("tab_id", tabId) }
+                JSONObject().put("action", "type")
+                    .put("text", text)
+                    .put("clear_first", clearFirst)
+                    .apply { if (tabId != null) put("tab_id", tabId) }
             )
-            if (submit && typeOk) {
-                BrowserSessionManager.instance.waitForPageLoad(tabId, 4_000L)
+            if (!typeOk) {
+                return JSONObject().put("status", "FAILED")
+                    .put("verified", false)
+                    .put("message", typeMsg)
             }
-            return JSONObject().put("status", if (typeOk) "SUCCESS" else "FAILED")
-                .put("verified", typeOk)
-                .put("message", typeMsg)
+            setMsg = typeMsg
+            delay(100L)
         }
 
-        if (submit) {
-            val enterArgs = JSONObject()
-                .put("action", "key")
-                .put("text", "Enter")
-                .put("action_summary", "Submitting")
-                .apply { if (tabId != null) put("tab_id", tabId) }
-            val (enterOk, enterMsg) = callBrowserMcpText(context, "browser_computer", enterArgs)
-            BrowserSessionManager.instance.waitForPageLoad(tabId, 4_500L)
-            val tab = BrowserSessionManager.instance.getTab(tabId)
-            val finalUrl = withContext(Dispatchers.Main) { tab?.webView?.url ?: tab?.url.orEmpty() }
+        if (!submit) {
             return JSONObject().put("status", "SUCCESS")
-                .put("verified", enterOk)
-                .put("message", "Typed \"$text\" into browser input ($ref) and pressed Enter. Current page: $finalUrl. $enterMsg")
+                .put("verified", true)
+                .put("message", "Typed \"$text\" into browser input ($ref). $setMsg")
         }
 
-        return JSONObject().put("status", "SUCCESS")
-            .put("verified", true)
-            .put("message", "Typed \"$text\" into browser input ($ref). $setMsg")
+        // Submit cleanly (DOM Enter events + Form Submit/Go button click + Enter fallback)
+        callBrowserMcpText(
+            context,
+            "browser_submit_input",
+            JSONObject().put("ref", ref).apply { if (tabId != null) put("tab_id", tabId) }
+        )
+        delay(450L)
+        BrowserSessionManager.instance.waitForPageLoad(tabId, 4_500L)
+
+        var afterUrl = withContext(Dispatchers.Main) { tab?.webView?.url ?: tab?.url.orEmpty() }
+        var afterMedia = inspectBrowserViewportMedia(context, "inspect", tabId)
+        var outcome = BrowserTargetHelper.evaluateSearchSubmitOutcome(
+            beforeUrl = beforeUrl,
+            afterUrl = afterUrl,
+            beforeSig = beforeSig,
+            afterSig = afterMedia.third?.optString("sig").orEmpty(),
+            submitDomResultOk = true
+        )
+
+        if (!outcome.verified) {
+            // Secondary submit attempt using CDP/Android hardware Enter
+            callBrowserMcpText(
+                context,
+                "browser_computer",
+                JSONObject().put("action", "key").put("text", "Enter").put("action_summary", "Submitting").apply {
+                    if (tabId != null) put("tab_id", tabId)
+                }
+            )
+            BrowserSessionManager.instance.waitForPageLoad(tabId, 3_500L)
+            afterUrl = withContext(Dispatchers.Main) { tab?.webView?.url ?: tab?.url.orEmpty() }
+            afterMedia = inspectBrowserViewportMedia(context, "inspect", tabId)
+            outcome = BrowserTargetHelper.evaluateSearchSubmitOutcome(
+                beforeUrl = beforeUrl,
+                afterUrl = afterUrl,
+                beforeSig = beforeSig,
+                afterSig = afterMedia.third?.optString("sig").orEmpty(),
+                submitDomResultOk = false
+            )
+        }
+
+        return JSONObject().apply {
+            put("status", if (outcome.verified) "SUCCESS" else "error")
+            put("verified", outcome.verified)
+            put("navigated", outcome.navigated)
+            put("url", afterUrl)
+            put("message", if (outcome.verified) {
+                "Typed \"$text\" and submitted ($ref). ${outcome.reason}\n${afterMedia.second}"
+            } else {
+                "Typed \"$text\" into $ref, but submit did NOT navigate (${outcome.reason}). Click the Search/Go button explicitly or verify page.\n${afterMedia.second}"
+            })
+        }
     }
 
     private fun isAuraPackage(pkg: String, ownPkg: String): Boolean {
         if (pkg.isBlank()) return false
         return pkg == ownPkg || pkg == "com.example.gemini" || pkg == "com.aura.ai"
+    }
+
+    private fun deviceResultToJson(res: PhoneControlManager.DeviceControlResult): JSONObject {
+        return JSONObject().apply {
+            put("status", if (res.success) "success" else "error")
+            put("verified", res.verified)
+            if (res.permissionRequired) put("permission_required", true)
+            if (res.setting.isNotBlank()) put("setting", res.setting)
+            if (res.state.isNotBlank()) put("state", res.state)
+            res.actualPercent?.let { put("actual_percent", it) }
+            put("message", res.message)
+        }
     }
 
     private fun bringAuraToForeground(context: Context) {

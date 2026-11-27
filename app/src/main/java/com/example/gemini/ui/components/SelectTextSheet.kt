@@ -99,6 +99,7 @@ fun SelectTextSheet(content: String, onDismiss: () -> Unit) {
 private fun SelectableBlock(block: MarkdownBlock) {
     val placeholder = when (block) {
         is MarkdownBlock.Image -> "[Image${block.alt.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()}]"
+        is MarkdownBlock.ImageGrid -> "[${block.images.size} Images]"
         is MarkdownBlock.Video -> "[Video${block.alt.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()}]"
         is MarkdownBlock.YouTubeVideo -> "[YouTube: ${block.originalUrl}]"
         is MarkdownBlock.Mermaid -> "[Diagram]"

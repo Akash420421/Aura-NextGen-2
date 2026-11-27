@@ -56,7 +56,10 @@ class ScreenCaptureManager private constructor() {
     private var lastFrameTime = 0L
     @Volatile
     private var lastBitmapTime = 0L
+    @Volatile
+    private var lastSentFrameHash = 0L
     private var minFrameIntervalMs = 1000L
+    private val keepaliveFrameIntervalMs = 12_000L
     private var framesSent = 0
 
     @Volatile
@@ -209,10 +212,16 @@ class ScreenCaptureManager private constructor() {
             _hasReceivedFrame.value = true
 
             if (now - lastFrameTime >= minFrameIntervalMs) {
-                lastFrameTime = now
-                val jpegBytes = compressBitmapToJpeg(cleanBitmap, 70)
-                framesSent++
-                onFrameCallback?.invoke(jpegBytes)
+                val frameHash = computeFrameHash(cleanBitmap)
+                val changed = frameHash != lastSentFrameHash
+                val keepaliveDue = (now - lastFrameTime) >= keepaliveFrameIntervalMs
+                if (changed || keepaliveDue) {
+                    lastFrameTime = now
+                    lastSentFrameHash = frameHash
+                    val jpegBytes = compressBitmapToJpeg(cleanBitmap, 72)
+                    framesSent++
+                    onFrameCallback?.invoke(jpegBytes)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error acquiring image frame: ${e.message}", e)
@@ -221,11 +230,32 @@ class ScreenCaptureManager private constructor() {
         }
     }
 
-    fun captureSnapshotJpeg(quality: Int = 70): ByteArray? {
+    private fun computeFrameHash(bitmap: Bitmap): Long {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return 0L
+        var hash = -3750763034362895579L // FNV-1a offset basis
+        val stepX = (w / 16).coerceAtLeast(1)
+        val stepY = (h / 16).coerceAtLeast(1)
+        var y = stepY / 2
+        while (y < h) {
+            var x = stepX / 2
+            while (x < w) {
+                val pixel = bitmap.getPixel(x, y)
+                hash = (hash xor pixel.toLong()) * 1099511628211L
+                x += stepX
+            }
+            y += stepY
+        }
+        return hash
+    }
+
+    fun captureSnapshotJpeg(quality: Int = 75): ByteArray? {
         synchronized(bitmapLock) {
             val bmp = latestBitmap ?: return null
             if (bmp.isRecycled) return null
             lastFrameTime = System.currentTimeMillis()
+            lastSentFrameHash = computeFrameHash(bmp)
             return compressBitmapToJpeg(bmp, quality)
         }
     }
@@ -248,6 +278,8 @@ class ScreenCaptureManager private constructor() {
         _hasReceivedFrame.value = false
         onFrameCallback = null
         framesSent = 0
+        lastBitmapTime = 0L
+        lastSentFrameHash = 0L
 
         try {
             virtualDisplay?.release()

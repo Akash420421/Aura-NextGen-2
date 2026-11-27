@@ -1081,6 +1081,7 @@ class AgyChatBackend(
     }
 
     override fun startNewChat() {
+        com.example.gemini.data.live.AuraAgentEventBus.clearActiveProject()
         persistentStreamJob?.cancel()
         persistentStreamJob = null
         activeStreamConversationId = null

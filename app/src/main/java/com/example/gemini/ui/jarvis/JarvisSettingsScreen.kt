@@ -2,7 +2,16 @@ package com.example.gemini.ui.jarvis
 
 import com.example.gemini.ui.components.bouncyVerticalScroll
 import android.Manifest
+import android.content.Intent
+import android.provider.Settings
 import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.gemini.data.automation.WhatsAppAutoReplyManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -39,7 +48,7 @@ import kotlinx.coroutines.launch
 private val JarvisCyan = Color(0xFF22D3EE)
 
 /** The sections of Settings → Jarvis: each opens on its own page (Settings → Jarvis → section). */
-enum class JarvisSettingsPage { AGENT, PERSONALITY, SETUP, WAKE, LISTEN, VOICE, TASKS, APPROVALS, SCREEN, CHAT, LIVE_API, MEMORY, AUTHORIZATIONS, CONTACTS }
+enum class JarvisSettingsPage { AGENT, PERSONALITY, SETUP, WAKE, LISTEN, VOICE, TASKS, APPROVALS, SCREEN, CHAT, LIVE_API, MEMORY, AUTHORIZATIONS, CONTACTS, WHATSAPP_AUTO_REPLY }
 
 /**
  * Settings → Jarvis: one row per section ([JarvisSettingsPage]); a section opens on its own
@@ -51,6 +60,8 @@ fun JarvisSettingsScreen(cardBg: Color, cardBorder: BorderStroke, onOpen: (Jarvi
     val hotword by P.hotword.state.collectAsState()
     val liveApiKey by P.liveApiKey.state.collectAsState()
     val allMemories by com.example.gemini.data.live.AuraMemoryManager.memories.collectAsState()
+    val waAutoEnabled by P.waAutoReplyEnabled.state.collectAsState()
+    val waDirectSaved by P.waDirectSavedContacts.state.collectAsState()
     val c = com.example.gemini.theme.AppColors
     val I = androidx.compose.material.icons.Icons.Outlined
     fun row(page: JarvisSettingsPage, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, title: String, value: String? = null) =
@@ -66,6 +77,17 @@ fun JarvisSettingsScreen(cardBg: Color, cardBorder: BorderStroke, onOpen: (Jarvi
                 row(JarvisSettingsPage.MEMORY, I.Psychology, c.accentIndigo, "Persistent Memory", "${allMemories.size} facts"),
                 row(JarvisSettingsPage.AUTHORIZATIONS, I.Security, c.danger, "System Authorizations", "13 System Capabilities"),
                 row(JarvisSettingsPage.CONTACTS, I.Contacts, c.accentTeal, "Contacts & Quick Dial", "WhatsApp & Call Nicknames"),
+                row(
+                    JarvisSettingsPage.WHATSAPP_AUTO_REPLY,
+                    I.MarkChatUnread,
+                    c.accentTeal,
+                    "WhatsApp Auto-Reply",
+                    when {
+                        !waAutoEnabled -> "Off"
+                        waDirectSaved -> "Direct • Saved Contacts"
+                        else -> "Smart Confirm Mode"
+                    }
+                ),
                 row(JarvisSettingsPage.SETUP, I.Checklist, c.success, "Setup for Aura Voice"),
                 row(JarvisSettingsPage.WAKE, I.Hearing, c.accentTeal, "Waking Aura", if (hotword == "phrase") "Wake phrase" else "Button"),
                 row(JarvisSettingsPage.PERSONALITY, I.Face, c.accentPink, "Personality & you"),
@@ -97,6 +119,11 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
         Modifier.fillMaxSize().bouncyVerticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (page == JarvisSettingsPage.WHATSAPP_AUTO_REPLY) {
+            WhatsAppAutoReplySettingsContent(cardBg = cardBg, cardBorder = cardBorder)
+            Spacer(Modifier.height(24.dp))
+            return@Column
+        }
         if (!JarvisController.isAttached) {
             Text("Jarvis is starting…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             return@Column
@@ -856,8 +883,195 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
             JarvisSettingsPage.CONTACTS -> {
                 com.example.gemini.ui.contacts.ContactsScreen(onBack = {})
             }
+            JarvisSettingsPage.WHATSAPP_AUTO_REPLY -> {
+                WhatsAppAutoReplySettingsContent(cardBg = cardBg, cardBorder = cardBorder)
+            }
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun WhatsAppAutoReplySettingsContent(cardBg: Color, cardBorder: BorderStroke) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val P = JarvisPreferences
+    val enabled by P.waAutoReplyEnabled.state.collectAsState()
+    val directSaved by P.waDirectSavedContacts.state.collectAsState()
+    val aiDraft by P.waAutoReplyAiDraft.state.collectAsState()
+    val template by P.waAutoReplyTemplate.state.collectAsState()
+    val pending by WhatsAppAutoReplyManager.pendingReplies.collectAsState()
+    val logs by WhatsAppAutoReplyManager.replyLogs.collectAsState()
+    val listenerConnected by WhatsAppAutoReplyManager.listenerConnected.collectAsState()
+
+    var hasNotifAccess by remember { mutableStateOf(WhatsAppAutoReplyManager.isNotificationListenerEnabled(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasNotifAccess = WhatsAppAutoReplyManager.isNotificationListenerEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
+    JCard(cardBg, cardBorder, "Notification Reader Permission") {
+        val statusColor = if (hasNotifAccess) Color(0xFF22C55E) else Color(0xFFEF4444)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(statusColor)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = when {
+                    hasNotifAccess && listenerConnected -> "Notification Reader Active • Connected"
+                    hasNotifAccess -> "Notification Reader Allowed • Binding"
+                    else -> "Permission Required • Turn On Aura Notification Reader"
+                },
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = statusColor
+            )
+        }
+        JHint("Aura uses Android Notification Listener + RemoteInput to read incoming WhatsApp messages and reply seamlessly without opening WhatsApp.")
+        OutlinedButton(
+            onClick = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }.onFailure {
+                    Toast.makeText(context, "Open Settings -> Notification access -> Enable Aura", Toast.LENGTH_LONG).show()
+                }
+            }
+        ) {
+            Text(if (hasNotifAccess) "Notification Access Settings" else "Grant Notification Access", fontSize = 12.sp)
+        }
+    }
+
+    JCard(cardBg, cardBorder, "Auto-Reply Mode & Safety") {
+        JSwitch(
+            title = "Enable WhatsApp Auto-Reply",
+            subtitle = "Monitors WhatsApp & WhatsApp Business notifications cleanly in background.",
+            checked = enabled
+        ) { P.waAutoReplyEnabled.set(it) }
+
+        JSwitch(
+            title = "Direct Auto-Reply for Saved Contacts",
+            subtitle = "OFF (Default): Smart Confirm Mode asks before sending. ON: Replies immediately to verified saved 1:1 contacts with 120s cooldown. Groups & OTP/payment messages ALWAYS confirm first.",
+            checked = directSaved,
+            enabledSwitch = enabled
+        ) { P.waDirectSavedContacts.set(it) }
+
+        JSwitch(
+            title = "AI Contextual Reply Drafts",
+            subtitle = "Generates short, natural Hinglish/English replies via Gemini Flash (offline template fallback if unavailable).",
+            checked = aiDraft,
+            enabledSwitch = enabled
+        ) { P.waAutoReplyAiDraft.set(it) }
+
+        JField("Default Fallback Reply Template", template) {
+            P.waAutoReplyTemplate.set(it.take(220))
+        }
+        JHint("VIP Per-Contact Control: You can also allow individual saved contacts inside Settings -> Contacts & Quick Dial.")
+    }
+
+    JCard(cardBg, cardBorder, "Smart Confirm Queue (${pending.size})") {
+        if (pending.isEmpty()) {
+            JHint("No pending WhatsApp messages awaiting confirmation right now.")
+        } else {
+            pending.forEach { item ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val header = if (item.message.isGroupChat && !item.message.groupName.isNullOrBlank()) {
+                            "${item.message.cleanSenderName} (${item.message.groupName})"
+                        } else {
+                            item.message.cleanSenderName
+                        }
+                        Text(header, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        if (item.isSensitive) {
+                            Text("SENSITIVE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF59E0B))
+                        }
+                    }
+                    Text("Incoming: ${item.message.messageText}", fontSize = 12.5.sp)
+                    Text(
+                        "Suggested: ${item.suggestedDraft}",
+                        fontSize = 12.sp,
+                        color = JarvisCyan
+                    )
+                    JHint(item.decisionReason)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    val res = withContext(Dispatchers.IO) {
+                                        WhatsAppAutoReplyManager.confirmAndSendReply(
+                                            context = context,
+                                            senderOrId = item.message.id,
+                                            customMessage = item.suggestedDraft
+                                        )
+                                    }
+                                    val msg = if (res.success) "Sent via ${res.method}" else (res.errorMessage ?: "Send failed")
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Text("Send Suggested", fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                WhatsAppAutoReplyManager.dismissPending(context, item.message.id)
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Text("Dismiss", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    JCard(cardBg, cardBorder, "Recent Reply Log (${logs.size})") {
+        if (logs.isEmpty()) {
+            JHint("No automated WhatsApp replies sent yet in this session.")
+        } else {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { WhatsAppAutoReplyManager.clearLogs() }) {
+                    Text("Clear Log", fontSize = 12.sp)
+                }
+            }
+            logs.take(15).forEach { entry ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text("${entry.senderName} • ${entry.mode} • ${entry.status}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("In: ${entry.incomingText}", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                    Text("Reply: ${entry.replyText}", fontSize = 11.5.sp, color = JarvisCyan)
+                }
+            }
+        }
     }
 }
 

@@ -515,7 +515,7 @@ object JarvisMcp {
                     val query = args.optString("id").ifBlank { args.optString("name").ifBlank { args.optString("title") } }.trim()
                     if (query.isBlank()) return error("id, name, or title is required")
                     val result = com.example.gemini.data.live.ChatContextBridge.openChatByName(query)
-                    text(result)
+                    if (result.success) text(result.message) else error(result.message)
                 }
                 "jarvis_rename_chat" -> {
                     val id = resolveId(args) ?: return error("No chat. Give an id.")
@@ -567,10 +567,15 @@ object JarvisMcp {
                     )
                 )
                 "jarvis_open_screen" -> {
-                    val s = args.optString("screen").lowercase()
-                    if (s !in listOf("chat", "ide", "terminal", "browser", "notes", "files")) return error("Unknown screen $s")
-                    JarvisController.vm.requestViewMode(s.uppercase())
-                    text("Opened $s.")
+                    val raw = args.optString("screen").trim()
+                    val s = raw.lowercase()
+                    if (s in listOf("chat", "ide", "terminal", "browser", "notes", "files")) {
+                        JarvisController.vm.requestViewMode(s.uppercase())
+                        text("Opened $s.")
+                    } else {
+                        val nav = com.example.gemini.data.live.ChatContextBridge.navigateToInternalScreen(raw)
+                        if (nav.success) text(nav.message) else error("Unknown screen $s")
+                    }
                 }
                 "jarvis_ide_list_projects" -> ideListProjects(args)
                 "jarvis_ide_open_project" -> ideOpenProject(args)

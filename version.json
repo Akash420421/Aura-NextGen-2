@@ -1,15 +1,13 @@
 {
-  "version_code": 247,
-  "version_name": "2.4.7",
+  "version_code": 248,
+  "version_name": "2.4.8",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.7 — Advance Browser Voice Control, Hardware Telemetry, Reels/Shorts & Smart YouTube",
-    "Full In-Built Browser Voice Control: Wired BrowserMcp DOM tools (browser_read_page, browser_find, browser_click, browser_type, browser_scroll, browser_navigate, browser_tabs, browser_media_control) and unified screen routing with DomainNormalizer + single-load fix",
-    "Advance Device Control: Instant fast-path hardware telemetry (battery, volume streams, RAM, storage, network, brightness) and multi-stream volume, ringer mode, DND, torch callback, Quick Settings/panels, and OTP/notification reader",
-    "Bulletproof Reels & Shorts Swiping: Safe mid-viewport 0.60h->0.20h awaited gesture, YouTube Shorts detection, fixed direction inversion, and unthrottled UI change observer",
-    "Universal UI & Chrome Popups: Multi-window accessibility tree scanning, icon/Hinglish synonyms (3 dots, incognito), fixed ordinal #3 collision, and early abort on failed workflow steps",
-    "YouTube Smart Playback & Ad Skip: Zero-quota direct video resolver, curated surprise song playback, modern Litho video picker, youtube_action (skip_ad, like, subscribe, fullscreen) and auto ad-skip watcher",
-    "Voice Screen & 60 FPS Smoothness: Repositioned orb/buttons, WebGL orb shader/DOM optimizations, Compose recomposition cleanup, and deferred accessibility IPC"
+    "Aura AI v2.4.8 — Image Generation UI/UX Redesign, WhatsApp Auto-Reply & Fresh Chat Context Fix",
+    "Complete Image Generation UI/UX Flow: Dedicated Image Mode composer with aspect ratio selector (1:1, 16:9, 9:16, 4:3, 3:4), expandable settings sheet, reference attachments, shimmer loading card, hero/multi-image result grid, action toolbar, dark fullscreen zoom/swipe lightbox, and conversational follow-up editing",
+    "WhatsApp Notification Auto-Reply (#18): Smart Confirm default with live voice cards + Direct Auto-Reply toggle via AuraNotificationListenerService and quick notification confirm/cancel actions",
+    "Fresh New Chat Context Isolation: Prevented stale project context (e.g. older project names) from leaking into brand-new casual conversations",
+    "Automation, YouTube Search & Browser MCP Refinements: Improved YouTube HTML/lockup video parsing, domain normalization, MCQ grounding, and browser viewport/input controls"
   ],
   "is_critical": false
 }

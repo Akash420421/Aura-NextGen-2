@@ -89,42 +89,12 @@ fun AgentToolCallCard(
     val isFind = toolCall.toolType == ToolType.FIND
     val isGrep = toolCall.toolType == ToolType.GREP_SEARCH
     val isGenImg = toolCall.toolType == ToolType.GENERATE_IMAGE ||
-        toolCall.name.contains("image", ignoreCase = true) ||
-        toolCall.command.contains("image-generator", ignoreCase = true) ||
-        toolCall.command.contains("image", ignoreCase = true)
+        toolCall.name.equals("generate_image", ignoreCase = true) ||
+        toolCall.name.equals("image_generation", ignoreCase = true) ||
+        toolCall.name.equals("image_gen", ignoreCase = true)
     val isMcp = toolCall.toolType == ToolType.MCP
     val isBash = toolCall.toolType == ToolType.BASH
     val isSystemNotice = toolCall.toolType == ToolType.SYSTEM_NOTIFICATION || toolCall.name == "system_notice"
-
-    val isImageOutput = remember(toolCall.output, isGenImg) {
-        isGenImg || toolCall.output.startsWith("data:image/") ||
-        (toolCall.output.startsWith("file://") && toolCall.output.matches(IMAGE_FILE_REGEX))
-    }
-
-    var resolvedImageUri by remember(toolCall.output) {
-        mutableStateOf(if (isImageOutput && toolCall.output.isNotBlank()) HubMediaResolver.getResolvedUriSync(context, toolCall.output) else "")
-    }
-    var isResolvingImage by remember(toolCall.output) {
-        mutableStateOf(isImageOutput && toolCall.output.isNotBlank() && !HubMediaResolver.isLocalOrCached(context, toolCall.output))
-    }
-    var showFullScreenViewer by remember { mutableStateOf(false) }
-
-    LaunchedEffect(toolCall.output, isImageOutput) {
-        if (isImageOutput && toolCall.output.isNotBlank()) {
-            if (!HubMediaResolver.isLocalOrCached(context, toolCall.output)) {
-                isResolvingImage = true
-                val res = HubMediaResolver.resolveMediaUri(context, toolCall.output)
-                if (res.isNotBlank()) resolvedImageUri = res
-                isResolvingImage = false
-            } else {
-                resolvedImageUri = HubMediaResolver.getResolvedUriSync(context, toolCall.output)
-                isResolvingImage = false
-            }
-        }
-    }
-
-    val authPrefs = remember(context) { com.example.gemini.data.preferences.AuthPreferences(context) }
-    val isDevMode by authPrefs.isDevModeEnabled.collectAsState(initial = false)
 
     val isPendingApproval = toolCall.status == "PENDING_APPROVAL"
     val isRunning = toolCall.status == "RUNNING"
@@ -133,16 +103,58 @@ fun AgentToolCallCard(
     val isSuccess = toolCall.status == "SUCCESS" || (toolCall.status != "FAILED" && !isTerminated && !isRejected && !isPendingApproval && toolCall.exitCode == 0)
     val isFailed = toolCall.status == "FAILED" || (toolCall.exitCode != null && toolCall.exitCode != 0 && !isTerminated && !isRejected)
 
+    val hasValidImagePayload = remember(toolCall.output) {
+        HubMediaResolver.isRenderableImageSource(toolCall.output)
+    }
+    val isImageOutput = remember(isGenImg, isRunning, hasValidImagePayload) {
+        (isGenImg && isRunning) || hasValidImagePayload
+    }
+
+    var resolvedImageUri by remember(toolCall.output) {
+        mutableStateOf(
+            if (hasValidImagePayload) HubMediaResolver.getResolvedUriSync(context, toolCall.output) else ""
+        )
+    }
+    var isResolvingImage by remember(toolCall.output) {
+        mutableStateOf(
+            hasValidImagePayload && HubMediaResolver.needsAsyncResolution(context, toolCall.output)
+        )
+    }
+    var showFullScreenViewer by remember { mutableStateOf(false) }
+
+    LaunchedEffect(toolCall.output, hasValidImagePayload) {
+        if (hasValidImagePayload) {
+            if (HubMediaResolver.needsAsyncResolution(context, toolCall.output)) {
+                isResolvingImage = true
+                try {
+                    val res = HubMediaResolver.resolveMediaUri(context, toolCall.output)
+                    if (res.isNotBlank()) resolvedImageUri = res
+                } finally {
+                    isResolvingImage = false
+                }
+            } else {
+                resolvedImageUri = HubMediaResolver.getResolvedUriSync(context, toolCall.output)
+                isResolvingImage = false
+            }
+        } else {
+            isResolvingImage = false
+        }
+    }
+
+    val authPrefs = remember(context) { com.example.gemini.data.preferences.AuthPreferences(context) }
+    val isDevMode by authPrefs.isDevModeEnabled.collectAsState(initial = false)
+
     // Hide non-interactive technical tool calls from normal chat view
     if (!isDevMode && !isPendingApproval && !isImageOutput) {
         return
     }
 
-    // In normal user view during image generation/resolution, display the shimmering skeleton preview
+    // In normal user view, ONLY show the creation skeleton while an image generation call is actively running.
+    // Finished image outputs render via stable MarkdownImageView blocks; never pop-in a temporary loading card on scroll.
     if (!isDevMode && isImageOutput) {
-        if (isRunning || isResolvingImage) {
+        if (isGenImg && isRunning) {
             ImageGeneratingSkeletonCard(
-                label = if (isRunning) "Creating your image" else "Loading image...",
+                label = "Creating your image",
                 modifier = modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
@@ -377,8 +389,8 @@ fun AgentToolCallCard(
         }
         }
 
-        // Always-visible Image Preview for Generate Image tool (once generated)
-        if (isImageOutput && !isRunning && (toolCall.output.isNotBlank() || isSuccess)) {
+        // Always-visible Image Preview in Dev Mode for image outputs
+        if (hasValidImagePayload && !isRunning) {
             val displayUri = resolvedImageUri.ifBlank { toolCall.output }
             val coilData: Any? = remember(displayUri, resolvedImageUri) {
                     val memKey = HubMediaResolver.normalizeKey(toolCall.output)
@@ -420,6 +432,7 @@ fun AgentToolCallCard(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .height(200.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(com.example.gemini.theme.AppColors.editorBg)
                                 .clickable {
@@ -428,12 +441,19 @@ fun AgentToolCallCard(
                             contentAlignment = Alignment.Center
                         ) {
                             if (isResolvingImage) {
-                                ImageGeneratingSkeletonCard(
-                                    label = "Loading image...",
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(200.dp)
-                                )
+                                        .fillMaxSize()
+                                        .background(shimmerBrush()),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Image,
+                                        contentDescription = "Loading image",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
                             } else {
                                 AsyncImage(
                                     model = ImageRequest.Builder(context)
@@ -442,9 +462,7 @@ fun AgentToolCallCard(
                                         .build(),
                                     contentDescription = toolCall.command,
                                     contentScale = ContentScale.Fit,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 140.dp, max = 340.dp)
+                                    modifier = Modifier.fillMaxSize()
                                 )
                             }
                         }

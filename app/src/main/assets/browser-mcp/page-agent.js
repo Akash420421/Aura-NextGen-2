@@ -10,7 +10,7 @@
  */
 (function () {
   'use strict';
-  var VERSION = 10;
+  var VERSION = 11;
   var prev = window.__antigemAgent;
   if (prev && prev.version === VERSION) return true;
   var store = prev && prev._store ? prev._store : { byRef: new Map(), byEl: new WeakMap(), next: 0 };
@@ -645,7 +645,51 @@
    * surroundings; a word that names a kind of control ("button", "box", "field") also counts, more weakly, when the
    * element is of that kind. When some elements match by text, elements that only match by kind are dropped.
    */
-  function find(query) {
+  function elHost(el) {
+    try {
+      var a = el.localName === 'a' ? el : (el.closest ? el.closest('a[href]') : null);
+      if (!a || !a.href) return '';
+      var u = new URL(a.href, location.href);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+      return String(u.hostname || '').toLowerCase();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function isSponsoredElement(el) {
+    try {
+      var host = elHost(el);
+      if (/googleadservices|doubleclick|amazon-adsystem/.test(host)) return true;
+      var cur = el;
+      for (var i = 0; cur && cur !== document.body && i < 6; i++, cur = cur.parentElement) {
+        if (cur.hasAttribute && (cur.hasAttribute('data-text-ad') || cur.hasAttribute('data-is-ad'))) return true;
+        var cls = String(cur.className || '').toLowerCase();
+        var aria = String(cur.getAttribute && cur.getAttribute('aria-label') || '').toLowerCase();
+        if (cls.indexOf('adholder') >= 0 || cls.indexOf('sponsored') >= 0 || aria.indexOf('sponsored') >= 0) return true;
+        if (cur.querySelector && i >= 2) {
+          var badge = cur.querySelector('.s-sponsored-label-text, [data-component-type="sp-sponsored-result"], span[aria-label*="Sponsored" i]');
+          if (badge) return true;
+        }
+      }
+      if (el.getAttribute && /\/sspa\/click|aclk\b/i.test(el.getAttribute('href') || '')) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  function isInNavOrSearch(el) {
+    try {
+      if (!el.closest) return false;
+      if (el.closest('#search, #rso, main, [role="main"], .s-main-slot')) return false;
+      return !!el.closest('nav, header, [role="navigation"], [role="search"]');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function find(query, opts) {
+    opts = opts || {};
+    var wantEditable = opts.kind === 'editable';
     var qw = words(query);
     var picked = qw.filter(function (w) { return !STOP[w]; });
     if (!picked.length) picked = qw.slice(0, 12);
@@ -669,11 +713,13 @@
     var scored = [], anyText = false;
     res.nodes.forEach(function (n) {
       var el = n.el;
+      if (wantEditable && !isEditable(el)) return;
+      var host = elHost(el);
       var fields = [
         [wordSet([n.name, el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('title'), el.getAttribute('alt'),
           (el.localName === 'input' && /^(submit|button|reset)$/.test(inputType(el))) ? el.value : '', n.inter ? textOf(el, 150) : '',
           n.role === 'file-input' ? 'file files upload attach' : '', el.localName === 'select' ? Array.prototype.slice.call(el.options, 0, 30).map(function (o) { return o.textContent; }).join(' ') : '']), 1],
-        [wordSet([el.id, el.getAttribute('name'), el.getAttribute('data-testid'), el.getAttribute('data-test-id'), el.getAttribute('data-test'), el.getAttribute('data-qa'), el.getAttribute('data-cy'), el.getAttribute('href')]), 0.5],
+        [wordSet([el.id, el.getAttribute('name'), el.getAttribute('data-testid'), el.getAttribute('data-test-id'), el.getAttribute('data-test'), el.getAttribute('data-qa'), el.getAttribute('data-cy'), el.getAttribute('href'), host]), 0.5],
         [wordSet([n.inter ? containerText(el) : '', idsText(el, 'aria-describedby', 100)]), 0.3]
       ];
       var text = 0, kind = 0;
@@ -692,10 +738,18 @@
       var score = (text + kind) / terms.length;
       if (phrase && words(n.name).map(stem).join(' ').indexOf(phrase) >= 0) score += 0.3;
       if (n.inter) score += 0.15;
+      var ad = isSponsoredElement(el);
+      var nav = isInNavOrSearch(el);
+      if (ad && qw.indexOf('sponsored') < 0 && qw.indexOf('ad') < 0) score -= 0.4;
+      if (nav && opts.kind === 'clickable') score -= 0.15;
+      if (opts.kind === 'clickable' && isEditable(el)) score -= 0.45;
       if (!n.onScreen) score *= 0.9;
       if (n.disabled) score *= 0.8;
       n.score = score;
       n.byText = text > 0;
+      n.host = host;
+      n.isAd = ad;
+      n.inNav = nav;
       if (n.byText) anyText = true;
       n.container = n.inter ? containerText(el) : '';
       scored.push(n);
@@ -711,6 +765,9 @@
     var out = top.map(function (n) {
       var line = '- ' + n.ref + ': ' + n.role + (n.name ? ' ' + q(clip(n.name, 100)) : '');
       if (dup[n.role + '|' + n.name] > 1 && n.container && n.container !== n.name) line += ' in ' + q(clip(n.container, 60));
+      if (n.host) line += ' (host: ' + n.host + ')';
+      if (n.isAd) line += ' [sponsored]';
+      if (n.inNav) line += ' [nav]';
       var flags = [];
       if (!n.onScreen) flags.push('off-screen');
       if (n.disabled) flags.push('disabled');
@@ -822,18 +879,32 @@
   }
 
   /** Fallback typing without DevTools: inserts text at the caret like a keyboard would. */
-  function insertText(text) {
+  function insertText(text, clearFirst) {
     var a = deepActive();
     if (!isEditable(a)) return { ok: false, error: 'No text field is focused. Click the field first.' };
     var doc = a.ownerDocument;
+    if (clearFirst) {
+      if (a.localName === 'input' || a.localName === 'textarea') {
+        try { if (a._valueTracker) a._valueTracker.setValue('__antigem_reset__'); } catch (e) {}
+        setNativeValue(a, '');
+        fire(a, ['input']);
+      } else if (a.isContentEditable) {
+        var sel = winOf(a).getSelection(), range = doc.createRange();
+        range.selectNodeContents(a);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
     var done = false;
     try { done = doc.execCommand('insertText', false, text); } catch (e) { done = false; }
     if (!done && (a.localName === 'input' || a.localName === 'textarea')) {
-      var start = a.selectionStart == null ? a.value.length : a.selectionStart, end = a.selectionEnd == null ? start : a.selectionEnd;
-      setNativeValue(a, a.value.slice(0, start) + text + a.value.slice(end));
-      a.dispatchEvent(new Event('input', { bubbles: true }));
+      var start = clearFirst ? 0 : (a.selectionStart == null ? a.value.length : a.selectionStart);
+      var end = clearFirst ? a.value.length : (a.selectionEnd == null ? start : a.selectionEnd);
+      var base = clearFirst ? '' : a.value;
+      setNativeValue(a, base.slice(0, start) + text + base.slice(end));
+      fireInputEvent(a, text);
     }
-    return { ok: true, desc: describe(a) };
+    return { ok: true, desc: describe(a), value: (a.localName === 'input' || a.localName === 'textarea') ? a.value : textOf(a, 120) };
   }
 
   // ---------- forms ----------
@@ -841,8 +912,18 @@
   function setNativeValue(el, value) {
     var w = winOf(el);
     var proto = el.localName === 'textarea' ? w.HTMLTextAreaElement.prototype : el.localName === 'select' ? w.HTMLSelectElement.prototype : w.HTMLInputElement.prototype;
+    try { if (el._valueTracker) el._valueTracker.setValue('__antigem_reset__'); } catch (e) {}
     var desc = Object.getOwnPropertyDescriptor(proto, 'value');
     if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+  }
+
+  function fireInputEvent(el, dataVal) {
+    try {
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertReplacementText', data: dataVal }));
+    } catch (e) {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function fire(el, types) {
@@ -915,11 +996,24 @@
       if (type === 'range' && isNaN(Number(v))) return { ok: false, code: 'input_invalid', error: 'A slider needs a number.' };
       var old = el.value;
       el.focus();
+      setNativeValue(el, '');
       setNativeValue(el, v);
-      fire(el, ['input', 'change']);
+      fireInputEvent(el, v);
+      if (el.value !== v) {
+        try {
+          el.select && el.select();
+          el.ownerDocument.execCommand('insertText', false, v);
+        } catch (e) {}
+      }
       if (TEXT_INPUTS[type] || t === 'textarea') { try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} }
+      var matches = (el.value === v);
       var note = (v !== '' && el.value === '' && type !== 'password') ? ' — the field did not accept that value (its format may be different, e.g. dates as YYYY-MM-DD)' : '';
-      return { ok: true, text: 'Set ' + describe(el) + ' to ' + show(el.value) + ' (was ' + (old ? show(old) : 'empty') + ')' + note };
+      return {
+        ok: true,
+        matched: matches,
+        actualValue: secret ? '[redacted]' : el.value,
+        text: 'Set ' + describe(el) + ' to ' + show(el.value) + ' (was ' + (old ? show(old) : 'empty') + ')' + note
+      };
     }
 
     if (el.isContentEditable) {
@@ -995,11 +1089,155 @@
     return { ok: true, text: 'Title: ' + (document.title || '(no title)') + '\nURL: ' + location.href + '\nFrom: ' + source + (includeHidden ? ' (including hidden text)' : '') + '\n\n' + text + (notes.length ? '\n\n' + notes.join('\n') : '') };
   }
 
+  function submitElement(ref) {
+    var el = (ref && elFor(ref)) || deepActive();
+    if (!el) return { ok: false, error: 'No target element focused for submit.' };
+    try { el.focus(); } catch (e) {}
+    var evInit = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, charCode: 13, bubbles: true, cancelable: true };
+    try { el.dispatchEvent(new KeyboardEvent('keydown', evInit)); } catch (e) {}
+    try { el.dispatchEvent(new KeyboardEvent('keypress', evInit)); } catch (e) {}
+    try { el.dispatchEvent(new KeyboardEvent('keyup', evInit)); } catch (e) {}
+
+    var form = el.form || (el.closest ? el.closest('form, [role="search"]') : null);
+    var method = 'enter_key_events';
+    if (form) {
+      var btn = null;
+      var btns = form.querySelectorAll('input[type="submit"], button[type="submit"], #nav-search-submit-button, .nav-search-submit, button[aria-label*="Go" i], input[aria-label*="Go" i], button[aria-label*="Search" i]');
+      for (var i = 0; i < btns.length; i++) {
+        var b = btns[i];
+        if (b === el) continue;
+        var br = clientRect(b);
+        if (br.width > 0 && br.height > 0 && !b.disabled) { btn = b; break; }
+      }
+      if (btn) {
+        try { btn.click(); method = 'submit_button_click'; } catch (e) {}
+      } else if (typeof form.requestSubmit === 'function') {
+        try { form.requestSubmit(); method = 'requestSubmit'; } catch (e) { try { form.submit(); method = 'form_submit'; } catch (e2) {} }
+      } else if (typeof form.submit === 'function') {
+        try { form.submit(); method = 'form_submit'; } catch (e) {}
+      }
+    }
+    return {
+      ok: true,
+      method: method,
+      value: (el.value !== undefined) ? String(el.value) : '',
+      url: location.href
+    };
+  }
+
+  function viewportMedia(action) {
+    var v = vv();
+    if (action === 'scroll_to_images') {
+      var priority = Array.prototype.slice.call(
+        document.querySelectorAll('#imageBlock img, #imgTagWrapperId img, [data-feature-name*="image"] img, [data-component-type="s-product-image"] img, main img, article img, img')
+      );
+      var picked = null;
+      for (var p = 0; p < priority.length; p++) {
+        var im = priority[p];
+        if (!im.complete || im.naturalWidth < 110 || im.naturalHeight < 90) continue;
+        var st0 = styleOf(im);
+        if (!st0 || st0.display === 'none' || st0.visibility === 'hidden') continue;
+        if (im.closest && im.closest('header, nav, footer')) continue;
+        if (isSponsoredElement(im)) continue;
+        var r0 = clientRect(im);
+        if (r0.width >= 90 && r0.height >= 70) { picked = im; break; }
+      }
+      if (picked) {
+        try { picked.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch (e) { picked.scrollIntoView(); }
+        v = vv();
+      }
+    }
+
+    var allImgs = document.querySelectorAll('img');
+    var visibleImages = [], above = 0, below = 0, total = 0;
+    for (var i = 0; i < allImgs.length; i++) {
+      var img = allImgs[i];
+      if (!img.complete || img.naturalWidth < 60 || img.naturalHeight < 60) continue;
+      var st = styleOf(img);
+      if (!st || st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) continue;
+      var r = clientRect(img);
+      if (r.width < 50 || r.height < 50) continue;
+      total++;
+      if (r.bottom <= 8) { above++; continue; }
+      if (r.top >= v.h - 8) { below++; continue; }
+      if (r.right <= 8 || r.left >= v.w - 8) continue;
+      if (visibleImages.length < 8) {
+        var srcName = String(img.currentSrc || img.src || '').split('?')[0].split('/').pop() || '';
+        var lbl = clip(img.alt || img.getAttribute('aria-label') || img.title || srcName, 80);
+        visibleImages.push({
+          label: lbl || 'image',
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          sponsored: isSponsoredElement(img)
+        });
+      }
+    }
+
+    var visHeadings = [], visTextParts = [];
+    var hs = document.querySelectorAll('h1, h2, h3, h4, [role="heading"]');
+    for (var h = 0; h < hs.length; h++) {
+      var hr = clientRect(hs[h]);
+      if (hr.bottom > 0 && hr.top < v.h && hr.width > 0 && hr.height > 0) {
+        var ht = clip(hs[h].innerText || hs[h].textContent, 90);
+        if (ht && visHeadings.indexOf(ht) < 0) visHeadings.push(ht);
+      }
+    }
+    var blocks = document.querySelectorAll('h1, h2, h3, p, li, a, button, span');
+    var seenT = {};
+    for (var b = 0; b < blocks.length && visTextParts.length < 30; b++) {
+      var el = blocks[b];
+      var br = clientRect(el);
+      if (br.bottom <= 10 || br.top >= v.h - 10 || br.width <= 0 || br.height <= 0) continue;
+      var txt = clip(ownText(el, 120) || (el.children.length === 0 ? textOf(el, 120) : ''), 120);
+      if (txt && txt.length >= 3 && !seenT[txt]) {
+        seenT[txt] = 1;
+        visTextParts.push(txt);
+      }
+    }
+    var joined = (visHeadings.join(' ') + ' ' + visTextParts.join(' ')).toLowerCase();
+    var orgImgs = visibleImages.filter(function (x) { return !x.sponsored; });
+    var bigOrg = orgImgs.filter(function (x) { return x.w >= 130 || x.h >= 120; });
+    var hasLogin = !!(document.querySelector('input[type="password"], input[type="email"]'));
+    var section = 'PAGE_CONTENT';
+    if (hasLogin && (joined.indexOf('sign in') >= 0 || joined.indexOf('email or phone') >= 0 || /accounts\.google/i.test(location.hostname))) {
+      section = 'SIGN_IN';
+    } else if (joined.indexOf('customer review') >= 0 || joined.indexOf('top reviews') >= 0 || joined.indexOf('write a customer review') >= 0) {
+      section = 'CUSTOMER_REVIEWS';
+    } else if (bigOrg.length > 0) {
+      section = 'PRODUCT_GALLERY_OR_MEDIA';
+    } else if (visibleImages.length > 0 && orgImgs.length === 0) {
+      section = 'SPONSORED_ADS';
+    } else if (/[?&](k|q|search_query)=/i.test(location.search)) {
+      section = 'SEARCH_RESULTS';
+    }
+
+    var d = document.documentElement;
+    return {
+      ok: true,
+      url: location.href,
+      title: clip(document.title, 120),
+      section: section,
+      scrollY: Math.round(scrollY + v.oy),
+      scrollHeight: d ? d.scrollHeight : 0,
+      viewportHeight: Math.round(v.h),
+      atTop: (scrollY + v.oy) <= 5,
+      atBottom: d ? ((scrollY + v.oy + v.h) >= (d.scrollHeight - 10)) : false,
+      visibleImages: visibleImages,
+      organicVisibleImageCount: orgImgs.length,
+      totalImages: total,
+      imagesAbove: above,
+      imagesBelow: below,
+      headings: visHeadings.slice(0, 8),
+      visibleText: clip(visTextParts.join(' | '), 800),
+      sig: clip(location.href + '|' + section + '|' + visHeadings.slice(0, 3).join('|') + '|' + visTextParts.slice(0, 4).join('|'), 280)
+    };
+  }
+
   window.__antigemAgent = {
     version: VERSION, _store: store,
     tree: tree, find: find, resolve: resolve, hitTest: hitTest, focusInfo: focusInfo, viewport: viewport,
     scrollIntoViewRef: scrollIntoViewRef, scrollAt: scrollAt, pointerEvent: pointerEvent, insertText: insertText,
-    formInput: formInput, pageText: pageText
+    formInput: formInput, pageText: pageText, submitElement: submitElement, viewportMedia: viewportMedia
   };
   return true;
 })();

@@ -24,7 +24,8 @@ object AuraContactsManager {
         val number: String,
         val aliases: List<String> = emptyList(),
         val isWhatsApp: Boolean = true,
-        val isPhone: Boolean = true
+        val isPhone: Boolean = true,
+        val autoReplyEnabled: Boolean = false
     )
 
     private val _contacts = MutableStateFlow<List<ContactItem>>(emptyList())
@@ -60,7 +61,8 @@ object AuraContactsManager {
                         number = obj.getString("number"),
                         aliases = aliases,
                         isWhatsApp = obj.optBoolean("isWhatsApp", true),
-                        isPhone = obj.optBoolean("isPhone", true)
+                        isPhone = obj.optBoolean("isPhone", true),
+                        autoReplyEnabled = obj.optBoolean("autoReplyEnabled", false)
                     )
                 )
             }
@@ -80,6 +82,7 @@ object AuraContactsManager {
                     put("number", item.number)
                     put("isWhatsApp", item.isWhatsApp)
                     put("isPhone", item.isPhone)
+                    put("autoReplyEnabled", item.autoReplyEnabled)
                     val aliasesArr = JSONArray()
                     item.aliases.forEach { aliasesArr.put(it) }
                     put("aliases", aliasesArr)
@@ -92,19 +95,35 @@ object AuraContactsManager {
         }
     }
 
-    fun addContact(name: String, number: String, aliases: List<String>, isWhatsApp: Boolean = true, isPhone: Boolean = true) {
+    fun addContact(
+        name: String,
+        number: String,
+        aliases: List<String>,
+        isWhatsApp: Boolean = true,
+        isPhone: Boolean = true,
+        autoReplyEnabled: Boolean = false
+    ) {
         val newItem = ContactItem(
             name = name.trim(),
             number = number.trim(),
             aliases = aliases.map { it.trim() }.filter { it.isNotEmpty() },
             isWhatsApp = isWhatsApp,
-            isPhone = isPhone
+            isPhone = isPhone,
+            autoReplyEnabled = autoReplyEnabled
         )
         _contacts.value = _contacts.value + newItem
         saveContacts()
     }
 
-    fun updateContact(id: String, name: String, number: String, aliases: List<String>, isWhatsApp: Boolean, isPhone: Boolean) {
+    fun updateContact(
+        id: String,
+        name: String,
+        number: String,
+        aliases: List<String>,
+        isWhatsApp: Boolean,
+        isPhone: Boolean,
+        autoReplyEnabled: Boolean = false
+    ) {
         _contacts.value = _contacts.value.map {
             if (it.id == id) {
                 it.copy(
@@ -112,7 +131,8 @@ object AuraContactsManager {
                     number = number.trim(),
                     aliases = aliases.map { a -> a.trim() }.filter { a -> a.isNotEmpty() },
                     isWhatsApp = isWhatsApp,
-                    isPhone = isPhone
+                    isPhone = isPhone,
+                    autoReplyEnabled = autoReplyEnabled
                 )
             } else it
         }
@@ -134,6 +154,23 @@ object AuraContactsManager {
             item.name.lowercase() == q ||
                 item.name.lowercase().contains(q) ||
                 item.aliases.any { it.lowercase() == q || q.contains(it.lowercase()) }
+        }
+    }
+
+    /**
+     * Matches an incoming WhatsApp sender title against Aura's custom saved contacts
+     * using exact/normalized comparisons to avoid false auto-reply matches.
+     */
+    fun findAutoReplyContactMatch(senderDisplay: String): ContactItem? {
+        val normSender = WhatsAppAutoReplyHelper.normalizeSenderKey(senderDisplay)
+        if (normSender.isBlank()) return null
+        return _contacts.value.firstOrNull { item ->
+            val normName = WhatsAppAutoReplyHelper.normalizeSenderKey(item.name)
+            normName == normSender ||
+                item.aliases.any { alias ->
+                    val normAlias = WhatsAppAutoReplyHelper.normalizeSenderKey(alias)
+                    normAlias.isNotBlank() && normAlias == normSender
+                }
         }
     }
 }

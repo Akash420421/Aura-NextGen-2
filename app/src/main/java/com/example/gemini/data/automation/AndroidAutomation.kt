@@ -20,6 +20,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import com.example.gemini.data.adb.AdbConnectManager
+import com.example.gemini.data.live.DeviceControlHelper
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -433,20 +434,31 @@ object AndroidAutomation {
         val info = JSONObject()
 
         if (want("battery")) info.put("battery", JSONObject().apply {
-            val intent = context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val intent = runCatching {
+                context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            }.getOrNull()
             val bm = context.getSystemService(android.os.BatteryManager::class.java)
+            val bmCap = runCatching {
+                bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+            }.getOrDefault(-1)
             val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
             val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
-            val rawPct = if (level >= 0) level * 100 / scale.coerceAtLeast(1) else bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val rawPct = DeviceControlHelper.computeBatteryPercent(bmCap, level, scale)
             put("level_percent", rawPct.coerceIn(0, 100))
-            put("status", when (intent?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)) {
+            val intentStatus = intent?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+            val pluggedCode = intent?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+            val isChargingNow = runCatching { bm?.isCharging == true }.getOrDefault(false) ||
+                pluggedCode != 0 ||
+                intentStatus == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+            put("is_charging", isChargingNow)
+            put("status", when (intentStatus) {
                 android.os.BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
                 android.os.BatteryManager.BATTERY_STATUS_FULL -> "full"
                 android.os.BatteryManager.BATTERY_STATUS_DISCHARGING -> "discharging"
                 android.os.BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "not charging"
-                else -> "unknown"
+                else -> if (isChargingNow) "charging" else "discharging"
             })
-            put("plugged", when (intent?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0)) {
+            put("plugged", when (pluggedCode) {
                 android.os.BatteryManager.BATTERY_PLUGGED_AC -> "AC"
                 android.os.BatteryManager.BATTERY_PLUGGED_USB -> "USB"
                 android.os.BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
@@ -465,9 +477,17 @@ object AndroidAutomation {
             intent?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)?.takeIf { it != Int.MIN_VALUE }?.let { put("temperature_c", it / 10.0) }
             intent?.getIntExtra(android.os.BatteryManager.EXTRA_VOLTAGE, -1)?.takeIf { it > 0 }?.let { put("voltage_mv", it) }
             intent?.getStringExtra(android.os.BatteryManager.EXTRA_TECHNOLOGY)?.let { put("technology", it) }
-            bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CURRENT_NOW).takeIf { it != Int.MIN_VALUE && it != 0 }?.let { put("current_now_ua", it) }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) bm.computeChargeTimeRemaining().takeIf { it > 0 }?.let { put("charge_time_remaining_min", it / 60_000) }
-            put("power_save_mode", context.getSystemService(PowerManager::class.java).isPowerSaveMode)
+            runCatching { bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) }
+                .getOrNull()
+                ?.takeIf { it != Int.MIN_VALUE && it != 0 }
+                ?.let { put("current_now_ua", it) }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                runCatching { bm?.computeChargeTimeRemaining() }
+                    .getOrNull()
+                    ?.takeIf { it > 0 }
+                    ?.let { put("charge_time_remaining_min", it / 60_000) }
+            }
+            put("power_save_mode", context.getSystemService(PowerManager::class.java)?.isPowerSaveMode == true)
         })
 
         if (want("device")) info.put("device", JSONObject().apply {

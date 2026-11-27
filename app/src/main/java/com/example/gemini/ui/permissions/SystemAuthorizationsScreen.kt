@@ -260,7 +260,7 @@ fun SystemAuthorizationsScreen(
             item {
                 AuthCard(
                     title = "Notification Reader Access",
-                    description = "Allows Aura to read incoming notifications and messages aloud when you ask 'Meri notification padho' or 'Koi message aaya hai kya'.",
+                    description = "Allows Aura to read incoming notifications, extract OTPs, and power WhatsApp Auto-Reply (Smart Confirm & Direct Reply).",
                     granted = hasNotifListener,
                     icon = Icons.Outlined.MarkChatUnread,
                     onAction = {

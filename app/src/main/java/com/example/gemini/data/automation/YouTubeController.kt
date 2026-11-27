@@ -39,22 +39,7 @@ object YouTubeController {
 
     private var lastPickedIndex = -1
 
-    fun cleanQuery(rawQuery: String): String {
-        var clean = rawQuery.trim()
-        val patterns = listOf(
-            Regex("""\b(on|in|from|or|and)\s+(youtube|yt)\b""", RegexOption.IGNORE_CASE),
-            Regex("""\b(youtube|yt)\s+(pe|par|mein|me|video|song|songs|audio)\b""", RegexOption.IGNORE_CASE),
-            Regex("""\b(youtube|yt)\b""", RegexOption.IGNORE_CASE),
-            Regex("""^\s*(play|open|search|listen\s+to)\b""", RegexOption.IGNORE_CASE),
-            Regex("""\b(chalao|chala\s+do|karo|kar\s+do|lagao|laga\s+do|sunao|suna\s+do|bajao|baja\s+do|dikhao|dikha\s+do)\b""", RegexOption.IGNORE_CASE)
-        )
-        for (pattern in patterns) {
-            clean = pattern.replace(clean, " ")
-        }
-        clean = clean.replace(Regex("""(?i)\s+(song|songs|video|videos|gana|gaana|gane|track)$"""), "")
-        val result = clean.replace(Regex("""\s+"""), " ").trim(' ', ',', '.', '!', '?', '"', '\'')
-        return result.ifBlank { "" }
-    }
+    fun cleanQuery(rawQuery: String): String = YouTubeSearchHelper.cleanQuery(rawQuery)
 
     private fun isVagueSurpriseQuery(rawQuery: String, cleanQ: String): Boolean {
         val rawLower = rawQuery.lowercase(Locale.ROOT)
@@ -136,7 +121,7 @@ object YouTubeController {
         }
 
         if (!videoId.isNullOrBlank()) {
-            AutomationAccessibilityService.instance?.armYouTubeAdSkipWatcher()
+            AutomationAccessibilityService.instance?.armYouTubeAdSkipWatcher(90_000L)
             val played = playVideoId(context, videoId)
             if (played) {
                 return PlayResult(true, resolvedTitle, "Playing \"$resolvedTitle\" on YouTube (auto ad-skip armed).")
@@ -146,7 +131,7 @@ object YouTubeController {
         // Fallback: launch YouTube search results with modern Litho auto-play + ad-skip watcher
         return try {
             AutomationAccessibilityService.instance?.armYouTubePlay()
-            AutomationAccessibilityService.instance?.armYouTubeAdSkipWatcher()
+            AutomationAccessibilityService.instance?.armYouTubeAdSkipWatcher(90_000L)
 
             val encoded = Uri.encode(effectiveQuery)
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$encoded&gl=IN&hl=en")).apply {
@@ -288,12 +273,16 @@ object YouTubeController {
         return when (normalized) {
             "skip_ad", "skip", "skip_ads", "ad_skip" -> {
                 if (svc == null) return PlayResult(false, null, "Accessibility Service is not running; cannot click YouTube Skip Ad.")
-                val skipped = svc.skipYouTubeAd()
+                var skipped = svc.skipYouTubeAd()
+                if (!skipped) {
+                    kotlinx.coroutines.delay(700L)
+                    skipped = svc.skipYouTubeAd()
+                }
                 if (skipped) {
                     PlayResult(true, null, "Clicked YouTube Skip Ad button.")
                 } else {
-                    svc.armYouTubeAdSkipWatcher(20_000L)
-                    PlayResult(false, null, "Skip Ad button is not clickable yet (ad timer may still be counting down). Auto ad-skip watcher has been armed and will skip it automatically as soon as 'Skip' appears.")
+                    svc.armYouTubeAdSkipWatcher(45_000L)
+                    PlayResult(true, null, "Ad countdown in progress — auto ad-skip watcher is armed and will click Skip Ad automatically as soon as it becomes clickable.")
                 }
             }
             "like" -> {
@@ -313,7 +302,12 @@ object YouTubeController {
             }
             "play_first", "play_visible" -> {
                 if (svc == null) return PlayResult(false, null, "Accessibility Service is not running.")
-                val ok = svc.clickFirstYouTubeVideoNow()
+                var ok = svc.clickFirstYouTubeVideoNow()
+                if (!ok) {
+                    svc.performSmartScrollAndAwait("down", "small")
+                    kotlinx.coroutines.delay(450L)
+                    ok = svc.clickFirstYouTubeVideoNow()
+                }
                 PlayResult(ok, null, if (ok) "Tapped first visible YouTube video." else "No visible YouTube video card found to play.")
             }
             else -> {

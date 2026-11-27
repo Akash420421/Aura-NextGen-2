@@ -26,10 +26,13 @@ data class ActiveProjectContext(
     val isActive: Boolean
         get() = projectName.isNotBlank() || workspaceDir.isNotBlank() || requirementsSummary.isNotBlank()
 
+    fun isRecentlyActive(maxAgeMs: Long = 20 * 60_000L): Boolean =
+        isActive && (System.currentTimeMillis() - updatedAt <= maxAgeMs)
+
     fun toPromptBlock(): String {
         if (!isActive) return ""
         return buildString {
-            append("## Active Project Context (Cross-Screen Memory — ALWAYS PRESERVE):\n")
+            append("## Active Project Context:\n")
             if (projectName.isNotBlank()) append("- Project Name: $projectName\n")
             if (projectType.isNotBlank()) append("- Project Type: $projectType\n")
             if (theme.isNotBlank()) append("- Theme / Aesthetic Lock: $theme\n")
@@ -37,7 +40,7 @@ data class ActiveProjectContext(
             if (workspaceDir.isNotBlank()) append("- Workspace Directory: $workspaceDir\n")
             if (previewUrl.isNotBlank()) append("- Live Preview URL: $previewUrl\n")
             if (requirementsSummary.isNotBlank()) append("- Requirements Summary: ${requirementsSummary.take(400)}\n")
-            append("- Cross-App Reference Rule: If the user opens Pinterest, Dribbble, Chrome, or shares a screenshot while this project is active, treat it as visual/layout/color inspiration for THIS active project (e.g., applying that style to $projectName), NOT as a random unrelated topic.\n")
+            append("- Strict Scope Rule: ONLY link Pinterest, Dribbble, or screenshots to $projectName if the user EXPLICITLY asks to apply design/code to this project. If the user is solving a quiz/exam, messaging, or doing unrelated tasks in Chrome or other apps, IGNORE this project completely.\n")
         }
     }
 
@@ -118,6 +121,31 @@ sealed class AuraAgentEvent {
         val errorMessage: String,
         override val timestamp: Long = System.currentTimeMillis()
     ) : AuraAgentEvent()
+
+    /** Incoming WhatsApp message held in Smart Confirm Mode awaiting user decision/reply. */
+    data class WhatsAppIncoming(
+        override val conversationId: String = "whatsapp_auto_reply",
+        val messageId: String,
+        val senderName: String,
+        val cleanSenderName: String,
+        val messageText: String,
+        val suggestedDraft: String,
+        val isGroupChat: Boolean,
+        val groupName: String?,
+        val isSensitive: Boolean,
+        val reason: String,
+        override val timestamp: Long = System.currentTimeMillis()
+    ) : AuraAgentEvent()
+
+    /** Notification that Aura executed a background Direct Auto-Reply on WhatsApp. */
+    data class WhatsAppAutoReplied(
+        override val conversationId: String = "whatsapp_auto_reply",
+        val messageId: String,
+        val senderName: String,
+        val incomingText: String,
+        val sentReply: String,
+        override val timestamp: Long = System.currentTimeMillis()
+    ) : AuraAgentEvent()
 }
 
 object AuraAgentEventBus {
@@ -160,8 +188,21 @@ object AuraAgentEventBus {
         _activeProject.value = context.copy(updatedAt = System.currentTimeMillis())
     }
 
+    fun clearActiveProject() {
+        if (_activeProject.value.isActive || _activeProject.value.sessionId.isNotBlank()) {
+            _activeProject.value = ActiveProjectContext()
+        }
+    }
+
     fun clearActiveProjectIfSession(sessionId: String) {
         if (_activeProject.value.sessionId == sessionId) {
+            _activeProject.value = ActiveProjectContext()
+        }
+    }
+
+    fun clearActiveProjectIfDifferentSession(sessionId: String) {
+        val current = _activeProject.value
+        if (current.sessionId.isNotBlank() && current.sessionId != sessionId) {
             _activeProject.value = ActiveProjectContext()
         }
     }

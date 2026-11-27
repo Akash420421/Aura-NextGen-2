@@ -9,6 +9,13 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 object ScreenSignatureCalculator {
 
+    private val LIVE_CLOCK_REGEX = Regex("""\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[aApP][mM])?\b""")
+
+    private fun normalizeDynamicCounters(raw: String): String {
+        if (raw.isEmpty() || !raw.contains(':')) return raw
+        return LIVE_CLOCK_REGEX.replace(raw, "<T>")
+    }
+
     fun computeSignature(root: AccessibilityNodeInfo?): ScreenSignature {
         if (root == null) {
             return ScreenSignature(
@@ -35,8 +42,8 @@ object ScreenSignatureCalculator {
             val node = queue.removeFirst()
             count++
 
-            val text = node.text?.toString()?.trim() ?: ""
-            val desc = node.contentDescription?.toString()?.trim() ?: ""
+            val text = normalizeDynamicCounters(node.text?.toString()?.trim() ?: "")
+            val desc = normalizeDynamicCounters(node.contentDescription?.toString()?.trim() ?: "")
             val viewId = node.viewIdResourceName?.toString() ?: ""
             val isClickable = node.isClickable
             val isEditable = node.isEditable
@@ -49,12 +56,16 @@ object ScreenSignatureCalculator {
                 texts.add(desc)
             }
 
-            // Mix into hash
+            // Mix into hash (including checked/selected/enabled state for radio buttons & Next buttons)
             hash = 31 * hash + text.hashCode()
             hash = 31 * hash + desc.hashCode()
             hash = 31 * hash + viewId.hashCode()
             hash = 31 * hash + (if (isClickable) 1 else 0)
             hash = 31 * hash + (if (isEditable) 2 else 0)
+            hash = 31 * hash + (if (node.isCheckable) 4 else 0)
+            hash = 31 * hash + (if (node.isChecked) 8 else 0)
+            hash = 31 * hash + (if (node.isSelected) 16 else 0)
+            hash = 31 * hash + (if (node.isEnabled) 32 else 0)
             hash = 31 * hash + tempRect.centerX()
             hash = 31 * hash + tempRect.centerY()
 

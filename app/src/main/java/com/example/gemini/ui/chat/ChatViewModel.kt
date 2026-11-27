@@ -378,6 +378,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** New chat with [agent] (e.g. `/clear` in a Claude chat), without changing the new-chat default. */
     fun startNewChat(agent: AgentKind) {
+        // Fresh chat must start with a clean project context slate so old chats never leak in.
+        com.example.gemini.data.live.AuraAgentEventBus.clearActiveProject()
         when (agent) {
             AgentKind.CLAUDE -> {
                 agyBackend.detach()
@@ -406,7 +408,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun selectConversation(id: String) {
+        com.example.gemini.data.live.AuraAgentEventBus.clearActiveProjectIfDifferentSession(id)
         if (com.example.gemini.data.live.VoiceSessionStore.hasSession(id)) {
+            com.example.gemini.data.live.AuraAgentEventBus.clearActiveProject()
             agyBackend.detach()
             claudeBackend.detach()
             openCodeBackend.detach()

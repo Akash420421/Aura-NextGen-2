@@ -151,11 +151,63 @@ object GlobalContext {
         return parts.takeIf { it.isNotEmpty() }?.joinToString("\n\n")
     }
 
+    private val CASUAL_NON_PROJECT_REGEX = Regex(
+        """^(?:hi+|hello+|hey+|hii+|heyy+|yo+|sup|hlo|namaste|salam|assalamualaikum|good\s+(?:morning|afternoon|evening|night)|how\s+are\s+you|how\s+r\s+u|kya\s+haal\s+hai|kaise\s+ho|thanks?|thank\s+you|thx|ok(?:ay)?|cool|nice|great|bye+|test|testing)[!.?\s]*$""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val PROJECT_SIGNAL_REGEX = Regex(
+        """\b(?:project|repo|repository|code|codebase|file|files|folder|directory|workspace|app|website|site|webpage|web|server|port|localhost|build|compile|fix|debug|error|bug|crash|refactor|implement|feature|component|screen|ui|css|html|js|ts|tsx|jsx|kt|kts|py|go|json|gradle|npm|pnpm|vite|react|next|tailwind|flutter|android|apk|git|commit|branch|backend|frontend|api|database|sql)\b""",
+        RegexOption.IGNORE_CASE
+    )
+
+    internal fun isCasualNonProjectText(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return true
+        return CASUAL_NON_PROJECT_REGEX.matches(trimmed)
+    }
+
+    internal fun hasExplicitProjectSignal(text: String, projectName: String = ""): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isBlank() || isCasualNonProjectText(trimmed)) return false
+        if (projectName.isNotBlank() && trimmed.contains(projectName, ignoreCase = true)) return true
+        if (trimmed.contains("/") || trimmed.contains("\\")) return true
+        return PROJECT_SIGNAL_REGEX.containsMatchIn(trimmed)
+    }
+
+    /**
+     * Only inject an active project banner when it belongs to THIS conversation (`sessionId == chatId`),
+     * is recently active, and isn't an empty/stale first-message greeting.
+     */
+    internal fun shouldInjectActiveProjectContext(
+        project: com.example.gemini.data.live.ActiveProjectContext,
+        chatId: String?,
+        hasEarlierMessages: Boolean,
+        nowMs: Long = System.currentTimeMillis(),
+        maxAgeMs: Long = 20 * 60_000L
+    ): Boolean {
+        if (!project.isActive) return false
+        if (chatId.isNullOrBlank() || project.sessionId.isBlank() || project.sessionId != chatId) return false
+        if (nowMs - project.updatedAt > maxAgeMs) return false
+        if (!hasEarlierMessages) {
+            val hasExplicitWork = project.previewUrl.isNotBlank() ||
+                (project.requirementsSummary.isNotBlank() && !isCasualNonProjectText(project.requirementsSummary))
+            if (!hasExplicitWork) return false
+        }
+        return true
+    }
+
     /** What every message of a normal chat carries, or null. */
-    fun everyMessageBody(): String? {
+    fun everyMessageBody(
+        chatId: String? = null,
+        hasEarlierMessages: Boolean = true
+    ): String? {
         val parts = mutableListOf<String>()
-        val projectBlock = com.example.gemini.data.live.AuraAgentEventBus.activeProject.value.toPromptBlock()
-        if (projectBlock.isNotBlank()) parts += projectBlock.trimEnd()
+        val activeProj = com.example.gemini.data.live.AuraAgentEventBus.activeProject.value
+        if (shouldInjectActiveProjectContext(activeProj, chatId, hasEarlierMessages)) {
+            val projectBlock = activeProj.toPromptBlock()
+            if (projectBlock.isNotBlank()) parts += projectBlock.trimEnd()
+        }
         val own = active().filter { it.everyMessage }
         if (own.isNotEmpty()) {
             parts += "[The user's standing instructions, sent with every message]\n" + entriesBlock(own)
@@ -176,7 +228,7 @@ object GlobalContext {
         val fp = fingerprint()
         val known = chatId?.takeIf { it.isNotBlank() }?.let { id -> synchronized(sent) { sent[id] } }
         val sendFirst = first != null && (!hasEarlierMessages || known != fp)
-        val every = everyMessageBody()
+        val every = everyMessageBody(chatId = chatId, hasEarlierMessages = hasEarlierMessages)
         if (!sendFirst && every == null) return text to null
         val note = buildString {
             if (sendFirst) {

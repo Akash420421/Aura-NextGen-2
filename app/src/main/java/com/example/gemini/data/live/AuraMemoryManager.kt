@@ -52,7 +52,7 @@ data class AuraMemoryItem(
 object AuraMemoryManager {
     private const val TAG = "AuraMemoryManager"
     private const val MEMORY_FILE_NAME = "aura_memories.json"
-    private const val MAX_MEMORIES_IN_PROMPT = 40
+    private const val MAX_MEMORIES_IN_PROMPT = 15
 
     private val _memories = MutableStateFlow<List<AuraMemoryItem>>(emptyList())
     val memories: StateFlow<List<AuraMemoryItem>> = _memories.asStateFlow()
@@ -83,13 +83,26 @@ object AuraMemoryManager {
                             list.add(item)
                         }
                     }
-                    _memories.value = list
-                    Log.i(TAG, "Loaded ${list.size} persistent memories.")
+                    val filtered = list.filterNot { isPollutedMemory(it.text) }
+                    _memories.value = filtered
+                    Log.i(TAG, "Loaded ${filtered.size} persistent memories.")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load memories: ${e.message}", e)
             }
         }
+    }
+
+    private fun isPollutedMemory(text: String): Boolean {
+        if (HindiAsrNormalizer.isNoiseOrForeignHallucination(text)) return true
+        val lower = text.lowercase(Locale.ROOT)
+        if (lower.startsWith("user develops with ")) {
+            val valPart = lower.removePrefix("user develops with ").trim()
+            if (valPart in setOf("chrome", "google", "youtube", "whatsapp", "option", "question", "next", "browser", "this", "that", "it", "phone", "app", "hindi", "english")) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun persistMemories() {
@@ -175,31 +188,31 @@ object AuraMemoryManager {
      */
     fun learnFromConversation(cleanInput: String) {
         val clean = cleanInput.trim()
-        if (clean.length < 5) return
+        if (clean.length < 8 || HindiAsrNormalizer.isNoiseOrForeignHallucination(clean)) return
 
-        val lower = clean.lowercase(Locale.ROOT)
-
-        // 1. User Name Extraction
-        val nameMatch = Regex("(?i).*(?:my name is|call me|mera naam)\\s+([a-zA-Z0-9]+)").find(clean)
+        // 1. Explicit User Name Declaration
+        val nameMatch = Regex("(?i).*(?:my name is|call me|mera naam)\\s+([a-zA-Z]{2,20})(?:\\s+hai)?\\b").find(clean)
         if (nameMatch != null) {
             val name = nameMatch.groupValues[1].replaceFirstChar { it.uppercase() }
-            if (name.length > 1 && !listOf("user", "sir", "bro").contains(name.lowercase())) {
+            if (!listOf("user", "sir", "bro", "kya", "hai", "haan", "nahi").contains(name.lowercase())) {
                 rememberFact("User's name is $name", AuraMemoryItem.CATEGORY_PERSONAL)
             }
         }
 
-        // 2. Favorite Language or Framework
-        val langMatch = Regex("(?i).*(?:i code in|i build apps? with|i use|my stack is)\\s+([a-zA-Z0-9#+.]+)").find(clean)
+        // 2. Explicit Coding Stack Declaration (avoid matching casual "i use chrome")
+        val langMatch = Regex("(?i).*(?:i code in|my coding stack is|my tech stack is)\\s+([a-zA-Z0-9#+.]{2,20})\\b").find(clean)
         if (langMatch != null) {
             val stack = langMatch.groupValues[1]
-            rememberFact("User develops with $stack", AuraMemoryItem.CATEGORY_PROJECT)
+            if (!isPollutedMemory("User develops with $stack")) {
+                rememberFact("User develops with $stack", AuraMemoryItem.CATEGORY_PROJECT)
+            }
         }
 
-        // 3. User Preferences (e.g. "Mujhe dark theme pasand hai", "I prefer pnpm")
-        val prefMatch = Regex("(?i).*(?:i prefer|i like|mujhe pasand hai)\\s+([a-zA-Z0-9\\s]{3,30})").find(clean)
+        // 3. Explicit Long-Term Theme/Tool Preference
+        val prefMatch = Regex("(?i).*(?:always remember i prefer|meri preference hai|mujhe hamesha)\\s+([a-zA-Z0-9\\s]{4,30})").find(clean)
         if (prefMatch != null) {
             val pref = prefMatch.groupValues[1].trim()
-            if (pref.isNotBlank() && pref.length < 40) {
+            if (pref.isNotBlank() && pref.length < 36) {
                 rememberFact("User preference: $pref", AuraMemoryItem.CATEGORY_PREFERENCE)
             }
         }
@@ -209,15 +222,14 @@ object AuraMemoryManager {
      * Injected into Gemini Live system prompt.
      */
     fun getSystemPromptContext(): String {
-        val list = _memories.value
+        val list = _memories.value.filterNot { isPollutedMemory(it.text) }
         if (list.isEmpty()) return ""
 
-        val sb = StringBuilder("\n## Persistent Memory Core (Facts & Preferences across all sessions):\n")
-        sb.append("You remember these persistent facts about the user:\n")
+        val sb = StringBuilder("\n## Persistent Memory Core (Background User Preferences):\n")
         list.take(MAX_MEMORIES_IN_PROMPT).forEach { item ->
             sb.append("- [${item.category}] ${item.text}\n")
         }
-        sb.append("Use these details naturally to personalize answers without having to ask the user repeatedly.\n\n")
+        sb.append("Use these strictly for personalization; NEVER drag past projects into unrelated phone tasks or quizzes.\n\n")
         return sb.toString()
     }
 }

@@ -246,6 +246,16 @@ object JarvisPreferences {
     /** "<chat id>|<guide version>": the chat that already got the full Jarvis guide (boot message). */
     val bootSentFor = pref("boot_sent_for", "")
 
+    // ---- #18 WhatsApp Notification Auto-Reply (Smart Confirm Mode default)
+    /** Master switch for listening to incoming WhatsApp notifications. */
+    val waAutoReplyEnabled = pref("wa_auto_reply_enabled", true)
+    /** When false (default), Aura enters Smart Confirm Mode and asks/confirms before replying. When true, verified saved contacts in 1:1 chats get Direct Auto-Reply. */
+    val waDirectSavedContacts = pref("wa_direct_saved_contacts", false)
+    /** Use Gemini quick draft when possible; falls back to contextual Hinglish template offline. */
+    val waAutoReplyAiDraft = pref("wa_auto_reply_ai_draft", true)
+    /** Default fallback reply template used when offline or API key is missing. */
+    val waAutoReplyTemplate = pref("wa_auto_reply_template", "Abhi busy hoon, thodi der mein baat karta hoon.")
+
     private val _chatIds = MutableStateFlow<Set<String>>(emptySet())
     /** Ids of every chat Jarvis ever opened (they are listed under the Jarvis filter, not in the normal lists). */
     val chatIds: StateFlow<Set<String>> get() = _chatIds
