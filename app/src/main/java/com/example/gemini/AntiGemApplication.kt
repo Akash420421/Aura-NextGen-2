@@ -37,19 +37,29 @@ class AntiGemApplication : Application(), coil.ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        if (CrashLogger.isCrashProcess(this)) return
+        CrashLogger.install(this)
         // loads the saved server addresses, Remote mode and the SSH key into memory before anything connects
         com.example.gemini.data.preferences.AuthPreferences(this)
         // the chosen light / dark themes and the custom ones, before the first screen draws
-        com.example.gemini.theme.ThemeManager.init(this)
-        UpdateCheckWorker.schedule(this)
-        PluginUpdateCheckWorker.schedule(this)
+        runCatching { com.example.gemini.theme.ThemeManager.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "ThemeManager.init", it) }
+        runCatching { UpdateCheckWorker.schedule(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "UpdateCheckWorker.schedule", it) }
+        runCatching { PluginUpdateCheckWorker.schedule(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "PluginUpdateCheckWorker.schedule", it) }
         // Reconnects adb when Wireless debugging turns back on (it gets a new port every time)
-        AdbConnectManager.init(this)
-        com.example.gemini.data.ssh.SshSessionFactory.init(this)
-        com.example.gemini.data.automation.AuraContactsManager.init(this)
-        com.example.gemini.data.jarvis.JarvisPreferences.init(this)
+        runCatching { AdbConnectManager.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "AdbConnectManager.init", it) }
+        runCatching { com.example.gemini.data.ssh.SshSessionFactory.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "SshSessionFactory.init", it) }
+        runCatching { com.example.gemini.data.automation.AuraContactsManager.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "AuraContactsManager.init", it) }
+        runCatching { com.example.gemini.data.jarvis.JarvisPreferences.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "JarvisPreferences.init", it) }
         // the cloud project new Antigravity chats start in (Remote Agents), before the first chat is created
-        com.example.gemini.data.agent.agy.AgyCloud.init(this)
+        runCatching { com.example.gemini.data.agent.agy.AgyCloud.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "AgyCloud.init", it) }
         // Forks build with their own key, so only official release APKs report real usage.
         if (!BuildConfig.DEBUG && !isOfficialRelease()) {
             Toast.makeText(

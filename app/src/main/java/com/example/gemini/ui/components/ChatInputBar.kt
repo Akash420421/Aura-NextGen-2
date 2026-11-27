@@ -16,14 +16,11 @@ import androidx.compose.animation.core.*
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.shadow
@@ -51,7 +48,6 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.HeadsetMic
 import androidx.compose.material.icons.rounded.Mic
@@ -244,15 +240,6 @@ fun ChatInputBar(
     voiceCallActive: Boolean = false,
     /** Compact light composer used on Aura AI's dedicated home screen. */
     auraHomeStyle: Boolean = false,
-    /** Dedicated Image Generation UI mode inside the chat composer. */
-    isImageMode: Boolean = false,
-    onToggleImageMode: (Boolean) -> Unit = {},
-    imageAspectRatio: ImageAspectRatio = ImageAspectRatio.SQUARE,
-    onSelectAspectRatio: (ImageAspectRatio) -> Unit = {},
-    onOpenImageSettings: () -> Unit = {},
-    onPickReferenceImage: () -> Unit = onAttachClick,
-    followUpReferenceLabel: String? = null,
-    onClearFollowUpReference: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -672,12 +659,10 @@ fun ChatInputBar(
         var isInputFocused by remember { mutableStateOf(false) }
 
         Box(
-            modifier = modifier.fillMaxWidth(),
-            contentAlignment = Alignment.Center
+            modifier = modifier.fillMaxWidth()
         ) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = 820.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             ) {
@@ -927,221 +912,6 @@ fun ChatInputBar(
                                 }
                             }
 
-                            // 2. IMAGE MODE HEADER OR STANDARD INPUT
-                            val submitPrompt: () -> Unit = {
-                                val trimmed = textFieldState.text.toString().trim()
-                                if (!isAuth) {
-                                    Toast.makeText(context, "Please sign in first to send messages.", Toast.LENGTH_SHORT).show()
-                                } else if (attachmentsBusy) {
-                                    Toast.makeText(context, "Wait until attachments are ready.", Toast.LENGTH_SHORT).show()
-                                } else if (!isOnline) {
-                                    Toast.makeText(context, offlineMessage, Toast.LENGTH_SHORT).show()
-                                } else {
-                                    if (isLiveDictating) {
-                                        stopLiveDictation()
-                                    }
-                                    if (trimmed.isNotBlank() || attachments.isNotEmpty()) {
-                                        val finalMsg = ImageGenUiHelper.buildPromptWithUiRatio(
-                                            rawPrompt = trimmed,
-                                            ratio = imageAspectRatio,
-                                            isImageMode = isImageMode
-                                        )
-                                        onSendMessage(finalMsg)
-                                        textFieldState.clearText()
-                                    }
-                                }
-                            }
-
-                            AnimatedVisibility(
-                                visible = isImageMode,
-                                enter = fadeIn(tween(180)) + expandVertically(),
-                                exit = fadeOut(tween(140)) + shrinkVertically()
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    ImageGenerationModeHeader(
-                                        aspectRatio = imageAspectRatio,
-                                        onOpenSettings = onOpenImageSettings,
-                                        onExitImageMode = { onToggleImageMode(false) }
-                                    )
-
-                                    val hasImgRef = !followUpReferenceLabel.isNullOrBlank() || attachments.any { it.isImage }
-                                    if (hasImgRef) {
-                                        ImageReferenceAndFollowUpBar(
-                                            referenceLabel = followUpReferenceLabel ?: attachments.firstOrNull { it.isImage }?.name,
-                                            onClearReference = onClearFollowUpReference,
-                                            onSuggestionClick = { suggestion ->
-                                                textFieldState.setTextAndPlaceCursorAtEnd(suggestion)
-                                            }
-                                        )
-                                    }
-
-                                    TextField(
-                                        state = textFieldState,
-                                        placeholder = {
-                                            Text(
-                                                text = "Describe the image you want to create...",
-                                                fontSize = 15.5.sp,
-                                                color = if (isDark) Color(0xFF8E8E93) else Color(0xFF8A8A8E)
-                                            )
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(min = 66.dp)
-                                            .focusRequester(focusRequester)
-                                            .onFocusChanged { isInputFocused = it.isFocused },
-                                        colors = TextFieldDefaults.colors(
-                                            focusedContainerColor = Color.Transparent,
-                                            unfocusedContainerColor = Color.Transparent,
-                                            disabledContainerColor = Color.Transparent,
-                                            focusedIndicatorColor = Color.Transparent,
-                                            unfocusedIndicatorColor = Color.Transparent,
-                                            disabledIndicatorColor = Color.Transparent,
-                                            focusedTextColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1F1F1F),
-                                            unfocusedTextColor = if (isDark) Color(0xFFEDEDED) else Color(0xFF1F1F1F),
-                                            cursorColor = GeminiBlue
-                                        ),
-                                        textStyle = TextStyle(
-                                            fontSize = 15.5.sp,
-                                            fontWeight = FontWeight.Normal,
-                                            lineHeight = 22.sp
-                                        ),
-                                        lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 2, maxHeightInLines = 6),
-                                        keyboardOptions = KeyboardOptions(
-                                            keyboardType = KeyboardType.Text,
-                                            imeAction = ImeAction.Default
-                                        )
-                                    )
-
-                                    ImageRatioQuickStrip(
-                                        selected = imageAspectRatio,
-                                        onSelect = onSelectAspectRatio,
-                                        onOpenSettings = onOpenImageSettings
-                                    )
-
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 4.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Surface(
-                                            onClick = onAttachClick,
-                                            shape = CircleShape,
-                                            color = if (isDark) Color(0xFF323235) else Color(0xFFF2F2F4),
-                                            modifier = Modifier.size(34.dp)
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Outlined.Add,
-                                                    contentDescription = "Add attachments",
-                                                    tint = if (isDark) Color(0xFFE2E2E6) else Color(0xFF4A4A4D),
-                                                    modifier = Modifier.size(19.dp)
-                                                )
-                                            }
-                                        }
-
-                                        Spacer(Modifier.width(6.dp))
-
-                                        Surface(
-                                            onClick = onPickReferenceImage,
-                                            shape = RoundedCornerShape(16.dp),
-                                            color = if (isDark) Color(0xFF323235) else Color(0xFFF2F2F4)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Outlined.PhotoLibrary,
-                                                    contentDescription = "Upload reference image",
-                                                    tint = if (isDark) Color(0xFFE2E2E6) else Color(0xFF4A4A4D),
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Text(
-                                                    text = "Reference",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = if (isDark) Color(0xFFE2E2E6) else Color(0xFF4A4A4D)
-                                                )
-                                            }
-                                        }
-
-                                        Spacer(Modifier.weight(1f))
-
-                                        if (voiceEnabled && !isStreaming) {
-                                            IconButton(
-                                                onClick = {
-                                                    if (voiceNotesAsText) startAutoTranscribe()
-                                                    else {
-                                                        recordMode = AudioRecordMode.VOICE_NOTE
-                                                        triggerMicClick()
-                                                    }
-                                                },
-                                                modifier = Modifier.size(34.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Rounded.Mic,
-                                                    contentDescription = "Voice prompt",
-                                                    tint = if (isDark) Color(0xFFD1D1D6) else Color(0xFF5F6368),
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                            }
-                                            Spacer(Modifier.width(4.dp))
-                                        }
-
-                                        if (isStreaming && !canSend) {
-                                            Surface(
-                                                onClick = onStopStreaming,
-                                                shape = CircleShape,
-                                                color = GeminiBlue,
-                                                modifier = Modifier.size(36.dp)
-                                            ) {
-                                                Box(contentAlignment = Alignment.Center) {
-                                                    Surface(
-                                                        shape = RoundedCornerShape(3.dp),
-                                                        color = Color.White,
-                                                        modifier = Modifier.size(11.dp)
-                                                    ) {}
-                                                }
-                                            }
-                                        } else {
-                                            val generateActive = canSend && isAuth && isOnline && !attachmentsBusy
-                                            Surface(
-                                                onClick = submitPrompt,
-                                                shape = RoundedCornerShape(18.dp),
-                                                color = if (generateActive) GeminiBlue else GeminiBlue.copy(alpha = 0.25f)
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Outlined.AutoAwesome,
-                                                        contentDescription = "Generate image",
-                                                        tint = if (generateActive) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                    Text(
-                                                        text = "Generate",
-                                                        fontSize = 12.5.sp,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = if (generateActive) Color.White else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (!isImageMode) {
                             // 2. MAIN HORIZONTAL INPUT ROW (Centered vertically when single-line, bottom-aligned when multiline)
                             val textString = textFieldState.text.toString()
                             val isMultiline = textString.contains('\n') || textString.length > 45
@@ -1173,30 +943,6 @@ fun ChatInputBar(
                                                 tint = if (isDark) Color(0xFFE2E2E6) else Color(0xFF4A4A4D),
                                                 modifier = Modifier.size(19.dp)
                                             )
-                                        }
-                                    }
-                                }
-
-                                // 1-tap Image Generation Mode quick toggle pill
-                                if (!isMultiline && !hasText) {
-                                    Box(
-                                        modifier = Modifier.size(36.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Surface(
-                                            onClick = { onToggleImageMode(true) },
-                                            shape = CircleShape,
-                                            color = if (isDark) Color(0xFF282C38) else Color(0xFFEEF3FD),
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Outlined.AutoAwesome,
-                                                    contentDescription = "Create Image Mode",
-                                                    tint = GeminiBlue,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
                                         }
                                     }
                                 }
@@ -1383,7 +1129,6 @@ fun ChatInputBar(
                                     }
                                 }
                             }
-                            }
                         }
                     }
                 }
@@ -1396,13 +1141,8 @@ fun ChatInputBar(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.background
     ) {
-        Box(
-            modifier = Modifier.fillMaxWidth(),
-            contentAlignment = Alignment.Center
-        ) {
         Column(
             modifier = Modifier
-                .widthIn(max = 820.dp)
                 .fillMaxWidth()
                 .padding(horizontal = if (auraHomeStyle) 24.dp else 14.dp, vertical = 6.dp)
         ) {
@@ -1692,50 +1432,18 @@ fun ChatInputBar(
                             }
                         }
 
-                        AnimatedVisibility(
-                            visible = isImageMode,
-                            enter = fadeIn(tween(180)) + expandVertically(),
-                            exit = fadeOut(tween(140)) + shrinkVertically()
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                ImageGenerationModeHeader(
-                                    aspectRatio = imageAspectRatio,
-                                    onOpenSettings = onOpenImageSettings,
-                                    onExitImageMode = { onToggleImageMode(false) }
-                                )
-                                val hasImgRef = !followUpReferenceLabel.isNullOrBlank() || attachments.any { it.isImage }
-                                if (hasImgRef) {
-                                    ImageReferenceAndFollowUpBar(
-                                        referenceLabel = followUpReferenceLabel ?: attachments.firstOrNull { it.isImage }?.name,
-                                        onClearReference = onClearFollowUpReference,
-                                        onSuggestionClick = { suggestion ->
-                                            textFieldState.setTextAndPlaceCursorAtEnd(suggestion)
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
                         // The regular composer keeps its multiline input above the controls. Aura's home composer
                         // places a single-line field inline between the attachment and voice actions below.
                         if (!auraHomeStyle) TextField(
                             state = textFieldState,
                             placeholder = {
                                 Text(
-                                    text = if (isImageMode) {
-                                        "Describe the image you want to create..."
-                                    } else {
-                                        "Reply to ${selectedModel.displayName.split(" ").firstOrNull() ?: "Gemini"}..."
-                                    },
+                                    text = "Reply to ${selectedModel.displayName.split(" ").firstOrNull() ?: "Gemini"}...",
                                     fontSize = 15.sp,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.42f)
                                 )
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .then(if (isImageMode) Modifier.heightIn(min = 66.dp) else Modifier)
-                                .focusRequester(focusRequester)
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester).padding(horizontal = 4.dp, vertical = 2.dp),
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color.Transparent,
                                 unfocusedContainerColor = Color.Transparent,
@@ -1744,27 +1452,12 @@ fun ChatInputBar(
                                 unfocusedIndicatorColor = Color.Transparent,
                                 focusedTextColor = MaterialTheme.colorScheme.onSurface,
                                 unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                cursorColor = if (isImageMode) GeminiBlue else ClaudeTerracotta
+                                cursorColor = ClaudeTerracotta
                             ),
                             textStyle = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
-                            lineLimits = TextFieldLineLimits.MultiLine(
-                                minHeightInLines = if (isImageMode) 2 else 1,
-                                maxHeightInLines = 6
-                            ),
+                            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default)
                         )
-
-                        AnimatedVisibility(
-                            visible = isImageMode,
-                            enter = fadeIn(tween(180)) + expandVertically(),
-                            exit = fadeOut(tween(140)) + shrinkVertically()
-                        ) {
-                            ImageRatioQuickStrip(
-                                selected = imageAspectRatio,
-                                onSelect = onSelectAspectRatio,
-                                onOpenSettings = onOpenImageSettings
-                            )
-                        }
 
                     // 2. Attachments Preview (if any)
                     if (attachments.isNotEmpty() || isUploadingAttachment) {
@@ -1995,31 +1688,6 @@ fun ChatInputBar(
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        // 1-tap Image Mode toggle / Reference image button
-                        Surface(
-                            onClick = {
-                                if (isImageMode) onPickReferenceImage() else onToggleImageMode(true)
-                            },
-                            shape = CircleShape,
-                            color = if (isImageMode) GeminiBlue.copy(alpha = 0.14f) else MaterialTheme.colorScheme.background,
-                            border = BorderStroke(
-                                1.dp,
-                                if (isImageMode) GeminiBlue.copy(alpha = 0.45f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-                            ),
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (isImageMode) Icons.Outlined.PhotoLibrary else Icons.Outlined.AutoAwesome,
-                                    contentDescription = if (isImageMode) "Upload reference image" else "Create Image Mode",
-                                    tint = if (isImageMode) GeminiBlue else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
-                                    modifier = Modifier.size(17.dp)
-                                )
-                            }
-                        }
-
                         // Middle Area: Model Selector Pill (takes up to 100% of the available space between [+] and right actions)
                         Box(
                             modifier = Modifier
@@ -2212,48 +1880,20 @@ fun ChatInputBar(
                                         if (isLiveDictating) {
                                             stopLiveDictation()
                                         }
-                                        val finalMsg = ImageGenUiHelper.buildPromptWithUiRatio(
-                                            rawPrompt = trimmed,
-                                            ratio = imageAspectRatio,
-                                            isImageMode = isImageMode
-                                        )
-                                        onSendMessage(finalMsg)
+                                        onSendMessage(trimmed)
                                         textFieldState.clearText()
                                 },
-                                shape = if (isImageMode) RoundedCornerShape(18.dp) else CircleShape,
-                                color = if (isImageMode && isAuth && isOnline && !attachmentsBusy) GeminiBlue else sendBtnColor,
-                                modifier = if (isImageMode) Modifier.height(36.dp) else Modifier.size(36.dp)
+                                shape = CircleShape,
+                                color = sendBtnColor,
+                                modifier = Modifier.size(36.dp)
                             ) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = if (isImageMode) Modifier.padding(horizontal = 12.dp) else Modifier
-                                ) {
-                                    if (isImageMode) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.AutoAwesome,
-                                                contentDescription = "Generate image",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                            Text(
-                                                text = "Generate",
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = Color.White
-                                            )
-                                        }
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.ArrowUpward,
-                                            contentDescription = "Send",
-                                            tint = if (isAuth && isOnline) (if (isBackgroundActive) com.example.gemini.theme.AppColors.onBackground else Color.White) else com.example.gemini.theme.AppColors.textSecondary,
-                                            modifier = Modifier.size(19.dp)
-                                        )
-                                    }
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowUpward,
+                                        contentDescription = "Send",
+                                        tint = if (isAuth && isOnline) (if (isBackgroundActive) com.example.gemini.theme.AppColors.onBackground else Color.White) else com.example.gemini.theme.AppColors.textSecondary,
+                                        modifier = Modifier.size(19.dp)
+                                    )
                                 }
                             }
                         } else if (!voiceEnabled) {
@@ -2306,7 +1946,6 @@ fun ChatInputBar(
                     }
                 }
             }
-        }
         }
     }
 }

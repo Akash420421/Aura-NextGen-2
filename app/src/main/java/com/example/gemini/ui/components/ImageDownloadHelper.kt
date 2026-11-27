@@ -1,7 +1,5 @@
 package com.example.gemini.ui.components
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -278,120 +276,6 @@ object ImageDownloadHelper {
             return "image/png"
         }
         return "image/png"
-    }
-
-    /**
-     * Resolves any image source (local file, memory cache, data:image base64, HTTP, or bridge URI)
-     * into a FileProvider content:// URI stored safely in cacheDir/shared_images/.
-     */
-    suspend fun resolveCachedShareUri(
-        context: Context,
-        imageSource: String,
-        title: String = ""
-    ): Pair<Uri?, String> = withContext(Dispatchers.IO) {
-        if (imageSource.isBlank()) return@withContext Pair(null, "image/png")
-        try {
-            val bytes = resolveImageBytes(context, imageSource) ?: return@withContext Pair(null, "image/png")
-            val mimeType = detectMimeType(imageSource, bytes)
-            val ext = when {
-                mimeType.contains("jpeg") || mimeType.contains("jpg") -> ".jpg"
-                mimeType.contains("webp") -> ".webp"
-                else -> ".png"
-            }
-            val safeTitle = title.trim()
-                .replace("[^a-zA-Z0-9_-]".toRegex(), "_")
-                .take(28)
-                .trimEnd('_')
-            val hash = Integer.toHexString(imageSource.hashCode())
-            val fileName = if (safeTitle.isNotBlank()) "share_${safeTitle}_$hash$ext" else "share_$hash$ext"
-            val dir = File(context.cacheDir, "shared_images").apply { mkdirs() }
-            val outFile = File(dir, fileName)
-            outFile.writeBytes(bytes)
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", outFile)
-            Pair(uri, mimeType)
-        } catch (_: Exception) {
-            Pair(null, "image/png")
-        }
-    }
-
-    fun shareImage(
-        context: Context,
-        imageSource: String,
-        title: String = "",
-        coroutineScope: CoroutineScope
-    ) {
-        if (imageSource.isBlank()) {
-            Toast.makeText(context, "No image to share", Toast.LENGTH_SHORT).show()
-            return
-        }
-        coroutineScope.launch {
-            val (uri, mimeType) = resolveCachedShareUri(context, imageSource, title)
-            if (uri != null) {
-                try {
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = mimeType
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        if (title.isNotBlank()) putExtra(Intent.EXTRA_TEXT, title)
-                        clipData = ClipData.newUri(context.contentResolver, title.ifBlank { "Image" }, uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(
-                        Intent.createChooser(shareIntent, "Share Image").apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                    )
-                } catch (_: Exception) {
-                    Toast.makeText(context, "Unable to open Share sheet", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                Toast.makeText(context, "Could not prepare image for sharing", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    fun copyImageToClipboard(
-        context: Context,
-        imageSource: String,
-        title: String = "",
-        coroutineScope: CoroutineScope
-    ) {
-        if (imageSource.isBlank()) {
-            Toast.makeText(context, "No image to copy", Toast.LENGTH_SHORT).show()
-            return
-        }
-        coroutineScope.launch {
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            if (clipboard == null) {
-                Toast.makeText(context, "Clipboard unavailable", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            val (uri, _) = resolveCachedShareUri(context, imageSource, title)
-            if (uri != null) {
-                clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, title.ifBlank { "Image" }, uri))
-                Toast.makeText(context, "Image copied to clipboard", Toast.LENGTH_SHORT).show()
-            } else {
-                clipboard.setPrimaryClip(ClipData.newPlainText(title.ifBlank { "Image URL" }, imageSource))
-                Toast.makeText(context, "Image link copied", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    fun openImageExternally(
-        context: Context,
-        imageSource: String,
-        title: String = "",
-        coroutineScope: CoroutineScope
-    ) {
-        if (imageSource.isBlank()) return
-        coroutineScope.launch {
-            val (uri, mimeType) = resolveCachedShareUri(context, imageSource, title)
-            if (uri != null) {
-                openImage(context, uri, mimeType)
-            } else {
-                Toast.makeText(context, "Unable to open image", Toast.LENGTH_SHORT).show()
-            }
-        }
     }
 }
 

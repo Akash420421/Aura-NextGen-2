@@ -58,8 +58,10 @@ class MainActivity : ComponentActivity() {
         }
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
         instanceRef = java.lang.ref.WeakReference(this)
-        com.example.gemini.data.jarvis.JarvisPreferences.init(this)
-        com.example.gemini.data.context.GlobalContext.init(this)
+        runCatching { com.example.gemini.data.jarvis.JarvisPreferences.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "JarvisPreferences.init", it) }
+        runCatching { com.example.gemini.data.context.GlobalContext.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "GlobalContext.init", it) }
         com.example.gemini.data.remote.inspector.NetworkInspectorManager.isEnabled =
             chatViewModel.authPreferences.getNetworkInspectorEnabledSync()
         com.example.gemini.data.remote.inspector.NetworkInspectorManager.isFloatingBubbleEnabled =
@@ -71,24 +73,38 @@ class MainActivity : ComponentActivity() {
         }
 
         if (com.example.gemini.ui.components.PermissionUtils.hasNotificationPermission(this)) {
-            com.example.gemini.data.service.TermuxService.start(this)
+            runCatching { com.example.gemini.data.service.TermuxService.start(this) }
+                .onFailure { CrashLogger.recordNonFatal(this, "TermuxService.start", it) }
         }
         // Start the local bridge as soon as the app's foreground process is available. Notification access controls
         // the persistent wake-lock service, but should not block the initial server launch.
-        com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(this)
-        com.example.gemini.data.daemon.TermuxDaemonManager.init(this)
-        com.example.gemini.ui.browser.BrowserSessionManager.instance.init(this)
-        com.example.gemini.data.local.LocalTerminalBridge.instance.init(this)
-        com.example.gemini.data.notes.NotesRepository.init(this)
-        com.example.gemini.data.files.ExplorerPrefs.init(this)
+        runCatching { com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "LocalServerManager.autoStartOnAppLaunch", it) }
+        runCatching { com.example.gemini.data.daemon.TermuxDaemonManager.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "TermuxDaemonManager.init", it) }
+        runCatching { com.example.gemini.ui.browser.BrowserSessionManager.instance.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "BrowserSessionManager.init", it) }
+        runCatching { com.example.gemini.data.local.LocalTerminalBridge.instance.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "LocalTerminalBridge.init", it) }
+        runCatching { com.example.gemini.data.notes.NotesRepository.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "NotesRepository.init", it) }
+        runCatching { com.example.gemini.data.files.ExplorerPrefs.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "ExplorerPrefs.init", it) }
         // temporary video / attachment / share copies left from earlier runs
-        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) { com.example.gemini.data.files.CacheJanitor.trimAll(applicationContext, force = true) }
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.example.gemini.data.files.CacheJanitor.trimAll(applicationContext, force = true) }
+        }
         resetTerminalLauncherOnce()
-        com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.start(this)
-        com.example.gemini.data.jarvis.JarvisController.attach(application, chatViewModel)
-        com.example.gemini.data.live.AuraLiveVoiceManager.init(this)
-        com.example.gemini.data.live.ChatContextBridge.attach(chatViewModel)
-        com.example.gemini.data.agent.ChatCompletionMonitor.start(application, chatViewModel)
+        runCatching { com.example.gemini.data.remote.AndroidLocalBridgeServer.instance.start(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "AndroidLocalBridgeServer.start", it) }
+        runCatching { com.example.gemini.data.jarvis.JarvisController.attach(application, chatViewModel) }
+            .onFailure { CrashLogger.recordNonFatal(this, "JarvisController.attach", it) }
+        runCatching { com.example.gemini.data.live.AuraLiveVoiceManager.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "AuraLiveVoiceManager.init", it) }
+        runCatching { com.example.gemini.data.live.ChatContextBridge.attach(chatViewModel) }
+            .onFailure { CrashLogger.recordNonFatal(this, "ChatContextBridge.attach", it) }
+        runCatching { com.example.gemini.data.agent.ChatCompletionMonitor.start(application, chatViewModel) }
+            .onFailure { CrashLogger.recordNonFatal(this, "ChatCompletionMonitor.start", it) }
         handleIncomingFileIntent(intent)
         handleJarvisIntent(intent)
 

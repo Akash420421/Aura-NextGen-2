@@ -20,7 +20,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DataObject
 import androidx.compose.material.icons.outlined.Edit
@@ -246,18 +245,16 @@ fun MessageBubble(
             // Assistant response
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (message.content.isNotEmpty() || message.toolCalls.isNotEmpty()) {
-                    CompositionLocalProvider(LocalCurrentMessageId provides message.id) {
-                        SelectionContainer {
-                            MarkdownContent(
-                                content = message.content,
-                                toolCalls = message.toolCalls,
-                                onApproveTool = if (onApproveTool != null) { toolCall -> onApproveTool(toolCall, message.id) } else null,
-                                onRejectTool = if (onRejectTool != null) { toolCall -> onRejectTool(toolCall, message.id) } else null,
-                                onTerminateTool = if (onTerminateTool != null) { toolCall -> onTerminateTool(toolCall, message.id) } else null,
-                                onSubmitChoices = if (onSubmitChoices != null) { toolCall, responses, summary -> onSubmitChoices(toolCall, message.id, responses, summary) } else null,
-                                onSkipChoices = if (onSkipChoices != null) { toolCall, responses -> onSkipChoices(toolCall, message.id, responses) } else null
-                            )
-                        }
+                    SelectionContainer {
+                        MarkdownContent(
+                            content = message.content,
+                            toolCalls = message.toolCalls,
+                            onApproveTool = if (onApproveTool != null) { toolCall -> onApproveTool(toolCall, message.id) } else null,
+                            onRejectTool = if (onRejectTool != null) { toolCall -> onRejectTool(toolCall, message.id) } else null,
+                            onTerminateTool = if (onTerminateTool != null) { toolCall -> onTerminateTool(toolCall, message.id) } else null,
+                            onSubmitChoices = if (onSubmitChoices != null) { toolCall, responses, summary -> onSubmitChoices(toolCall, message.id, responses, summary) } else null,
+                            onSkipChoices = if (onSkipChoices != null) { toolCall, responses -> onSkipChoices(toolCall, message.id, responses) } else null
+                        )
                     }
 
                 } else if (message.isStreaming && !hasActiveRunningTool && message.content.isEmpty() && message.thoughtText.isNullOrEmpty() && message.toolCalls.isEmpty()) {
@@ -446,34 +443,6 @@ fun UserMessageBubble(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Voice", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = GeminiBlue)
-                    }
-                }
-
-                // 3b. Image Mode badge if prompt carried a UI aspect ratio tag
-                val uiImageRatio = remember(message.content) { ImageGenUiHelper.extractUiRatioTag(message.content) }
-                if (uiImageRatio != null) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = GeminiBlue.copy(alpha = 0.12f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.AutoAwesome,
-                                contentDescription = null,
-                                tint = GeminiBlue,
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Text(
-                                text = "Image · ${uiImageRatio.ratio}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = GeminiBlue
-                            )
-                        }
                     }
                 }
 
@@ -989,7 +958,7 @@ fun ContextSummaryCheckpointBanner(
 }
 
 private fun formatUserDisplayContent(content: String): String {
-    return ImageGenUiHelper.stripUiRatioTag(content).trim()
+    return content.trim()
 }
 
 @Composable

@@ -94,11 +94,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.BrokenImage
-import androidx.compose.material.icons.filled.Image
-import coil.Coil
 import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
-import coil.memory.MemoryCache
 import coil.request.ImageRequest
 import com.example.gemini.data.remote.HubMediaResolver
 import com.example.gemini.theme.ClaudeTerracotta
@@ -155,8 +152,6 @@ sealed class MarkdownBlock {
     data class InteractiveUi(val htmlCode: String, val title: String = "Interactive App") : MarkdownBlock()
     @androidx.compose.runtime.Immutable
     data class Image(val alt: String, val url: String) : MarkdownBlock()
-    @androidx.compose.runtime.Immutable
-    data class ImageGrid(val images: List<Image>) : MarkdownBlock()
 
     @androidx.compose.runtime.Immutable
     data class Video(val alt: String, val url: String) : MarkdownBlock()
@@ -226,9 +221,6 @@ fun MarkdownBlockView(
         }
         is MarkdownBlock.Image -> {
             MarkdownImageView(image = block, modifier = modifier)
-        }
-        is MarkdownBlock.ImageGrid -> {
-            MarkdownImageGridView(grid = block, modifier = modifier)
         }
         is MarkdownBlock.Video -> {
             MarkdownVideoView(video = block, modifier = modifier)
@@ -1628,8 +1620,7 @@ fun AgentErrorCard(
 }
 
 /**
- * Renders an Image in Markdown using our upgraded Hero Generated Image card with preserved
- * natural aspect ratio, Action Toolbar, and upgraded Lightbox viewer.
+ * Renders an Image in Markdown using Coil with rounded corners and full-screen viewer.
  */
 @Composable
 fun MarkdownImageView(
@@ -1637,66 +1628,124 @@ fun MarkdownImageView(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var showFullDialog by remember(image.url) { mutableStateOf(false) }
-    val actionHandler = LocalImageActionHandler.current
-    val resolvedForViewer = remember(image.url) {
-        HubMediaResolver.getResolvedUriSync(context, image.url).ifBlank { image.url }
+    var showFullDialog by remember { mutableStateOf(false) }
+    var resolvedUrl by remember(image.url) {
+        mutableStateOf(HubMediaResolver.getResolvedUriSync(context, image.url))
     }
 
-    HeroGeneratedImageCard(
-        imageUrl = image.url,
-        alt = image.alt,
-        modifier = modifier,
-        showToolbar = true,
-        onOpenFullscreen = { showFullDialog = true }
-    )
+    LaunchedEffect(image.url) {
+        if (!HubMediaResolver.isLocalOrCached(context, image.url)) {
+            val res = HubMediaResolver.resolveMediaUri(context, image.url)
+            if (res.isNotBlank()) resolvedUrl = res
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        val isAlreadyCached = remember(resolvedUrl) {
+            resolvedUrl.isNotBlank() && (
+                resolvedUrl.startsWith("data:") ||
+                resolvedUrl.startsWith("file://") ||
+                HubMediaResolver.isLocalOrCached(context, resolvedUrl)
+            )
+        }
+        var isImageLoading by remember(resolvedUrl) { mutableStateOf(!isAlreadyCached && resolvedUrl.isNotBlank()) }
+        var isImageError by remember(resolvedUrl) { mutableStateOf(false) }
+
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .border(
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
+                    RoundedCornerShape(12.dp)
+                )
+                .clickable {
+                    showFullDialog = true
+                },
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 180.dp, max = 340.dp)
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(if (resolvedUrl.isNotBlank()) resolvedUrl else image.url)
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .crossfade(true)
+                        .setHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36 AntiGem/1.0")
+                        .decoderFactory(SvgDecoder.Factory())
+                        .listener(
+                            onStart = { if (!isAlreadyCached) isImageLoading = true },
+                            onSuccess = { _, _ -> isImageLoading = false; isImageError = false },
+                            onError = { _, res ->
+                                isImageLoading = false
+                                isImageError = true
+                                android.util.Log.e("MarkdownImageView", "Failed to load image $resolvedUrl: ${res.throwable.message}")
+                            }
+                        )
+                        .build(),
+                    contentDescription = image.alt,
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (isImageLoading) {
+                    ImageGeneratingSkeletonCard(
+                        label = "Loading image...",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
+                    )
+                }
+
+                if (isImageError) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BrokenImage,
+                            contentDescription = "Failed to load image",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = image.alt.ifBlank { "Image could not be loaded" },
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        if (image.alt.isNotBlank()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = image.alt,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center
+            )
+        }
+    }
 
     if (showFullDialog) {
         FullScreenImageDialog(
-            imageUrl = resolvedForViewer,
+            imageUrl = resolvedUrl,
             title = image.alt,
-            onFollowUpEdit = actionHandler?.onFollowUpEdit,
             onDismiss = { showFullDialog = false }
-        )
-    }
-}
-
-/**
- * Renders 2+ consecutive images in an assistant response as a clean responsive grid with shared
- * Action Toolbar and swipeable multi-image Lightbox navigation.
- */
-@Composable
-fun MarkdownImageGridView(
-    grid: MarkdownBlock.ImageGrid,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    var selectedIndex by remember(grid) { mutableStateOf<Int?>(null) }
-    val actionHandler = LocalImageActionHandler.current
-
-    MultiImageResultGrid(
-        images = grid.images,
-        modifier = modifier,
-        onOpenAtIndex = { idx -> selectedIndex = idx }
-    )
-
-    selectedIndex?.let { startIdx ->
-        val items = remember(grid, context) {
-            grid.images.map { img ->
-                FullScreenImageItem(
-                    url = HubMediaResolver.getResolvedUriSync(context, img.url).ifBlank { img.url },
-                    title = img.alt
-                )
-            }
-        }
-        val current = items.getOrNull(startIdx)
-        FullScreenImageDialog(
-            imageUrl = current?.url ?: "",
-            title = current?.title ?: "",
-            images = items,
-            initialIndex = startIdx,
-            onFollowUpEdit = actionHandler?.onFollowUpEdit,
-            onDismiss = { selectedIndex = null }
         )
     }
 }
@@ -3428,31 +3477,7 @@ fun parseMarkdownBlocks(
         }
     }
 
-    // Group 2+ adjacent image blocks into a clean grid while keeping single images as hero cards
-    val merged = ArrayList<MarkdownBlock>(result.size)
-    var idx = 0
-    while (idx < result.size) {
-        val cur = result[idx]
-        if (cur is MarkdownBlock.Image) {
-            val run = mutableListOf(cur)
-            var next = idx + 1
-            while (next < result.size && result[next] is MarkdownBlock.Image) {
-                run.add(result[next] as MarkdownBlock.Image)
-                next++
-            }
-            if (run.size >= 2) {
-                merged.add(MarkdownBlock.ImageGrid(run))
-            } else {
-                merged.add(cur)
-            }
-            idx = next
-        } else {
-            merged.add(cur)
-            idx++
-        }
-    }
-
-    return merged
+    return result
 }
 
 /**

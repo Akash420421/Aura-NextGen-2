@@ -382,6 +382,13 @@
                 <action android:name="com.example.gemini.action.WA_DISMISS" />
             </intent-filter>
         </receiver>
+
+        <!-- Lightweight diagnostic crash viewer hosted in `:crash` process -->
+        <activity
+            android:name=".CrashActivity"
+            android:exported="false"
+            android:process=":crash"
+            android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar" />
     </application>
 
 </manifest>

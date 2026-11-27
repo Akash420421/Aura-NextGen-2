@@ -1,13 +1,13 @@
 {
-  "version_code": 248,
-  "version_name": "2.4.8",
+  "version_code": 249,
+  "version_name": "2.4.9",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.8 — Image Generation UI/UX Redesign, WhatsApp Auto-Reply & Fresh Chat Context Fix",
-    "Complete Image Generation UI/UX Flow: Dedicated Image Mode composer with aspect ratio selector (1:1, 16:9, 9:16, 4:3, 3:4), expandable settings sheet, reference attachments, shimmer loading card, hero/multi-image result grid, action toolbar, dark fullscreen zoom/swipe lightbox, and conversational follow-up editing",
-    "WhatsApp Notification Auto-Reply (#18): Smart Confirm default with live voice cards + Direct Auto-Reply toggle via AuraNotificationListenerService and quick notification confirm/cancel actions",
-    "Fresh New Chat Context Isolation: Prevented stale project context (e.g. older project names) from leaking into brand-new casual conversations",
-    "Automation, YouTube Search & Browser MCP Refinements: Improved YouTube HTML/lockup video parsing, domain normalization, MCQ grounding, and browser viewport/input controls"
+    "Aura AI v2.4.9 — Startup Crash Fix, WhatsApp Auto-Reply (#18) & Fresh Chat Context Isolation",
+    "Reverted experimental Image Generation UI redesign back to stable v2.4.7 chat composer & viewer UI while keeping core Voice, Device Control, Browser MCP, and YouTube improvements",
+    "Preserved #18 WhatsApp Notification Auto-Reply (Smart Confirm default + Direct Auto-Reply toggle via AuraNotificationListenerService and quick notification confirm/dismiss actions)",
+    "Preserved Fresh New Chat Context Isolation (prevents stale project context from leaking into new chats)",
+    "Added resilient startup initialization guards and built-in CrashLogger diagnostics (Downloads/AuraAI_last_crash.txt)"
   ],
   "is_critical": false
 }

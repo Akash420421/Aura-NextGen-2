@@ -120,18 +120,8 @@ import android.app.Activity
 import com.example.gemini.ui.drawer.ArtifactsDrawerContent
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import com.example.gemini.ui.components.ImageActionCallbacks
-import com.example.gemini.ui.components.ImageAspectRatio
-import com.example.gemini.ui.components.ImageDownloadHelper
-import com.example.gemini.ui.components.ImageGenUiHelper
-import com.example.gemini.ui.components.ImageGenerationLoadingCard
-import com.example.gemini.ui.components.ImageGenerationSettingsSheet
-import com.example.gemini.ui.components.LocalCurrentMessageId
-import com.example.gemini.ui.components.LocalImageActionHandler
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
@@ -321,12 +311,6 @@ fun ChatScreen(
     val systemConnectionState by viewModel.systemConnectionState.collectAsState()
     var auraHomeVoice by rememberSaveable { mutableStateOf(false) }
     var isBridgeBannerDismissed by rememberSaveable { mutableStateOf(false) }
-    var isImageGenerationMode by rememberSaveable(currentConv?.id) { mutableStateOf(false) }
-    var selectedImageAspectRatio by rememberSaveable { mutableStateOf(ImageAspectRatio.SQUARE) }
-    var showImageSettingsSheet by remember { mutableStateOf(false) }
-    var followUpReferenceLabel by remember(currentConv?.id) { mutableStateOf<String?>(null) }
-    var bottomOverlayHeightDp by remember { mutableStateOf(136.dp) }
-    var imageLayoutTrigger by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(bridgeUiState) {
         if (bridgeUiState is AntigravityBridgeUiState.Connected) {
@@ -1064,111 +1048,6 @@ fun ChatScreen(
         ChatFeedCache.buildFeedItems(messages, selectedModelId, dividers = true, modelName = modelNameOf, voiceCalls = voiceCallItems)
     }
 
-    // Cohesive Video-2 Image Generation UI state: suppresses noisy subagent thoughts/spinners
-    // during non-Dev image generation turns so the chat displays one crisp image creation flow.
-    val imageTurnUiInfo = remember(messages, isDevModeEnabled, isActivelyRunning) {
-        val imageTurnAssistantIds = HashSet<String>()
-        val suppressedIntermediateMsgIds = HashSet<String>()
-        var lastUserPromptText = ""
-        var lastTurnIsImageGen = false
-        var lastTurnHasImage = false
-        var lastTurnRatio = ImageAspectRatio.SQUARE
-
-        if (!isDevModeEnabled) {
-            var idx = 0
-            while (idx < messages.size) {
-                if (messages[idx].role != MessageRole.USER) {
-                    idx++
-                    continue
-                }
-                val userMsg = messages[idx]
-                var endIdx = idx + 1
-                while (endIdx < messages.size && messages[endIdx].role != MessageRole.USER) {
-                    endIdx++
-                }
-                val turnAssistantMsgs = messages.subList(idx + 1, endIdx)
-                    .filter { it.role == MessageRole.ASSISTANT }
-                val isLastTurn = endIdx == messages.size
-
-                val hasExplicitGenTool = turnAssistantMsgs.any { m ->
-                    m.toolCalls.any { tc ->
-                        tc.toolType == ToolType.GENERATE_IMAGE ||
-                            tc.name.equals("generate_image", ignoreCase = true) ||
-                            tc.name.equals("image_generation", ignoreCase = true) ||
-                            tc.name.equals("image_gen", ignoreCase = true)
-                    }
-                }
-                val hasSubagentImgHint = turnAssistantMsgs.any { m ->
-                    val t = m.thoughtText.orEmpty()
-                    t.contains("image-generator", ignoreCase = true) ||
-                        t.contains("imaging agent", ignoreCase = true) ||
-                        t.contains("generate_image", ignoreCase = true)
-                }
-                val userHadImgIntent = ImageGenUiHelper.isLikelyImagePrompt(userMsg.content)
-                val isImgTurn = userHadImgIntent || hasExplicitGenTool || hasSubagentImgHint
-
-                val imgsInTurn = turnAssistantMsgs.filter { m ->
-                    m.content.contains("![") || m.toolCalls.any { tc ->
-                        (tc.toolType == ToolType.GENERATE_IMAGE || tc.name.contains("image", ignoreCase = true)) &&
-                            com.example.gemini.data.remote.HubMediaResolver.isRenderableImageSource(tc.output)
-                    }
-                }
-                val turnHasImg = imgsInTurn.isNotEmpty()
-
-                if (isImgTurn) {
-                    turnAssistantMsgs.forEach { imageTurnAssistantIds.add(it.id) }
-                    if (!turnHasImg && isLastTurn && (isActivelyRunning || turnAssistantMsgs.any { it.isStreaming })) {
-                        // Still generating on active turn: replace messy thoughts/intermediate filler with single loading card
-                        turnAssistantMsgs.forEach { suppressedIntermediateMsgIds.add(it.id) }
-                    } else if (turnHasImg) {
-                        // Image arrived: hide pre-image filler status bubbles in this same turn
-                        val firstImgMsgIndex = turnAssistantMsgs.indexOfFirst { it in imgsInTurn }
-                        turnAssistantMsgs.forEachIndexed { pos, m ->
-                            if (pos < firstImgMsgIndex && m !in imgsInTurn && !m.content.contains("error", ignoreCase = true)) {
-                                suppressedIntermediateMsgIds.add(m.id)
-                            }
-                        }
-                    }
-                }
-
-                if (isLastTurn) {
-                    lastUserPromptText = userMsg.content
-                    lastTurnIsImageGen = isImgTurn
-                    lastTurnHasImage = turnHasImg
-                    lastTurnRatio = ImageGenUiHelper.extractUiRatioTag(userMsg.content) ?: ImageAspectRatio.SQUARE
-                }
-                idx = endIdx
-            }
-        }
-        Triple(imageTurnAssistantIds, suppressedIntermediateMsgIds, Triple(lastUserPromptText, lastTurnIsImageGen && !lastTurnHasImage, lastTurnRatio))
-    }
-
-    val imageTurnAssistantIds = imageTurnUiInfo.first
-    val suppressedImageMsgIds = imageTurnUiInfo.second
-    val activeImageGenPrompt = imageTurnUiInfo.third.first
-    val activeTurnNeedsImageLoadingCard = imageTurnUiInfo.third.second
-    val activeTurnRatio = imageTurnUiInfo.third.third
-
-    val displayFeedItems = remember(feedItems, imageTurnAssistantIds, suppressedImageMsgIds, isDevModeEnabled) {
-        if (isDevModeEnabled || (imageTurnAssistantIds.isEmpty() && suppressedImageMsgIds.isEmpty())) {
-            feedItems
-        } else {
-            feedItems.filterNot { item ->
-                when (item) {
-                    is ChatFeedItem.AssistantBlock -> {
-                        item.messageId in suppressedImageMsgIds ||
-                            (item.messageId in imageTurnAssistantIds && item.block is MarkdownBlock.AgentThought)
-                    }
-                    is ChatFeedItem.AssistantThinking -> item.messageId in imageTurnAssistantIds
-                    is ChatFeedItem.AssistantFooter -> item.message.id in suppressedImageMsgIds
-                    is ChatFeedItem.AssistantTyping -> item.messageId in suppressedImageMsgIds
-                    is ChatFeedItem.StreamingMessage -> item.message.id in suppressedImageMsgIds
-                    else -> false
-                }
-            }
-        }
-    }
-
     // Fresh LazyListState per conversation — restores saved position if returning, or initializes directly at bottom
     val convKey = currentConv?.id ?: "empty"
     val hasFeedItems = feedItems.isNotEmpty()
@@ -1350,10 +1229,10 @@ fun ChatScreen(
 
     // Scroll to bottom when user explicitly sends a message (instant)
     LaunchedEffect(userSentMessageTrigger) {
-        if (userSentMessageTrigger > 0 && (displayFeedItems.isNotEmpty() || activeTurnNeedsImageLoadingCard)) {
+        if (userSentMessageTrigger > 0 && feedItems.isNotEmpty()) {
             shouldAutoScroll = true
             try {
-                listState.scrollToItem(maxOf(0, displayFeedItems.size), scrollOffset = 100_000)
+                listState.scrollToItem(maxOf(0, feedItems.size - 1))
             } catch (e: Exception) {
                 Log.w("ChatScreen", "Scroll to bottom failed: ${e.message}")
             }
@@ -1367,10 +1246,7 @@ fun ChatScreen(
         derivedStateOf {
             messages.any { msg ->
                 msg.toolCalls.any { tc ->
-                    (tc.toolType == ToolType.GENERATE_IMAGE ||
-                        tc.name.equals("generate_image", ignoreCase = true) ||
-                        tc.name.equals("image_generation", ignoreCase = true) ||
-                        tc.name.equals("image_gen", ignoreCase = true)) &&
+                    (tc.toolType == ToolType.GENERATE_IMAGE || tc.name.contains("image", ignoreCase = true)) &&
                         tc.status == "RUNNING"
                 }
             }
@@ -1381,7 +1257,7 @@ fun ChatScreen(
     // The end of a turn is one step: the working row stays until the reply's footer (tokens, actions) exists, then
     // the two cross-fade in place while the end of the chat stays pinned (no animated scroll afterwards)
     val lastIsAssistantWithText = lastMsg?.role == com.example.gemini.domain.model.MessageRole.ASSISTANT && lastMsg.content.isNotEmpty()
-    val footerShown = displayFeedItems.lastOrNull() is ChatFeedItem.AssistantFooter
+    val footerShown = feedItems.lastOrNull() is ChatFeedItem.AssistantFooter
     var tailFinishing by remember(convKey) { mutableStateOf(false) }
     var wasRunning by remember(convKey) { mutableStateOf(isRunningOrStreaming) }
     LaunchedEffect(convKey, isRunningOrStreaming) {
@@ -1404,14 +1280,11 @@ fun ChatScreen(
     }
     val holdingTail = tailFinishing && lastIsAssistantWithText && !footerShown
 
-    val showImageGenSkeleton = !isDevModeEnabled && isRunningOrStreaming && activeTurnNeedsImageLoadingCard
-
-    // Auto-scroll follows streaming, image completion/sizing, and new output cleanly without covering content behind bottom bar
-    LaunchedEffect(displayFeedItems.size, isRunningOrStreaming, showImageGenSkeleton, imageLayoutTrigger) {
-        if (shouldAutoScroll && !isUserDragging && (displayFeedItems.isNotEmpty() || showImageGenSkeleton)) {
+    // Auto-scroll follows streaming and new output smoothly only when user is near the bottom
+    LaunchedEffect(feedItems.size, isRunningOrStreaming) {
+        if (shouldAutoScroll && isAtBottom && !isUserDragging && feedItems.isNotEmpty()) {
             try {
-                val targetIdx = maxOf(0, displayFeedItems.size)
-                listState.scrollToItem(targetIdx, scrollOffset = 100_000)
+                listState.scrollToItem(maxOf(0, feedItems.size - 1))
             } catch (_: Exception) {}
         }
     }
@@ -2669,36 +2542,9 @@ fun ChatScreen(
                             )
                         }
 
-                        val imageActionCallbacks = remember(viewModel, context, scope) {
-                            ImageActionCallbacks(
-                                onRegenerateMessage = { targetMsgId ->
-                                    viewModel.retryMessage(targetMsgId)
-                                    userSentMessageTrigger++
-                                },
-                                onFollowUpEdit = { imageUrl, title ->
-                                    isImageGenerationMode = true
-                                    followUpReferenceLabel = title.ifBlank { "Generated image" }
-                                    scope.launch {
-                                        val (shareUri, _) = ImageDownloadHelper.resolveCachedShareUri(context, imageUrl, title)
-                                        if (shareUri != null) {
-                                            viewModel.addAttachmentFromUri(shareUri, context)
-                                        }
-                                        showToast("Reference attached — describe how you'd like to edit it", ChatToastType.INFO)
-                                        try {
-                                            chatInputFocusRequester.requestFocus()
-                                        } catch (_: Exception) {}
-                                    }
-                                },
-                                onImageResolvedOrSized = {
-                                    imageLayoutTrigger++
-                                }
-                            )
-                        }
-
                         CompositionLocalProvider(
                             androidx.compose.ui.platform.LocalDensity provides customDensity,
-                            com.example.gemini.ui.components.LocalQuestionPanelActive provides true,
-                            LocalImageActionHandler provides imageActionCallbacks
+                            com.example.gemini.ui.components.LocalQuestionPanelActive provides true
                         ) {
                                 LazyColumn(
                                     state = listState,
@@ -2707,26 +2553,17 @@ fun ChatScreen(
                                     contentPadding = if (isAuraHome) {
                                         PaddingValues(
                                             top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 58.dp,
-                                            bottom = maxOf(136.dp, bottomOverlayHeightDp + 18.dp) + WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+                                            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 132.dp + WindowInsets.ime.asPaddingValues().calculateBottomPadding()
                                         )
                                     } else {
                                         PaddingValues(top = 12.dp, bottom = 56.dp)
                                     }
                                 ) {
                                     items(
-                                        items = displayFeedItems,
+                                        items = feedItems,
                                         key = { it.key },
                                         contentType = { it.contentType }
                                     ) { feedItem ->
-                                        Box(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            contentAlignment = Alignment.TopCenter
-                                        ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .widthIn(max = 820.dp)
-                                                .fillMaxWidth()
-                                        ) {
                                         when (feedItem) {
                                         is ChatFeedItem.Summary -> {
                                             Box(
@@ -2798,16 +2635,14 @@ fun ChatScreen(
                                                     .padding(horizontal = 16.dp)
                                             ) {
                                                 val isTool = feedItem.block is MarkdownBlock.AgentTool
-                                                CompositionLocalProvider(LocalCurrentMessageId provides feedItem.messageId) {
-                                                    MarkdownBlockView(
-                                                        block = feedItem.block,
-                                                        onApproveTool = if (isTool) { { toolCall -> viewModel.approveAndExecuteTerminalTool(toolCall, feedItem.messageId) } } else null,
-                                                        onRejectTool = if (isTool) { { toolCall -> if (toolCall.toolType == ToolType.ASK_CHOICE) viewModel.cancelUserChoices(toolCall, feedItem.messageId) else viewModel.rejectTerminalTool(toolCall, feedItem.messageId) } } else null,
-                                                        onTerminateTool = if (isTool) { { toolCall -> viewModel.terminateRunningTerminalTool(toolCall, feedItem.messageId) } } else null,
-                                                        onSubmitChoices = if (isTool) { { toolCall, responses, summaryPayload -> viewModel.submitUserChoices(toolCall, feedItem.messageId, responses, summaryPayload) } } else null,
-                                                        onSkipChoices = if (isTool) { { toolCall, responses -> viewModel.skipUserChoices(toolCall, feedItem.messageId, responses) } } else null
-                                                    )
-                                                }
+                                                MarkdownBlockView(
+                                                    block = feedItem.block,
+                                                    onApproveTool = if (isTool) { { toolCall -> viewModel.approveAndExecuteTerminalTool(toolCall, feedItem.messageId) } } else null,
+                                                    onRejectTool = if (isTool) { { toolCall -> if (toolCall.toolType == ToolType.ASK_CHOICE) viewModel.cancelUserChoices(toolCall, feedItem.messageId) else viewModel.rejectTerminalTool(toolCall, feedItem.messageId) } } else null,
+                                                    onTerminateTool = if (isTool) { { toolCall -> viewModel.terminateRunningTerminalTool(toolCall, feedItem.messageId) } } else null,
+                                                    onSubmitChoices = if (isTool) { { toolCall, responses, summaryPayload -> viewModel.submitUserChoices(toolCall, feedItem.messageId, responses, summaryPayload) } } else null,
+                                                    onSkipChoices = if (isTool) { { toolCall, responses -> viewModel.skipUserChoices(toolCall, feedItem.messageId, responses) } } else null
+                                                )
                                             }
                                         }
                                         // with the working animation on, the working row below replaces these dots
@@ -2857,50 +2692,16 @@ fun ChatScreen(
                                             )
                                         }
                                         }
-                                        }
-                                        }
                                     }
 
-                                    if (showImageGenSkeleton) {
-                                        item(key = "image_gen_loading_card", contentType = "image_gen_loading_card") {
-                                            Box(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                contentAlignment = Alignment.TopCenter
-                                            ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .widthIn(max = 820.dp)
-                                                        .fillMaxWidth()
-                                                ) {
-                                                    ImageGenerationLoadingCard(
-                                                        prompt = activeImageGenPrompt,
-                                                        aspectRatio = activeTurnRatio,
-                                                        modifier = Modifier.animateItem(fadeInSpec = tween(180), placementSpec = null, fadeOutSpec = null)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if (showWorkingRow && !showImageGenSkeleton) {
+                                    if (showWorkingRow) {
                                         item(key = "working_spinner", contentType = "working_spinner") {
-                                            Box(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                contentAlignment = Alignment.TopCenter
-                                            ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .widthIn(max = 820.dp)
-                                                        .fillMaxWidth()
-                                                ) {
-                                                    com.example.gemini.ui.components.AgentWorkingSpinner(
-                                                        color = if (isClaudeChat) com.example.gemini.ui.components.ClaudeAccent else if (isOpenCodeChat) com.example.gemini.ui.components.OpenCodeAccent else if (isCodexChat) com.example.gemini.ui.components.CodexAccent else com.example.gemini.ui.components.AgyAccent,
-                                                        compacting = isClaudeChat && claudeCompacting,
-                                                        // leaves in the frame the reply's footer arrives, which fades in in its place
-                                                        modifier = Modifier.animateItem(fadeInSpec = tween(180), placementSpec = null, fadeOutSpec = null)
-                                                    )
-                                                }
-                                            }
+                                            com.example.gemini.ui.components.AgentWorkingSpinner(
+                                                color = if (isClaudeChat) com.example.gemini.ui.components.ClaudeAccent else if (isOpenCodeChat) com.example.gemini.ui.components.OpenCodeAccent else if (isCodexChat) com.example.gemini.ui.components.CodexAccent else com.example.gemini.ui.components.AgyAccent,
+                                                compacting = isClaudeChat && claudeCompacting,
+                                                // leaves in the frame the reply's footer arrives, which fades in in its place
+                                                modifier = Modifier.animateItem(fadeInSpec = tween(180), placementSpec = null, fadeOutSpec = null)
+                                            )
                                         }
                                     }
                                 }
@@ -3095,7 +2896,7 @@ fun ChatScreen(
                         .padding(
                             end = 16.dp,
                             bottom = if (isAuraHome) {
-                                maxOf(96.dp, bottomOverlayHeightDp + 10.dp)
+                                WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 92.dp
                             } else {
                                 14.dp
                             }
@@ -3106,8 +2907,8 @@ fun ChatScreen(
                         onClick = {
                             scope.launch {
                                 try {
-                                    if (displayFeedItems.isNotEmpty() || showImageGenSkeleton) {
-                                        listState.animateScrollToItem(maxOf(0, displayFeedItems.size), scrollOffset = 100_000)
+                                    if (feedItems.isNotEmpty()) {
+                                        listState.animateScrollToItem(maxOf(0, feedItems.size - 1))
                                     }
                                 } catch (e: Exception) {
                                     Log.w("ChatScreen", "Scroll to bottom failed: ${e.message}")
@@ -3443,7 +3244,6 @@ fun ChatScreen(
                             } else {
                                 com.example.gemini.data.live.ChatContextBridge.isNewChatDraft = false
                                 viewModel.sendMessage(text)
-                                followUpReferenceLabel = null
                                 userSentMessageTrigger++
                             }
                             viewModel.clearDraft(activeConversationKey)
@@ -3482,27 +3282,7 @@ fun ChatScreen(
                             auraHomeVoice = true
                         },
                         voiceCallActive = voiceCall.active,
-                        auraHomeStyle = isAuraHome,
-                        isImageMode = isImageGenerationMode,
-                        onToggleImageMode = { enabled ->
-                            isImageGenerationMode = enabled
-                            if (!enabled) {
-                                followUpReferenceLabel = null
-                            } else {
-                                try {
-                                    chatInputFocusRequester.requestFocus()
-                                } catch (_: Exception) {}
-                            }
-                        },
-                        imageAspectRatio = selectedImageAspectRatio,
-                        onSelectAspectRatio = { ratio -> selectedImageAspectRatio = ratio },
-                        onOpenImageSettings = { showImageSettingsSheet = true },
-                        onPickReferenceImage = { photoPickerLauncher.launch("image/*") },
-                        followUpReferenceLabel = followUpReferenceLabel,
-                        onClearFollowUpReference = {
-                            followUpReferenceLabel = null
-                            attachments.filter { it.isImage }.forEach { viewModel.removeAttachment(it.id) }
-                        }
+                        auraHomeStyle = isAuraHome
                     )
                 }
 
@@ -3661,12 +3441,6 @@ fun ChatScreen(
                                 .fillMaxWidth()
                                 .navigationBarsPadding()
                                 .padding(bottom = if (auraHomeVoice) 0.dp else 6.dp)
-                                .onSizeChanged { size ->
-                                    val h = with(density) { size.height.toDp() }
-                                    if (h > 40.dp && kotlin.math.abs(h.value - bottomOverlayHeightDp.value) > 2f) {
-                                        bottomOverlayHeightDp = h
-                                    }
-                                }
                         ) {
                             chatBottomSection()
                         }
@@ -4395,22 +4169,7 @@ fun ChatScreen(
             onPickImage = { photoPickerLauncher.launch("image/*") },
             onPickFile = { filePickerLauncher.launch("*/*") },
             onPickFromFiles = { showAttachFromFiles = true },
-            onEnableImageMode = {
-                isImageGenerationMode = true
-                try {
-                    chatInputFocusRequester.requestFocus()
-                } catch (_: Exception) {}
-            },
-            isImageMode = isImageGenerationMode,
             onDismiss = { showAttachmentSelector = false }
-        )
-    }
-
-    if (showImageSettingsSheet) {
-        ImageGenerationSettingsSheet(
-            selectedRatio = selectedImageAspectRatio,
-            onSelectRatio = { ratio -> selectedImageAspectRatio = ratio },
-            onDismiss = { showImageSettingsSheet = false }
         )
     }
 
