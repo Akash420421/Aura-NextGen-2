@@ -2132,7 +2132,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
                 "set_ringer_mode" -> {
                     val mode = args.optString("mode", "normal")
-                    deviceControlResultToJson(phoneControl.setRingerModeDetailed(mode))
+                    deviceResultToJson(phoneControl.setRingerModeDetailed(mode))
                 }
 
                 "set_brightness" -> {
@@ -2170,7 +2170,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                             "auto_off" -> phoneControl.setAutoBrightnessDetailed(false)
                             else -> phoneControl.getBrightnessSummaryDetailed()
                         }
-                        deviceControlResultToJson(res)
+                        deviceResultToJson(res)
                     }
                 }
 
@@ -2179,7 +2179,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         args.optBoolean("toggle", false) || !args.has("enabled") -> null
                         else -> DeviceControlHelper.parseBooleanAny(args.opt("enabled")) ?: args.optBoolean("enabled", true)
                     }
-                    deviceControlResultToJson(phoneControl.setFlashlightDetailed(desired))
+                    deviceResultToJson(phoneControl.setFlashlightDetailed(desired))
                 }
 
                 "set_device_setting" -> {
@@ -2190,12 +2190,12 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         else -> null
                     }
                     val rawValue: Any? = if (args.has("value")) args.opt("value") else null
-                    deviceControlResultToJson(phoneControl.setDeviceSettingDetailed(setting, rawEnabled as? Boolean ?: DeviceControlHelper.parseBooleanAny(rawEnabled), rawValue))
+                    deviceResultToJson(phoneControl.setDeviceSettingDetailed(setting, rawEnabled as? Boolean ?: DeviceControlHelper.parseBooleanAny(rawEnabled), rawValue))
                 }
 
                 "system_action" -> {
                     val action = args.optString("action", "")
-                    deviceControlResultToJson(phoneControl.performSystemActionDetailed(action))
+                    deviceResultToJson(phoneControl.performSystemActionDetailed(action))
                 }
 
                 "read_notifications" -> {

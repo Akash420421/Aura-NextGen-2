@@ -241,7 +241,7 @@ object WhatsAppAutoReplyManager {
                             mode = "Direct Auto-Reply (${sentResult.method})",
                             status = "sent"
                         )
-                        AuraAgentEventBus.tryEmit(
+                        AuraAgentEventBus.emit(
                             AuraAgentEvent.WhatsAppAutoReplied(
                                 messageId = messageId,
                                 senderName = cleanSender,
@@ -298,7 +298,7 @@ object WhatsAppAutoReplyManager {
         }
         _pendingReplies.value = (listOf(entry) + filtered).take(MAX_PENDING)
 
-        AuraAgentEventBus.tryEmit(
+        AuraAgentEventBus.emit(
             AuraAgentEvent.WhatsAppIncoming(
                 messageId = incoming.id,
                 senderName = incoming.senderName,
