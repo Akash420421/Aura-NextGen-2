@@ -1,15 +1,12 @@
 {
-  "version_code": 250,
-  "version_name": "2.4.10",
+  "version_code": 251,
+  "version_name": "2.4.11",
   "min_supported_version_code": 1,
   "changelog": [
-    "Aura AI v2.4.10 — Real Scroll/Shorts/Reels Fix, Alarm & Video Seek/Like/Pause, Multi-App Voice Notification Reader, Smart Auto-Memory & Account Quota Reset",
-    "Fixed phone & short-video scrolling: 2-stage touch-slop + fling swipe curves, safe edge insets for Android 16/vivo, visible scrollable container ACTION_SCROLL fallback, expanded YouTube Shorts detection, and In-Built Browser background hijack prevention",
-    "Added set_alarm (alarm/timer/show alarms), verified Brightness readback fix, and STREAM_VOICE_CALL readback checks",
-    "Added +10s/-10s native YouTube seek (forward/rewind), cross-app Like (YouTube/Shorts/Reels/In-Built Browser), and reliable MediaSession + short-video Pause/Play controls",
-    "Upgraded AuraNotificationListenerService + Live Voice read-aloud for all messaging apps (WhatsApp, SMS, Telegram, Instagram, Messenger, Gmail) while Live Voice is active",
-    "Upgraded AuraMemoryManager across Voice & Text Chat with turn buffering, Hinglish/English rules, background Gemini Flash auto-extraction, topic-key/similarity deduplication, and save_memory/forget_memory tools",
-    "Fixed Account Logout -> New Login stale exhausted quotas & models across AGY, Codex, and Claude (clears caches, auto-switches off 0% models, and auto-restarts hub once if daemon stays stale)"
+    "Aura AI v2.4.11 — Dedicated VolumeController, Full Hinglish/English Volume Parsing, DND/SecurityException Guidance & Live Communication Stream Sync",
+    "Added VolumeController helper using applicationContext AudioManager + FLAG_SHOW_UI + min..max clamping + mute/unmute memory + debug logging without touching flashlight/brightness",
+    "Added Hindi/Hinglish/English natural volume command parsing across Live Voice fallback, set_volume, Text Chat, and android_set_volume MCP tool",
+    "Added separate SecurityException & DND policy access check/guidance + API 31+ communicationDevice STREAM_VOICE_CALL mirroring"
   ],
   "is_critical": false
 }

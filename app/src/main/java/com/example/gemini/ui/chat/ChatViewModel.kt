@@ -511,13 +511,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val typed = PromptExpansion.expand(content)
         val expanded = if (refs.isEmpty()) typed
             else listOf(typed, com.example.gemini.data.files.AttachedFiles.block(refs)).filter { it.isNotBlank() }.joinToString("\n\n")
+        val volNote = if (refs.isEmpty() && content.isNotBlank()) {
+            com.example.gemini.data.automation.VolumeController(getApplication())
+                .executeNaturalCommand(content, silentFeedback = false)
+                ?.let { res ->
+                    PromptExpansion.hidden(
+                        "[System Control / VolumeController already executed locally: \"${res.message}\" " +
+                            "(verified=${res.verified}, actual_percent=${res.actualPercent}%). " +
+                            "Do NOT change volume again or use ADB keys; confirm this result concisely to the user.]\n"
+                    )
+                }
+        } else null
+        val withVol = if (volNote != null) volNote + expanded else expanded
         // a Jarvis chat on screen: its message carries Jarvis' hidden note (or goes to the voice Jarvis chat as a typed turn)
         val jarvis = com.example.gemini.data.jarvis.JarvisController
         val chatId = currentConversation.value?.id
-        val intercepted = (if (jarvis.isAttached) jarvis.interceptScreenMessage(chatId, expanded) else expanded) ?: return
+        val intercepted = (if (jarvis.isAttached) jarvis.interceptScreenMessage(chatId, withVol) else withVol) ?: return
         rememberCopies(chatId, refs)
         // a normal chat (a Jarvis chat carries its own guide instead): the app's global context goes in front
-        val it = if (intercepted === expanded) withGlobalContext(chatId, expanded) else intercepted
+        val it = if (intercepted === withVol) withGlobalContext(chatId, withVol) else intercepted
         // Automatically extract & merge durable facts/preferences/reminders from text chat in background
         if (intercepted === expanded && content.isNotBlank()) {
             com.example.gemini.data.live.AuraMemoryManager.processCompletedTurnAsync(

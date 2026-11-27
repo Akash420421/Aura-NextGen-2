@@ -257,6 +257,16 @@ object AndroidAutomation {
             "gone" to prop("boolean", "Wait for the text to disappear instead"),
             "timeout_ms" to prop("integer", "Give up after this long (default 5000, max 30000)")
         ))
+        put(tool("android_set_volume",
+            "Control and verify Android device volume directly (works without Accessibility or ADB): supports English and Hindi/Hinglish commands ('volume 60% karo', 'volume badhao', 'awaz kam karo', 'mute karo', 'full volume', 'thoda badhao') or structured action/percentage/stream.",
+            emptyList(),
+            "action" to prop("string", "Action: 'set', 'increase', 'decrease', 'mute', 'unmute', or 'get' (optional if 'command' is provided)"),
+            "percentage" to prop("integer", "Target percentage (0-100) for 'set'"),
+            "step_percent" to prop("integer", "Step size in percent (5-50) for 'increase' or 'decrease'"),
+            "steps" to prop("integer", "Discrete volume steps (1-20) for 'increase' or 'decrease'"),
+            "stream" to prop("string", "Stream: 'music' (default), 'ring', 'alarm', 'notification', 'call', or 'all'"),
+            "command" to prop("string", "Optional natural English/Hindi/Hinglish volume command")
+        ))
         put(tool("android_press_key", "Press a hardware or keyboard key, e.g. ENTER, DEL, VOLUME_UP, POWER, MEDIA_PLAY_PAUSE, or a key code number. BACK, HOME and APP_SWITCH work without ADB; other keys need ADB.",
             listOf("key"),
             "key" to prop("string", "Key name (KEYCODE_ prefix optional) or key code")
@@ -288,6 +298,9 @@ object AndroidAutomation {
     // ---------------- calls ----------------
 
     suspend fun call(context: Context, name: String, args: JSONObject): JSONObject {
+        if (name == "android_set_volume") {
+            return setVolumeTool(context, args)
+        }
         notReadyMessage(context)?.let { return error(it) }
         val svc = AutomationAccessibilityService.instance ?: return error(notReadyMessage(context) ?: "Accessibility service not running")
         return runCatching {
@@ -381,6 +394,55 @@ object AndroidAutomation {
     private fun foreground(svc: AutomationAccessibilityService): String {
         val pkg = svc.getForegroundAppRootNode()?.packageName ?: svc.rootInActiveWindow?.packageName ?: svc.foregroundPackage
         return "In front: ${pkg ?: "unknown"}"
+    }
+
+    private fun setVolumeTool(context: Context, args: JSONObject): JSONObject {
+        return runCatching {
+            val vc = VolumeController(context.applicationContext)
+            val rawCmd = args.optString("command", "").trim()
+            val rawAction = args.optString("action", "").ifBlank { rawCmd }
+            val rawStream = args.optString("stream", "music").ifBlank { "music" }
+            val rawPct: Any? = when {
+                args.has("percentage") -> args.opt("percentage")
+                args.has("percent") -> args.opt("percent")
+                args.has("volume") -> args.opt("volume")
+                args.has("value") -> args.opt("value")
+                else -> null
+            }
+            val rawStep: Any? = when {
+                args.has("step_percent") -> args.opt("step_percent")
+                args.has("step") -> args.opt("step")
+                else -> null
+            }
+            val rawSteps: Any? = if (args.has("steps")) args.opt("steps") else null
+            val parsed = DeviceControlHelper.parseVolumeArgs(
+                rawAction = rawAction,
+                rawPercentage = rawPct,
+                rawStream = rawStream,
+                rawStepPercent = rawStep,
+                rawSteps = rawSteps
+            )
+            if (parsed.parseError != null) {
+                return error(parsed.parseError)
+            }
+            val batch = if (parsed.action == "get") {
+                vc.getVolumeSummaryDetailed(parsed.stream)
+            } else {
+                vc.executeVolumeBatch(
+                    action = parsed.action,
+                    stream = parsed.stream,
+                    requestedPercent = parsed.percentage,
+                    stepPercent = parsed.stepPercent,
+                    steps = parsed.steps,
+                    silentFeedback = false
+                )
+            }
+            if (batch.verified) {
+                text(batch.message)
+            } else {
+                error(batch.message)
+            }
+        }.getOrElse { error("android_set_volume failed: ${it.message ?: it.javaClass.simpleName}") }
     }
 
     private fun status(context: Context, svc: AutomationAccessibilityService): JSONObject {

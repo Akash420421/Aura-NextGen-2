@@ -722,7 +722,7 @@ class GeminiLiveWebSocket(
             // 10. set_volume (#11)
             put(JSONObject().apply {
                 put("name", "set_volume")
-                put("description", "Instantly controls and readback-verifies device volume across streams ('music'/'media', 'ring', 'alarm', 'notification', 'call', 'all'): 'set', 'increase', 'decrease', 'mute', 'unmute', or 'get'. Always returns verified actual_percent and capped_by_system if Android Safe Volume or DND restricts it.")
+                put("description", "Instantly controls and readback-verifies device volume via VolumeController across streams ('music'/'media', 'ring', 'alarm', 'notification', 'call', 'all'): 'set', 'increase', 'decrease', 'mute', 'unmute', or 'get'. Supports Hindi/Hinglish phrases and relative steps ('thoda badhao', 'volume 70 karo', 'awaz kam karo', 'mute karo'). Returns verified actual_percent, permission_required if DND blocks ring/notification, and confirmation message such as 'Volume 60% kar diya'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -739,11 +739,19 @@ class GeminiLiveWebSocket(
                         })
                         put("step_percent", JSONObject().apply {
                             put("type", "INTEGER")
-                            put("description", "Optional increment/decrement step (5-50, default 15) for 'increase' or 'decrease'.")
+                            put("description", "Optional increment/decrement step (5-50, default 15, or 8 for 'thoda') for 'increase' or 'decrease'.")
+                        })
+                        put("steps", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional discrete hardware volume steps (1-20) for 'increase' or 'decrease'.")
                         })
                         put("stream", JSONObject().apply {
                             put("type", "STRING")
                             put("description", "Optional stream: 'music' (default media), 'ring', 'alarm', 'notification', 'call', or 'all'.")
+                        })
+                        put("command", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional raw Hindi/Hinglish/English volume phrase if parameters were ambiguous.")
                         })
                     })
                     put("required", JSONArray().put("action"))

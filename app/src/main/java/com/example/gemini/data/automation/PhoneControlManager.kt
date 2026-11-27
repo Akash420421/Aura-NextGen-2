@@ -38,7 +38,8 @@ class PhoneControlManager(private val context: Context) {
         val actualPercent: Int,
         val cappedBySystem: Boolean,
         val outcomes: List<DeviceControlHelper.VolumeOutcome>,
-        val message: String
+        val message: String,
+        val permissionRequired: Boolean = false
     )
 
     data class DeviceControlResult(
@@ -55,7 +56,8 @@ class PhoneControlManager(private val context: Context) {
         private const val TAG = "PhoneControlManager"
     }
 
-    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val audioManager = context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val volumeController = VolumeController(context)
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     @Volatile
     private var isFlashlightOn = false
@@ -135,27 +137,17 @@ class PhoneControlManager(private val context: Context) {
         return "Live Device Telemetry (at session prompt build): Battery=$batText | MediaVol=$mediaPct% | RingVol=$ringPct%. Always call get_device_status or set_volume for live real-time reads/changes."
     }
 
-    fun getStreamVolumePercent(streamType: Int = AudioManager.STREAM_MUSIC): Int {
-        val maxVol = audioManager.getStreamMaxVolume(streamType).coerceAtLeast(1)
-        val curVol = audioManager.getStreamVolume(streamType).coerceIn(0, maxVol)
-        return ((curVol / maxVol.toFloat()) * 100f).roundToInt().coerceIn(0, 100)
-    }
+    fun getStreamVolumePercent(streamType: Int = AudioManager.STREAM_MUSIC): Int =
+        volumeController.getCurrentVolumePercent(streamType)
 
-    private fun resolveAudioStreams(stream: String): List<Pair<String, Int>> {
-        return when (DeviceControlHelper.normalizeStream(stream)) {
-            "ring" -> listOf("ring" to AudioManager.STREAM_RING)
-            "alarm" -> listOf("alarm" to AudioManager.STREAM_ALARM)
-            "notification" -> listOf("notification" to AudioManager.STREAM_NOTIFICATION)
-            "call" -> listOf("call" to AudioManager.STREAM_VOICE_CALL)
-            "all" -> listOf(
-                "media" to AudioManager.STREAM_MUSIC,
-                "ring" to AudioManager.STREAM_RING,
-                "alarm" to AudioManager.STREAM_ALARM,
-                "notification" to AudioManager.STREAM_NOTIFICATION
-            )
-            else -> listOf("media" to AudioManager.STREAM_MUSIC)
-        }
-    }
+    private fun VolumeController.VolumeBatchResult.toManagerResult(): VolumeBatchResult = VolumeBatchResult(
+        verified = verified,
+        actualPercent = actualPercent,
+        cappedBySystem = cappedBySystem,
+        outcomes = outcomes,
+        message = message,
+        permissionRequired = permissionRequired
+    )
 
     private fun openWriteSettingsPermissionScreen() {
         val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
@@ -331,214 +323,34 @@ class PhoneControlManager(private val context: Context) {
 
     fun adjustBrightness(increase: Boolean): String = adjustBrightnessDetailed(increase).message
 
-    private fun applyStreamVolumeWithVerification(
-        label: String,
-        streamType: Int,
-        action: String,
-        requestedPercent: Int? = null,
-        stepPercent: Int = 15,
-        flags: Int = AudioManager.FLAG_SHOW_UI
-    ): DeviceControlHelper.VolumeOutcome {
-        val maxVol = audioManager.getStreamMaxVolume(streamType).coerceAtLeast(1)
-        val minVol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            runCatching { audioManager.getStreamMinVolume(streamType) }.getOrDefault(0).coerceIn(0, maxVol)
-        } else {
-            0
-        }
-        val isFixed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            runCatching { audioManager.isVolumeFixed }.getOrDefault(false)
-        } else {
-            false
-        }
-        val beforeVol = audioManager.getStreamVolume(streamType).coerceIn(minVol, maxVol)
-        if (isFixed) {
-            return DeviceControlHelper.evaluateVolumeOutcome(
-                streamLabel = label,
-                action = action,
-                requestedPercent = requestedPercent,
-                targetStep = beforeVol,
-                beforeStep = beforeVol,
-                afterStep = beforeVol,
-                maxStep = maxVol,
-                isFixedVolume = true
-            )
-        }
-
-        val targetVol = when (action) {
-            "set" -> (((requestedPercent ?: 50).coerceIn(0, 100) / 100.0) * maxVol)
-                .roundToInt()
-                .coerceIn(minVol, maxVol)
-            "increase" -> {
-                val delta = max(1, (maxVol * (stepPercent.coerceIn(5, 50) / 100.0)).roundToInt())
-                (beforeVol + delta).coerceIn(minVol, maxVol)
-            }
-            "decrease" -> {
-                val delta = max(1, (maxVol * (stepPercent.coerceIn(5, 50) / 100.0)).roundToInt())
-                (beforeVol - delta).coerceIn(minVol, maxVol)
-            }
-            "mute" -> minVol
-            "unmute" -> if (beforeVol <= minVol) {
-                max(minVol + 1, (maxVol * 0.4).roundToInt()).coerceIn(minVol, maxVol)
-            } else {
-                beforeVol
-            }
-            else -> beforeVol
-        }
-
-        var secErr: String? = null
-        try {
-            if (action == "mute") {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && minVol == 0) {
-                    runCatching { audioManager.adjustStreamVolume(streamType, AudioManager.ADJUST_MUTE, flags) }
-                }
-                if (audioManager.getStreamVolume(streamType) > minVol) {
-                    audioManager.setStreamVolume(streamType, minVol, flags)
-                }
-            } else {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && targetVol > 0) {
-                    val wasMuted = runCatching { audioManager.isStreamMute(streamType) }.getOrDefault(false)
-                    if (wasMuted || action == "unmute") {
-                        runCatching { audioManager.adjustStreamVolume(streamType, AudioManager.ADJUST_UNMUTE, 0) }
-                    }
-                }
-                audioManager.setStreamVolume(streamType, targetVol, flags)
-                // Step-wise retry if OEM/BT/Safe-Volume ignored or delayed direct setStreamVolume
-                var immediate = audioManager.getStreamVolume(streamType)
-                if (immediate != targetVol) {
-                    val direction = if (targetVol > immediate) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
-                    val maxRetries = abs(targetVol - immediate).coerceAtMost(8)
-                    for (i in 0 until maxRetries) {
-                        val prev = immediate
-                        runCatching { audioManager.adjustStreamVolume(streamType, direction, flags) }
-                        Thread.sleep(15)
-                        immediate = audioManager.getStreamVolume(streamType)
-                        if (immediate == targetVol || immediate == prev) break
-                    }
-                }
-            }
-            // Allow AudioService / BT AVRCP state to settle before final readback
-            Thread.sleep(35)
-        } catch (se: SecurityException) {
-            secErr = se.message ?: "Do Not Disturb policy restriction"
-            Log.w(TAG, "DND/SecurityException changing $label volume: $secErr")
-        } catch (e: Exception) {
-            secErr = e.message ?: "AudioService error"
-            Log.e(TAG, "Error changing $label volume: $secErr", e)
-        }
-
-        val afterVol = audioManager.getStreamVolume(streamType).coerceIn(0, maxVol)
-        return DeviceControlHelper.evaluateVolumeOutcome(
-            streamLabel = label,
-            action = action,
-            requestedPercent = requestedPercent,
-            targetStep = targetVol,
-            beforeStep = beforeVol,
-            afterStep = afterVol,
-            maxStep = maxVol,
-            isFixedVolume = false,
-            securityError = secErr
-        )
-    }
-
-    private fun syncCommCallVolumeIfActive(
-        action: String,
-        requestedPercent: Int?,
-        stepPercent: Int
-    ) {
-        val inComm = runCatching {
-            audioManager.mode == AudioManager.MODE_IN_COMMUNICATION || audioManager.isBluetoothScoOn
-        }.getOrDefault(false)
-        if (!inComm) return
-
-        // Mirror silently to STREAM_VOICE_CALL when headset comm/BT SCO routing is active
-        runCatching {
-            val callStream = AudioManager.STREAM_VOICE_CALL
-            val maxVol = audioManager.getStreamMaxVolume(callStream).coerceAtLeast(1)
-            val minVol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                audioManager.getStreamMinVolume(callStream).coerceIn(0, maxVol)
-            } else {
-                1.coerceAtMost(maxVol)
-            }
-            val cur = audioManager.getStreamVolume(callStream).coerceIn(minVol, maxVol)
-            val tgt = when (action) {
-                "set" -> (((requestedPercent ?: 50).coerceIn(0, 100) / 100.0) * maxVol).roundToInt().coerceIn(minVol, maxVol)
-                "increase" -> (cur + max(1, (maxVol * (stepPercent.coerceIn(5, 50) / 100.0)).roundToInt())).coerceIn(minVol, maxVol)
-                "decrease" -> (cur - max(1, (maxVol * (stepPercent.coerceIn(5, 50) / 100.0)).roundToInt())).coerceIn(minVol, maxVol)
-                "mute" -> minVol
-                else -> return@runCatching
-            }
-            audioManager.setStreamVolume(callStream, tgt, 0)
-            Thread.sleep(20)
-            val actualCall = audioManager.getStreamVolume(callStream).coerceIn(minVol, maxVol)
-            Log.d(TAG, "Synced STREAM_VOICE_CALL during comm mode: requested=$tgt actual=$actualCall/$maxVol")
-        }
-    }
-
     private fun executeVolumeBatch(
         action: String,
         stream: String,
         requestedPercent: Int? = null,
         stepPercent: Int = 15,
+        steps: Int? = null,
         silentFeedback: Boolean = false
-    ): VolumeBatchResult {
-        val normalizedStream = DeviceControlHelper.normalizeStream(stream)
-        val flags = if (silentFeedback) AudioManager.FLAG_SHOW_UI else (AudioManager.FLAG_SHOW_UI or AudioManager.FLAG_PLAY_SOUND)
-        val targets = resolveAudioStreams(normalizedStream)
-        val outcomes = targets.map { (label, streamType) ->
-            applyStreamVolumeWithVerification(
-                label = label,
-                streamType = streamType,
-                action = action,
-                requestedPercent = requestedPercent,
-                stepPercent = stepPercent,
-                flags = flags
-            )
-        }
-        if (normalizedStream == "music") {
-            syncCommCallVolumeIfActive(
-                action = action,
-                requestedPercent = requestedPercent,
-                stepPercent = stepPercent
-            )
-        }
-        val allVerified = outcomes.all { it.verified }
-        val anyCapped = outcomes.any { it.cappedBySystem }
-        val primaryPct = outcomes.firstOrNull()?.actualPercent ?: getStreamVolumePercent(AudioManager.STREAM_MUSIC)
-        val msg = outcomes.joinToString("; ") { it.summary }
-        return VolumeBatchResult(
-            verified = allVerified,
-            actualPercent = primaryPct,
-            cappedBySystem = anyCapped,
-            outcomes = outcomes,
-            message = msg
-        )
-    }
+    ): VolumeBatchResult = volumeController.executeVolumeBatch(
+        action = action,
+        stream = stream,
+        requestedPercent = requestedPercent,
+        stepPercent = stepPercent,
+        steps = steps,
+        silentFeedback = silentFeedback
+    ).toManagerResult()
 
-    fun getVolumeSummaryDetailed(stream: String = "music"): VolumeBatchResult {
-        val normalizedStream = DeviceControlHelper.normalizeStream(stream)
-        val targets = resolveAudioStreams(normalizedStream)
-        val outcomes = targets.map { (label, streamType) ->
-            val maxVol = audioManager.getStreamMaxVolume(streamType).coerceAtLeast(1)
-            val curVol = audioManager.getStreamVolume(streamType).coerceIn(0, maxVol)
-            DeviceControlHelper.evaluateVolumeOutcome(
-                streamLabel = label,
-                action = "get",
-                requestedPercent = null,
-                targetStep = null,
-                beforeStep = curVol,
-                afterStep = curVol,
-                maxStep = maxVol
-            )
-        }
-        val primaryPct = outcomes.firstOrNull()?.actualPercent ?: getStreamVolumePercent(AudioManager.STREAM_MUSIC)
-        return VolumeBatchResult(
-            verified = true,
-            actualPercent = primaryPct,
-            cappedBySystem = false,
-            outcomes = outcomes,
-            message = outcomes.joinToString("; ") { it.summary }
-        )
-    }
+    fun executeNaturalVolumeCommand(
+        commandText: String,
+        stream: String = "music",
+        silentFeedback: Boolean = false
+    ): VolumeBatchResult? = volumeController.executeNaturalCommand(
+        commandText = commandText,
+        defaultStream = stream,
+        silentFeedback = silentFeedback
+    )?.toManagerResult()
+
+    fun getVolumeSummaryDetailed(stream: String = "music"): VolumeBatchResult =
+        volumeController.getVolumeSummaryDetailed(stream).toManagerResult()
 
     fun setVolumePercentDetailed(
         percent: Int,
@@ -555,11 +367,13 @@ class PhoneControlManager(private val context: Context) {
         increase: Boolean,
         stream: String = "music",
         stepPercent: Int = 15,
-        silentFeedback: Boolean = false
+        silentFeedback: Boolean = false,
+        steps: Int? = null
     ): VolumeBatchResult = executeVolumeBatch(
         action = if (increase) "increase" else "decrease",
         stream = stream,
         stepPercent = stepPercent.coerceIn(5, 50),
+        steps = steps,
         silentFeedback = silentFeedback
     )
 

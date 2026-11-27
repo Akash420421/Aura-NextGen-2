@@ -204,7 +204,8 @@ class TermuxApiReceiver : BroadcastReceiver() {
     private fun handleVolume(context: Context, intent: Intent) {
         val streamName = intent.getStringExtra("stream")?.lowercase() ?: "music"
         val volume = intent.getIntExtra("volume", -1)
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val appCtx = context.applicationContext ?: context
+        val audioManager = appCtx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
 
         val streamType = when (streamName) {
             "alarm" -> AudioManager.STREAM_ALARM
@@ -216,7 +217,15 @@ class TermuxApiReceiver : BroadcastReceiver() {
         }
 
         if (volume >= 0) {
-            audioManager.setStreamVolume(streamType, volume, AudioManager.FLAG_SHOW_UI)
+            try {
+                val maxVol = audioManager.getStreamMaxVolume(streamType).coerceAtLeast(1)
+                val clamped = volume.coerceIn(0, maxVol)
+                audioManager.setStreamVolume(streamType, clamped, AudioManager.FLAG_SHOW_UI)
+            } catch (se: SecurityException) {
+                Log.w(TAG, "SecurityException setting stream=$streamName volume (DND policy): ${se.message}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed setting stream=$streamName volume: ${e.message}", e)
+            }
         }
     }
 

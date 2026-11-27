@@ -16,7 +16,8 @@ object DeviceControlHelper {
         val stream: String,       // "music", "ring", "alarm", "notification", "call", "all"
         val percentage: Int?,     // 0..100 for "set"
         val stepPercent: Int,     // 5..50 for "increase"/"decrease"
-        val parseError: String? = null
+        val parseError: String? = null,
+        val steps: Int? = null    // optional discrete step count when relative steps requested
     )
 
     data class VolumeOutcome(
@@ -31,6 +32,15 @@ object DeviceControlHelper {
     )
 
     private val NON_DIGITS = Regex("[^0-9.-]+")
+    private val VOLUME_EXCLUDE_TOPICS = Regex(
+        "\\b(brightness|roshni|flashlight|torch|batti|playback speed|speed|scroll|swipe)\\b"
+    )
+    private val VOLUME_NEGATION = Regex(
+        "\\b(mat|nahi|na|don't|dont|do not|never)\\b"
+    )
+    private val VOLUME_QUESTION_CODE = Regex(
+        "\\b(how to|kaise karte|code|script|kotlin|java|logcat|debug|crash|fix|example|tutorial|function|class)\\b"
+    )
 
     fun parsePercentageAny(raw: Any?): Int? {
         return when (raw) {
@@ -40,17 +50,41 @@ object DeviceControlHelper {
                 val trimmed = raw.trim().lowercase(Locale.ROOT)
                 when {
                     trimmed.isBlank() -> null
-                    trimmed in setOf("full", "max", "maximum", "100", "100%", "pura", "poora") -> 100
-                    trimmed in setOf("half", "medium", "mid", "aadha", "adha") -> 50
-                    trimmed in setOf("low", "minimum", "min", "zero", "0", "0%", "mute") -> 0
+                    trimmed in setOf(
+                        "full", "max", "maximum", "highest", "100", "100%",
+                        "pura", "poora", "full volume", "max volume", "maximum volume"
+                    ) -> 100
+                    trimmed in setOf(
+                        "half", "medium", "mid", "aadha", "adha",
+                        "half volume", "volume half"
+                    ) -> 50
+                    trimmed in setOf(
+                        "low", "minimum", "min", "zero", "0", "0%", "mute", "band",
+                        "zero volume", "minimum volume"
+                    ) -> 0
                     else -> {
-                        val cleaned = trimmed.replace(NON_DIGITS, "")
-                        cleaned.toDoubleOrNull()?.roundToInt()?.coerceIn(0, 100)
+                        val numMatch = Regex("(-?\\d+(?:\\.\\d+)?)").find(trimmed)
+                        numMatch?.groupValues?.getOrNull(1)
+                            ?.toDoubleOrNull()
+                            ?.roundToInt()
+                            ?.coerceIn(0, 100)
                     }
                 }
             }
             else -> null
         }
+    }
+
+    fun parseStepPercentAny(raw: Any?): Int? {
+        if (raw == null) return null
+        if (raw is String) {
+            val s = HindiAsrNormalizer.normalize(raw).trim().lowercase(Locale.ROOT)
+            when {
+                s.contains("thoda") || s.contains("halka") || s.contains("slightly") || s.contains("little") || s.contains("small") -> return 8
+                s.contains("bahut") || s.contains("zyada") || s.contains("jyada") || s.contains("kaafi") || s.contains("lot") || s.contains("large") -> return 30
+            }
+        }
+        return parsePercentageAny(raw)?.coerceIn(5, 50)
     }
 
     fun normalizeStream(rawStream: String?): String {
@@ -60,31 +94,196 @@ object DeviceControlHelper {
             s.contains("alarm") -> "alarm"
             s.contains("notif") -> "notification"
             s.contains("call") || s.contains("voice") || s.contains("incall") || s.contains("earpiece") -> "call"
-            s == "all" || s.contains("sab") || s.contains("every") -> "all"
+            s == "all" || s.contains("sab") || s.contains("saare") || s.contains("every") -> "all"
             else -> "music"
         }
+    }
+
+    private fun detectStreamInText(clean: String, fallback: String): String = when {
+        clean.contains("ringtone") || clean.contains("ring tone") || Regex("\\bring\\b").containsMatchIn(clean) -> "ring"
+        clean.contains("alarm") -> "alarm"
+        clean.contains("notification") || clean.contains("notif") -> "notification"
+        clean.contains("call volume") || clean.contains("earpiece") || clean.contains("in call") -> "call"
+        Regex("\\b(all|sabhi|saare|sab)\\s+volume").containsMatchIn(clean) -> "all"
+        else -> fallback
+    }
+
+    /**
+     * Parses free-form English / Hindi / Hinglish voice or text volume commands such as:
+     * - "volume up", "volume down", "increase volume", "decrease volume"
+     * - "volume badhao", "volume kam karo", "awaz badhao", "awaz ghatao"
+     * - "volume 50 percent karo", "volume 70 karo", "mute karo", "unmute karo", "full volume"
+     * - "thoda badhao", "thoda kam karo"
+     */
+    fun parseNaturalVolumeCommand(
+        input: String,
+        defaultStream: String = "music"
+    ): ParsedVolumeCommand? {
+        val normalized = HindiAsrNormalizer.normalize(input)
+            .replace(Regex("(?i)^(hey\\s+aura|ok\\s+aura|hi\\s+aura|aura|hey\\s+jarvis|ok\\s+jarvis|jarvis)[,\\s]+"), "")
+            .replace(Regex("[.,!?;\"']+$"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .lowercase(Locale.ROOT)
+
+        if (normalized.isBlank()) return null
+        if (VOLUME_EXCLUDE_TOPICS.containsMatchIn(normalized)) return null
+        if (VOLUME_NEGATION.containsMatchIn(normalized)) return null
+        if (VOLUME_QUESTION_CODE.containsMatchIn(normalized)) return null
+
+        val clean = normalized
+            .replace(Regex("\\baawaz\\b|\\bawaaz\\b|\\bavaz\\b|\\bawaz\\b"), "awaz")
+            .replace(Regex("\\bzyaada\\b|\\bjyada\\b|\\bzyada\\b"), "zyada")
+            .replace(Regex("\\bbadha\\s*do\\b|\\bbadhao\\b|\\bbadhaa\\s*do\\b"), "badhao")
+            .replace(Regex("\\bghata\\s*do\\b|\\bghatao\\b"), "ghatao")
+            .replace(Regex("\\bkam\\s*kar\\s*do\\b|\\bkam\\s*karo\\b|\\bkam\\s*kardo\\b"), "kam karo")
+            .replace(Regex("\\bkar\\s*do\\b|\\bkardo\\b"), "karo")
+
+        val stream = detectStreamInText(clean, normalizeStream(defaultStream))
+        val hasVolumeAnchor = Regex(
+            "\\b(volume|vol|awaz|sound|audio|media|ringtone|alarm|music|speaker)\\b"
+        ).containsMatchIn(clean)
+
+        val stepMod: Int
+        val explicitSteps: Int?
+        when {
+            clean.contains("thoda") || clean.contains("halka") || clean.contains("slightly") ||
+                clean.contains("little bit") || clean.contains("a bit") -> {
+                stepMod = 8
+                explicitSteps = 1
+            }
+            clean.contains("bahut") || clean.contains("kaafi") || clean.contains("a lot") -> {
+                stepMod = 30
+                explicitSteps = 3
+            }
+            else -> {
+                val explicitStepMatch = Regex("(\\d{1,2})\\s*(?:%|percent)?\\s*(?:up|down|badhao|tez|kam|ghatao|increase|decrease)").find(clean)
+                val parsedStep = explicitStepMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
+                if (parsedStep != null && parsedStep in 1..60) {
+                    stepMod = parsedStep.coerceIn(5, 50)
+                    explicitSteps = null
+                } else {
+                    stepMod = 15
+                    explicitSteps = null
+                }
+            }
+        }
+
+        // 1. Get / check volume status
+        if (hasVolumeAnchor && Regex(
+                "\\b(kitna|kitni|check|status|current|what is|level batao|batao)\\b"
+            ).containsMatchIn(clean)
+        ) {
+            return ParsedVolumeCommand(action = "get", stream = stream, percentage = null, stepPercent = stepMod)
+        }
+
+        // 2. Unmute (check before mute because "unmute" contains "mute" substring)
+        if (clean.matches(
+                Regex("^(?:please\\s+|zara\\s+)?(?:(?:media|sound|audio|volume|awaz)\\s+)?(?:unmute|un-mute)(?:\\s+(?:karo|volume|awaz))?$")
+            ) || (hasVolumeAnchor && Regex("\\b(unmute|awaz\\s+chalu|sound\\s+on|volume\\s+on)\\b").containsMatchIn(clean))
+        ) {
+            return ParsedVolumeCommand(action = "unmute", stream = stream, percentage = null, stepPercent = stepMod)
+        }
+
+        // 3. Mute
+        if (clean.matches(
+                Regex("^(?:please\\s+|zara\\s+)?(?:(?:media|sound|audio|volume|awaz)\\s+)?(?:mute|silent|silence)(?:\\s+(?:karo|volume|awaz|media|it))?$")
+            ) || (hasVolumeAnchor && Regex("\\b(mute|zero|band|band\\s+karo|silent|silence)\\b").containsMatchIn(clean) &&
+                !Regex("\\b(100|full|max|badhao|up|increase)\\b").containsMatchIn(clean))
+        ) {
+            return ParsedVolumeCommand(action = "mute", stream = stream, percentage = 0, stepPercent = stepMod)
+        }
+
+        // 4. Full / max / half / min presets
+        if (hasVolumeAnchor && Regex("\\b(full|max|maximum|highest|loudest|pura|poora)\\b").containsMatchIn(clean)) {
+            return ParsedVolumeCommand(action = "set", stream = stream, percentage = 100, stepPercent = stepMod)
+        }
+        if (hasVolumeAnchor && Regex("\\b(half|aadha|adha|50)\\b").containsMatchIn(clean) &&
+            !Regex("\\b(badhao|kam|ghatao|up|down|increase|decrease)\\b").containsMatchIn(clean)
+        ) {
+            return ParsedVolumeCommand(action = "set", stream = stream, percentage = 50, stepPercent = stepMod)
+        }
+        if (hasVolumeAnchor && Regex("\\b(min|minimum|lowest)\\b").containsMatchIn(clean)) {
+            return ParsedVolumeCommand(action = "set", stream = stream, percentage = 0, stepPercent = stepMod)
+        }
+
+        // 5. Explicit percentage set (must distinguish "volume 50 percent karo" / "volume 70 karo" from "volume 10% badhao")
+        val setWithVerb = Regex(
+            "(?:set|make|put|turn|keep|karo|set\\s+karo)\\s*(?:the\\s+)?(?:media\\s+|ringtone\\s+|alarm\\s+|call\\s+|sound\\s+)?(?:volume|vol|awaz)?\\s*(?:to|at|ko|=)?\\s*(\\d{1,3})\\s*(?:%|percent)?\\s*(?:karo)?$"
+        ).find(clean)
+            ?: Regex(
+                "(?:volume|vol|awaz|sound|media\\s+volume|ringtone\\s+volume|alarm\\s+volume|call\\s+volume)\\s*(?:ko|to|at|is|=)?\\s*(\\d{1,3})\\s*(?:%|percent)?\\s*(?:karo|par|pe)?$"
+            ).find(clean)
+            ?: Regex(
+                "^(\\d{1,3})\\s*(?:%|percent)\\s*(?:volume|vol|awaz)(?:\\s+karo)?$"
+            ).find(clean)
+
+        if (setWithVerb != null && !Regex("\\b(badhao|up|increase|kam|ghatao|down|decrease)\\b").containsMatchIn(clean)) {
+            val valPct = setWithVerb.groupValues.getOrNull(1)?.toIntOrNull()
+            if (valPct != null && valPct in 0..100) {
+                return ParsedVolumeCommand(action = "set", stream = stream, percentage = valPct, stepPercent = stepMod)
+            }
+        }
+
+        // 6. Relative Increase
+        val standaloneRelativeUp = clean.matches(
+            Regex("^(?:please\\s+|zara\\s+)?(?:thoda|thoda\\s+sa|halka)\\s+(?:badhao|tez\\s+karo|zyada\\s+karo|up)$")
+        ) || clean in setOf("louder", "volume up", "turn it up", "turn up")
+        val anchorUp = hasVolumeAnchor && Regex(
+            "\\b(up|increase|raise|higher|loud|louder|badhao|tez|zyada|pump)\\b"
+        ).containsMatchIn(clean)
+        if (standaloneRelativeUp || anchorUp) {
+            return ParsedVolumeCommand(
+                action = "increase",
+                stream = stream,
+                percentage = null,
+                stepPercent = stepMod,
+                steps = explicitSteps
+            )
+        }
+
+        // 7. Relative Decrease
+        val standaloneRelativeDown = clean.matches(
+            Regex("^(?:please\\s+|zara\\s+)?(?:thoda|thoda\\s+sa|halka)\\s+(?:kam|kam\\s+karo|ghatao|dheema\\s+karo|down)$")
+        ) || clean in setOf("quieter", "softer", "volume down", "turn it down", "turn down")
+        val anchorDown = hasVolumeAnchor && Regex(
+            "\\b(down|decrease|lower|reduce|quieter|softer|slow|kam|ghatao|dheema|dhima|less)\\b"
+        ).containsMatchIn(clean)
+        if (standaloneRelativeDown || anchorDown) {
+            return ParsedVolumeCommand(
+                action = "decrease",
+                stream = stream,
+                percentage = null,
+                stepPercent = stepMod,
+                steps = explicitSteps
+            )
+        }
+
+        return null
     }
 
     fun parseVolumeArgs(
         rawAction: String?,
         rawPercentage: Any?,
         rawStream: String?,
-        rawStepPercent: Any? = null
+        rawStepPercent: Any? = null,
+        rawSteps: Any? = null
     ): ParsedVolumeCommand {
-        val stream = normalizeStream(rawStream)
+        var stream = normalizeStream(rawStream)
         var pct = parsePercentageAny(rawPercentage)
-        val stepPct = (parsePercentageAny(rawStepPercent) ?: 15).coerceIn(5, 50)
+        var stepPct = parseStepPercentAny(rawStepPercent) ?: 15
+        var steps = parseIntAny(rawSteps)?.coerceIn(1, 20)
         val actLower = HindiAsrNormalizer.normalize(rawAction.orEmpty())
             .trim()
             .lowercase(Locale.ROOT)
 
-        val resolvedAction = when {
+        var resolvedAction = when {
             actLower in setOf("set", "put", "karo", "set_to", "exact") -> "set"
             actLower in setOf("full", "max", "maximum") -> {
                 pct = pct ?: 100
                 "set"
             }
-            actLower in setOf("half", "medium", "mid") -> {
+            actLower in setOf("half", "medium", "mid", "aadha", "adha") -> {
                 pct = pct ?: 50
                 "set"
             }
@@ -99,6 +298,17 @@ object DeviceControlHelper {
             actLower in setOf("get", "check", "status", "read", "current", "kitna") -> "get"
             actLower.isBlank() && pct != null -> "set"
             else -> ""
+        }
+
+        if (resolvedAction.isBlank() && actLower.isNotBlank()) {
+            val natural = parseNaturalVolumeCommand(actLower, defaultStream = stream)
+            if (natural != null) {
+                resolvedAction = natural.action
+                if (rawStream.isNullOrBlank()) stream = natural.stream
+                pct = pct ?: natural.percentage
+                if (rawStepPercent == null) stepPct = natural.stepPercent
+                steps = steps ?: natural.steps
+            }
         }
 
         if (resolvedAction.isBlank()) {
@@ -124,7 +334,8 @@ object DeviceControlHelper {
             action = resolvedAction,
             stream = stream,
             percentage = pct,
-            stepPercent = stepPct
+            stepPercent = stepPct,
+            steps = steps
         )
     }
 

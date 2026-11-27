@@ -48,6 +48,58 @@ class DeviceVolumeAndBatteryFixTest {
     }
 
     @Test
+    fun `parseNaturalVolumeCommand handles Hinglish, relative steps, absolute values, and safety guards`() {
+        val up = DeviceControlHelper.parseNaturalVolumeCommand("volume badhao")
+        assertNotNull(up)
+        assertEquals("increase", up?.action)
+        assertEquals("music", up?.stream)
+
+        val awazDown = DeviceControlHelper.parseNaturalVolumeCommand("awaz ghatao")
+        assertNotNull(awazDown)
+        assertEquals("decrease", awazDown?.action)
+
+        val pct50 = DeviceControlHelper.parseNaturalVolumeCommand("volume 50 percent karo")
+        assertNotNull(pct50)
+        assertEquals("set", pct50?.action)
+        assertEquals(50, pct50?.percentage)
+
+        val abs70 = DeviceControlHelper.parseNaturalVolumeCommand("volume 70 karo")
+        assertNotNull(abs70)
+        assertEquals("set", abs70?.action)
+        assertEquals(70, abs70?.percentage)
+
+        val fullVol = DeviceControlHelper.parseNaturalVolumeCommand("full volume")
+        assertNotNull(fullVol)
+        assertEquals("set", fullVol?.action)
+        assertEquals(100, fullVol?.percentage)
+
+        val muteCmd = DeviceControlHelper.parseNaturalVolumeCommand("mute karo")
+        assertNotNull(muteCmd)
+        assertEquals("mute", muteCmd?.action)
+
+        val unmuteCmd = DeviceControlHelper.parseNaturalVolumeCommand("unmute karo")
+        assertNotNull(unmuteCmd)
+        assertEquals("unmute", unmuteCmd?.action)
+
+        val smallStep = DeviceControlHelper.parseNaturalVolumeCommand("thoda badhao")
+        assertNotNull(smallStep)
+        assertEquals("increase", smallStep?.action)
+        assertEquals(1, smallStep?.steps)
+        assertEquals(8, smallStep?.stepPercent)
+
+        val ringSet = DeviceControlHelper.parseNaturalVolumeCommand("ringtone volume 80 percent karo")
+        assertNotNull(ringSet)
+        assertEquals("set", ringSet?.action)
+        assertEquals("ring", ringSet?.stream)
+        assertEquals(80, ringSet?.percentage)
+
+        // Safety guards: must NOT hijack negations, brightness/flashlight, or code questions
+        assertNull(DeviceControlHelper.parseNaturalVolumeCommand("volume kam mat karo"))
+        assertNull(DeviceControlHelper.parseNaturalVolumeCommand("brightness badhao"))
+        assertNull(DeviceControlHelper.parseNaturalVolumeCommand("how to fix volume in android code"))
+    }
+
+    @Test
     fun `evaluateVolumeOutcome verifies exact changes and exposes 67 percent Safe Volume cap`() {
         // Verified exact change to ~50% (8/15 = 53%)
         val ok50 = DeviceControlHelper.evaluateVolumeOutcome(

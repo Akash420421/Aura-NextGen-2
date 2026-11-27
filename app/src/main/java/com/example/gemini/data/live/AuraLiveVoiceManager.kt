@@ -92,14 +92,16 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private val lastProactiveUpdateAt = AtomicLong(0L)
     private val pendingUserTurnBuffer = StringBuilder()
     private val userTurnBufferLock = Any()
+    @Volatile
+    private var volumeToolCalledInCurrentTurn = false
 
-    private fun flushPendingUserTurnForMemory() {
+    private fun flushPendingUserTurnForMemory(): String {
         val fullTurn = synchronized(userTurnBufferLock) {
             val s = pendingUserTurnBuffer.toString().trim()
             pendingUserTurnBuffer.clear()
             s
         }
-        val ctx = appContext ?: return
+        val ctx = appContext ?: return fullTurn
         if (fullTurn.isNotBlank()) {
             AuraMemoryManager.processCompletedTurnAsync(
                 context = ctx,
@@ -107,6 +109,49 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 assistantResponse = _spokenSentence.value,
                 isVoice = true
             )
+        }
+        return fullTurn
+    }
+
+    private fun handleMissedVoiceVolumeCommand(userTurn: String) {
+        val parsed = DeviceControlHelper.parseNaturalVolumeCommand(userTurn) ?: return
+        val ctx = appContext ?: return
+        val activeScope = scope ?: return
+        activeScope.launch(Dispatchers.IO) {
+            val pc = phoneControlManager ?: PhoneControlManager(ctx.applicationContext)
+            Log.i(TAG, "[VoiceFallback] Gemini missed set_volume for '$userTurn' -> executing ${parsed.action} (stream=${parsed.stream})")
+            val batch = when (parsed.action) {
+                "get" -> pc.getVolumeSummaryDetailed(parsed.stream)
+                "set" -> pc.setVolumePercentDetailed(
+                    percent = parsed.percentage ?: 50,
+                    stream = parsed.stream,
+                    silentFeedback = true
+                )
+                "increase" -> pc.adjustVolumeDetailed(
+                    increase = true,
+                    stream = parsed.stream,
+                    stepPercent = parsed.stepPercent,
+                    silentFeedback = true,
+                    steps = parsed.steps
+                )
+                "decrease" -> pc.adjustVolumeDetailed(
+                    increase = false,
+                    stream = parsed.stream,
+                    stepPercent = parsed.stepPercent,
+                    silentFeedback = true,
+                    steps = parsed.steps
+                )
+                "mute" -> pc.setStreamMutedDetailed(mute = true, stream = parsed.stream, silentFeedback = true)
+                "unmute" -> pc.setStreamMutedDetailed(mute = false, stream = parsed.stream, silentFeedback = true)
+                else -> return@launch
+            }
+            ChatContextBridge.recordToolExecution("set_volume", batch.message)
+            if (!batch.verified) {
+                webSocket?.sendSystemStatusUpdate(
+                    "Volume change failed or blocked: ${batch.message}. Inform the user honestly.",
+                    turnComplete = true
+                )
+            }
         }
     }
 
@@ -782,6 +827,9 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         }
         ChatContextBridge.recordVoiceUserTurn(normalized)
         synchronized(userTurnBufferLock) {
+            if (pendingUserTurnBuffer.isEmpty()) {
+                volumeToolCalledInCurrentTurn = false
+            }
             if (pendingUserTurnBuffer.isNotEmpty()) pendingUserTurnBuffer.append(' ')
             pendingUserTurnBuffer.append(normalized)
             if (pendingUserTurnBuffer.length > 2000) {
@@ -791,6 +839,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     override fun onInterrupted() {
+        volumeToolCalledInCurrentTurn = false
         flushPendingUserTurnForMemory()
         audioPlayer?.flush()
         _spokenSentence.value = ""
@@ -799,7 +848,12 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     override fun onTurnCompleted() {
-        flushPendingUserTurnForMemory()
+        val completedUserTurn = flushPendingUserTurnForMemory()
+        val ranVolumeTool = volumeToolCalledInCurrentTurn
+        volumeToolCalledInCurrentTurn = false
+        if (!ranVolumeTool && completedUserTurn.isNotBlank()) {
+            handleMissedVoiceVolumeCommand(completedUserTurn)
+        }
         audioPlayer?.notifyTurnComplete()
         if (_phase.value != Phase.SPEAKING && _phase.value != Phase.MUTED && _phase.value != Phase.WORKING) {
             _phase.value = Phase.IDLE_READY
@@ -885,7 +939,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     private suspend fun executeTool(name: String, args: JSONObject): JSONObject {
         val context = appContext ?: return JSONObject().put("status", "error").put("message", "Context unavailable")
-        val phoneControl = phoneControlManager ?: PhoneControlManager(context)
+        val phoneControl = phoneControlManager ?: PhoneControlManager(context.applicationContext)
         Log.i(TAG, "Executing tool '$name' with args: $args")
 
         return try {
@@ -2113,7 +2167,10 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
 
                 "set_volume" -> {
+                    volumeToolCalledInCurrentTurn = true
                     val rawAction = args.optString("action", "")
+                        .ifBlank { args.optString("command", "") }
+                        .ifBlank { args.optString("query", "") }
                     val rawStream = args.optString("stream", "music").ifBlank { "music" }
                     val rawPct: Any? = when {
                         args.has("percentage") -> args.opt("percentage")
@@ -2128,13 +2185,20 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         args.has("step") -> args.opt("step")
                         else -> null
                     }
+                    val rawSteps: Any? = when {
+                        args.has("steps") -> args.opt("steps")
+                        args.has("levels") -> args.opt("levels")
+                        else -> null
+                    }
                     val parsed = DeviceControlHelper.parseVolumeArgs(
                         rawAction = rawAction,
                         rawPercentage = rawPct,
                         rawStream = rawStream,
-                        rawStepPercent = rawStep
+                        rawStepPercent = rawStep,
+                        rawSteps = rawSteps
                     )
                     if (parsed.parseError != null) {
+                        Log.w(TAG, "set_volume parseError for args=$args -> ${parsed.parseError}")
                         JSONObject()
                             .put("status", "error")
                             .put("verified", false)
@@ -2152,13 +2216,15 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                                 increase = true,
                                 stream = parsed.stream,
                                 stepPercent = parsed.stepPercent,
-                                silentFeedback = voiceActive
+                                silentFeedback = voiceActive,
+                                steps = parsed.steps
                             )
                             "decrease" -> phoneControl.adjustVolumeDetailed(
                                 increase = false,
                                 stream = parsed.stream,
                                 stepPercent = parsed.stepPercent,
-                                silentFeedback = voiceActive
+                                silentFeedback = voiceActive,
+                                steps = parsed.steps
                             )
                             "mute" -> phoneControl.setStreamMutedDetailed(
                                 mute = true,
@@ -2175,6 +2241,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                         JSONObject().apply {
                             put("status", if (batch.verified) "success" else "error")
                             put("verified", batch.verified)
+                            put("permission_required", batch.permissionRequired)
                             put("action", parsed.action)
                             put("stream", parsed.stream)
                             put("actual_percent", batch.actualPercent)
