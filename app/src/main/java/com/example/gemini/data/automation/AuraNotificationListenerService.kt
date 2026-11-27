@@ -47,9 +47,13 @@ class AuraNotificationListenerService : NotificationListenerService() {
         super.onListenerDisconnected()
     }
 
-    fun getActiveSnapshot(limit: Int = 10): List<AutomationAccessibilityService.CapturedNotification> {
-        val sbns = runCatching { activeNotifications }.getOrNull() ?: return emptyList()
-        val results = mutableListOf<AutomationAccessibilityService.CapturedNotification>()
+    fun getActiveSnapshot(limit: Int = 10): List<AutomationAccessibilityService.Companion.CapturedNotification> {
+        val sbns: Array<StatusBarNotification> = try {
+            activeNotifications
+        } catch (_: Throwable) {
+            null
+        } ?: return emptyList()
+        val results = mutableListOf<AutomationAccessibilityService.Companion.CapturedNotification>()
         for (sbn in sbns.sortedByDescending { it.postTime }) {
             val pkg = sbn.packageName ?: continue
             if (pkg == packageName || pkg == "android" || pkg == "com.android.systemui") continue
@@ -62,7 +66,7 @@ class AuraNotificationListenerService : NotificationListenerService() {
             val combined = listOf(title, body).filter { it.isNotBlank() }.joinToString(": ")
             if (combined.isNotBlank()) {
                 results.add(
-                    AutomationAccessibilityService.CapturedNotification(
+                    AutomationAccessibilityService.Companion.CapturedNotification(
                         packageName = pkg,
                         text = combined.take(500),
                         timestamp = sbn.postTime
@@ -100,7 +104,7 @@ class AuraNotificationListenerService : NotificationListenerService() {
                 AutomationAccessibilityService.recordNotification(pkg, combined)
                 AccessibilityGestureMath.extractOtpCode(combined)?.let { otp ->
                     AutomationAccessibilityService.latestExtractedOtp =
-                        AutomationAccessibilityService.ExtractedOtp(otp, System.currentTimeMillis(), pkg)
+                        AutomationAccessibilityService.Companion.ExtractedOtp(otp, System.currentTimeMillis(), pkg)
                 }
             }
         }

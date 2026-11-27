@@ -2734,7 +2734,7 @@ class AgyChatBackend(
             val userRes = agyHubClient.getLocalUserInfo(hubUrl)
             if (userRes.isSuccess) {
                 val (username, _) = userRes.getOrThrow()
-                if (username.isNotBlank() && _userEmail.value.isBlank()) {
+                if (username.isNotBlank() && _userEmail.value.isNullOrBlank()) {
                     _userEmail.value = username
                 }
             }

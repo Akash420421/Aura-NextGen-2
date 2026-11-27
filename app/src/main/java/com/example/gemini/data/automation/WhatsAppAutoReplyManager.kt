@@ -235,7 +235,11 @@ object WhatsAppAutoReplyManager {
             // Keep live voice notifications snappy (<1s) while preserving full AI drafting offline
             val draft = if (liveActive && decision.action == WhatsAppAutoReplyHelper.ReplyAction.SMART_CONFIRM) {
                 kotlinx.coroutines.withTimeoutOrNull(900L) { draftReplyText(incoming) }
-                    ?: WhatsAppAutoReplyHelper.buildSmartTemplateReply(incoming, JarvisPreferences.waAutoReplyTemplate.value)
+                    ?: WhatsAppAutoReplyHelper.generateContextualFallbackDraft(
+                        senderName = incoming.cleanSenderName,
+                        incomingText = incoming.messageText,
+                        defaultTemplate = JarvisPreferences.waAutoReplyTemplate.value
+                    )
             } else {
                 draftReplyText(incoming)
             }

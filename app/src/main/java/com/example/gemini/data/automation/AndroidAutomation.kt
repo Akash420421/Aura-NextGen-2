@@ -412,12 +412,14 @@ object AndroidAutomation {
     fun readRecentNotificationsJson(limit: Int = 10, maxAgeSeconds: Long = 1800L): JSONObject {
         val maxItems = limit.coerceIn(1, 20)
         val fromRing = AutomationAccessibilityService.getRecentNotifications(maxItems, maxAgeSeconds.coerceIn(5L, 7_200L) * 1_000L)
-        val fromActive = runCatching {
+        val fromActive: List<AutomationAccessibilityService.Companion.CapturedNotification> = try {
             AuraNotificationListenerService.instance?.getActiveSnapshot(maxItems).orEmpty()
-        }.getOrDefault(emptyList())
+        } catch (_: Throwable) {
+            emptyList()
+        }
 
         val seen = LinkedHashSet<String>()
-        val merged = mutableListOf<AutomationAccessibilityService.CapturedNotification>()
+        val merged = mutableListOf<AutomationAccessibilityService.Companion.CapturedNotification>()
         for (item in (fromRing + fromActive).sortedByDescending { it.timestamp }) {
             val sig = "${item.packageName}|${item.text.lowercase()}"
             if (seen.add(sig)) {
