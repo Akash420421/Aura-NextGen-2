@@ -560,17 +560,93 @@ object DeviceControlHelper {
 
         if (pkg.contains("youtube")) {
             val hasShortsId = idsLower.any {
-                it.contains("reel") || it.contains("shorts_player") || it.contains("shorts_video")
+                it.contains("reel") || it.contains("shorts_player") || it.contains("shorts_video") ||
+                    it.contains("shorts_container") || it.contains("shorts_pivot") || it.contains("shorts_shelf_player")
             }
             val hasShortsMeta = combinedMeta.any {
                 it.contains("shorts remix") ||
                     it.contains("dislike this video") ||
                     it.contains("use this sound") ||
-                    it.contains("remix this short")
+                    it.contains("remix this short") ||
+                    it.contains("remix this sound") ||
+                    it.contains("like this video") && combinedMeta.any { c -> c.contains("comment") || c.contains("remix") || c.contains("dislike") }
             }
-            return hasShortsId || hasShortsMeta
+            val isHomeOrSearchFeed = idsLower.any { it.contains("results") || it.contains("watch_next") || it.contains("pivot_bar") } &&
+                !hasShortsId
+            val hasActionStackWithoutHomeTabs = !isHomeOrSearchFeed &&
+                combinedMeta.any { it == "like" || it.contains("like this video") || it.contains("पसंद") } &&
+                combinedMeta.any { it.contains("dislike") || it.contains("नापसंद") } &&
+                combinedMeta.any { it.contains("comment") || it.contains("टिप्पण") }
+            return hasShortsId || hasShortsMeta || hasActionStackWithoutHomeTabs
         }
 
         return false
+    }
+
+    data class ParsedAlarmCommand(
+        val action: String, // "set_alarm", "set_timer", "show_alarms"
+        val hour: Int? = null,
+        val minute: Int? = null,
+        val timerSeconds: Int? = null,
+        val label: String = "",
+        val parseError: String? = null
+    )
+
+    fun parseAlarmArgs(
+        rawAction: String?,
+        rawHour: Any? = null,
+        rawMinute: Any? = null,
+        rawTimeText: String? = null,
+        rawDurationSeconds: Any? = null,
+        rawLabel: String? = null
+    ): ParsedAlarmCommand {
+        val actNorm = HindiAsrNormalizer.normalize(rawAction.orEmpty()).trim().lowercase(Locale.ROOT)
+        val label = rawLabel?.trim().orEmpty()
+        val timeText = HindiAsrNormalizer.normalize(rawTimeText.orEmpty()).trim().lowercase(Locale.ROOT)
+
+        if (actNorm in setOf("show", "list", "view", "open", "dekho", "dikhao")) {
+            return ParsedAlarmCommand(action = "show_alarms", label = label)
+        }
+
+        val durSec = parseTimeoutSecondsAny(rawDurationSeconds)
+        if (actNorm in setOf("timer", "set_timer", "countdown") || durSec != null) {
+            val secs = (durSec ?: 60).coerceIn(1, 24 * 3600)
+            return ParsedAlarmCommand(action = "set_timer", timerSeconds = secs, label = label)
+        }
+
+        var hour = parseIntAny(rawHour)
+        var minute = parseIntAny(rawMinute)
+        if (hour == null && timeText.isNotBlank()) {
+            val m = Regex("""(\d{1,2})(?::(\d{1,2}))?\s*(am|pm|a\.m\.|p\.m\.)?""").find(timeText)
+            if (m != null) {
+                var parsedH = m.groupValues[1].toIntOrNull()
+                val parsedM = m.groupValues[2].toIntOrNull() ?: 0
+                val mer = m.groupValues[3].replace(".", "").lowercase(Locale.ROOT)
+                val isPmHint = mer == "pm" || timeText.contains("sham") || timeText.contains("evening") || timeText.contains("raat") || timeText.contains("night") || timeText.contains("dopahar")
+                val isAmHint = mer == "am" || timeText.contains("subah") || timeText.contains("morning")
+                if (parsedH != null) {
+                    if (isPmHint && parsedH in 1..11) parsedH += 12
+                    if (isAmHint && parsedH == 12) parsedH = 0
+                    hour = parsedH
+                    minute = minute ?: parsedM
+                }
+            }
+        }
+        val h = hour
+        if (h == null || h !in 0..23) {
+            return ParsedAlarmCommand(
+                action = "set_alarm",
+                label = label,
+                parseError = "Missing valid hour (0-23) to set alarm."
+            )
+        }
+        val min = (minute ?: 0).coerceIn(0, 59)
+        return ParsedAlarmCommand(action = "set_alarm", hour = h, minute = min, label = label)
+    }
+
+    private fun parseIntAny(raw: Any?): Int? = when (raw) {
+        is Number -> raw.toInt()
+        is String -> raw.trim().replace(Regex("[^0-9-]+"), "").toIntOrNull()
+        else -> null
     }
 }

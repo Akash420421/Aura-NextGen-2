@@ -8,28 +8,70 @@ import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.example.gemini.data.jarvis.JarvisPreferences
+import com.example.gemini.data.live.AuraAgentEvent
+import com.example.gemini.data.live.AuraAgentEventBus
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Real Android NotificationListenerService powering:
  * 1) Rich notification capture into [AutomationAccessibilityService.recordNotification] (including OTP extraction)
- * 2) #18 WhatsApp Notification Auto-Reply (capturing MessagingStyle text + RemoteInput Reply PendingIntent)
+ * 2) Proactive incoming message events for all messaging/SMS/email apps while Live Voice is active
+ * 3) #18 WhatsApp Notification Auto-Reply (capturing MessagingStyle text + RemoteInput Reply PendingIntent)
  */
 class AuraNotificationListenerService : NotificationListenerService() {
 
     companion object {
         private const val TAG = "AuraNotifListener"
+        private const val ANNOUNCE_DEDUPE_MS = 20_000L
+
+        @Volatile
+        var instance: AuraNotificationListenerService? = null
+            private set
+
+        private val announcedFingerprints = ConcurrentHashMap<String, Long>()
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        instance = this
         WhatsAppAutoReplyManager.setListenerConnected(true)
         Log.i(TAG, "NotificationListenerService connected")
     }
 
     override fun onListenerDisconnected() {
+        if (instance === this) instance = null
         WhatsAppAutoReplyManager.setListenerConnected(false)
         Log.w(TAG, "NotificationListenerService disconnected")
         super.onListenerDisconnected()
+    }
+
+    fun getActiveSnapshot(limit: Int = 10): List<AutomationAccessibilityService.CapturedNotification> {
+        val sbns = runCatching { activeNotifications }.getOrNull() ?: return emptyList()
+        val results = mutableListOf<AutomationAccessibilityService.CapturedNotification>()
+        for (sbn in sbns.sortedByDescending { it.postTime }) {
+            val pkg = sbn.packageName ?: continue
+            if (pkg == packageName || pkg == "android" || pkg == "com.android.systemui") continue
+            val n = sbn.notification ?: continue
+            if ((n.flags and Notification.FLAG_GROUP_SUMMARY) != 0) continue
+            if ((n.flags and Notification.FLAG_ONGOING_EVENT) != 0) continue
+            val extras = n.extras ?: Bundle.EMPTY
+            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+            val body = extractBestNotificationBody(n, extras).trim()
+            val combined = listOf(title, body).filter { it.isNotBlank() }.joinToString(": ")
+            if (combined.isNotBlank()) {
+                results.add(
+                    AutomationAccessibilityService.CapturedNotification(
+                        packageName = pkg,
+                        text = combined.take(500),
+                        timestamp = sbn.postTime
+                    )
+                )
+                if (results.size >= limit) break
+            }
+        }
+        return results
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -56,25 +98,117 @@ class AuraNotificationListenerService : NotificationListenerService() {
                 .joinToString(": ")
             if (combined.isNotBlank()) {
                 AutomationAccessibilityService.recordNotification(pkg, combined)
+                AccessibilityGestureMath.extractOtpCode(combined)?.let { otp ->
+                    AutomationAccessibilityService.latestExtractedOtp =
+                        AutomationAccessibilityService.ExtractedOtp(otp, System.currentTimeMillis(), pkg)
+                }
             }
         }
 
-        // Route WhatsApp / WhatsApp Business notifications to #18 Smart Confirm / Auto-Reply
-        if (!WhatsAppAutoReplyHelper.isWhatsAppPackage(pkg)) return
         if (isOngoing || isGroupSummary) return
 
-        val replyHandle = extractReplyActionHandle(sbn.key, notification)
-        WhatsAppAutoReplyManager.onWhatsAppNotificationPosted(
-            context = applicationContext,
-            notificationKey = sbn.key,
-            packageName = pkg,
-            rawTitle = rawTitle,
-            rawText = messageBody,
-            conversationTitle = conversationTitle,
-            isGroupConversationExtra = isGroupConv,
-            isGroupSummary = isGroupSummary,
-            replyHandle = replyHandle
-        )
+        // Route WhatsApp / WhatsApp Business notifications to #18 Smart Confirm / Auto-Reply when enabled
+        JarvisPreferences.init(applicationContext)
+        val isWhatsApp = WhatsAppAutoReplyHelper.isWhatsAppPackage(pkg)
+        if (isWhatsApp && JarvisPreferences.waAutoReplyEnabled.value) {
+            val replyHandle = extractReplyActionHandle(sbn.key, notification)
+            WhatsAppAutoReplyManager.onWhatsAppNotificationPosted(
+                context = applicationContext,
+                notificationKey = sbn.key,
+                packageName = pkg,
+                rawTitle = rawTitle,
+                rawText = messageBody,
+                conversationTitle = conversationTitle,
+                isGroupConversationExtra = isGroupConv,
+                isGroupSummary = isGroupSummary,
+                replyHandle = replyHandle
+            )
+            return
+        }
+
+        // Emit live voice read-aloud event for incoming messages across SMS, Telegram, Instagram, Messenger, Gmail, etc.
+        if (shouldAnnounceGenericNotification(pkg, notification, extras, rawTitle, messageBody)) {
+            val sender = rawTitle.trim().ifBlank { resolveAppFriendlyName(pkg) }
+            val text = messageBody.trim()
+            val combined = "$sender: $text"
+            val fp = "${pkg.lowercase(Locale.ROOT)}|${sender.lowercase(Locale.ROOT)}|${text.lowercase(Locale.ROOT)}"
+            val now = System.currentTimeMillis()
+            val prev = announcedFingerprints[fp]
+            if (prev != null && now - prev < ANNOUNCE_DEDUPE_MS) return
+            announcedFingerprints[fp] = now
+            if (announcedFingerprints.size > 60) {
+                val cutoff = now - ANNOUNCE_DEDUPE_MS * 2
+                val it = announcedFingerprints.entries.iterator()
+                while (it.hasNext()) {
+                    if (it.next().value < cutoff) it.remove()
+                }
+            }
+            val otp = AccessibilityGestureMath.extractOtpCode(combined)
+            AuraAgentEventBus.emit(
+                AuraAgentEvent.IncomingMessageNotification(
+                    notificationKey = sbn.key,
+                    appName = resolveAppFriendlyName(pkg),
+                    packageName = pkg,
+                    senderName = sender,
+                    messageText = text.ifBlank { combined }.take(300),
+                    otpCode = otp
+                )
+            )
+        }
+    }
+
+    private fun shouldAnnounceGenericNotification(
+        pkg: String,
+        notification: Notification,
+        extras: Bundle,
+        title: String,
+        body: String
+    ): Boolean {
+        val pkgLower = pkg.lowercase(Locale.ROOT)
+        if (pkgLower == "android" || pkgLower == "com.android.systemui" ||
+            pkgLower.contains("downloadmanager") || pkgLower.contains("vending")
+        ) {
+            return false
+        }
+        val cat = notification.category
+        if (cat == Notification.CATEGORY_PROGRESS || cat == Notification.CATEGORY_SERVICE ||
+            cat == Notification.CATEGORY_TRANSPORT || cat == Notification.CATEGORY_SYSTEM
+        ) {
+            return false
+        }
+        if (title.isBlank() && body.isBlank()) return false
+        val bodyLower = body.lowercase(Locale.ROOT)
+        if (bodyLower.contains("checking for new messages") ||
+            bodyLower.contains("backup in progress") ||
+            bodyLower.contains("downloading")
+        ) {
+            return false
+        }
+
+        val isMessagingCategory = cat == Notification.CATEGORY_MESSAGE ||
+            cat == Notification.CATEGORY_EMAIL ||
+            cat == Notification.CATEGORY_SOCIAL ||
+            extras.containsKey(Notification.EXTRA_MESSAGES) ||
+            extras.containsKey(Notification.EXTRA_CONVERSATION_TITLE) ||
+            notification.actions?.any { it.remoteInputs?.isNotEmpty() == true } == true
+
+        val isKnownMsgPkg = listOf(
+            "whatsapp", "messaging", "mms", "sms", "telegram", "instagram", "orca",
+            "facebook.mlite", "snapchat", "signal", "viber", "slack", "discord",
+            "teams", "gm", "gmail", "outlook", "yahoo", "truecaller", "dialer", "contacts"
+        ).any { pkgLower.contains(it) }
+
+        return isMessagingCategory || isKnownMsgPkg
+    }
+
+    private fun resolveAppFriendlyName(pkg: String): String {
+        val pm = applicationContext.packageManager
+        val appName = runCatching {
+            val info = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(info).toString().trim()
+        }.getOrNull()
+        if (!appName.isNullOrBlank()) return appName
+        return pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
     }
 
     private fun extractBestNotificationBody(notification: Notification, extras: Bundle): String {

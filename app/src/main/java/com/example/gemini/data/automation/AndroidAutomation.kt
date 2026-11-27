@@ -409,13 +409,28 @@ object AndroidAutomation {
         sections: String = "battery,device,memory,storage,display,network,audio,system"
     ): JSONObject = deviceInfo(context, sections)
 
-    fun readRecentNotificationsJson(limit: Int = 10, maxAgeSeconds: Long = 300L): JSONObject {
-        val list = AutomationAccessibilityService.getRecentNotifications(limit.coerceIn(1, 20), maxAgeSeconds.coerceIn(5L, 3_600L) * 1_000L)
+    fun readRecentNotificationsJson(limit: Int = 10, maxAgeSeconds: Long = 1800L): JSONObject {
+        val maxItems = limit.coerceIn(1, 20)
+        val fromRing = AutomationAccessibilityService.getRecentNotifications(maxItems, maxAgeSeconds.coerceIn(5L, 7_200L) * 1_000L)
+        val fromActive = runCatching {
+            AuraNotificationListenerService.instance?.getActiveSnapshot(maxItems).orEmpty()
+        }.getOrDefault(emptyList())
+
+        val seen = LinkedHashSet<String>()
+        val merged = mutableListOf<AutomationAccessibilityService.CapturedNotification>()
+        for (item in (fromRing + fromActive).sortedByDescending { it.timestamp }) {
+            val sig = "${item.packageName}|${item.text.lowercase()}"
+            if (seen.add(sig)) {
+                merged.add(item)
+                if (merged.size >= maxItems) break
+            }
+        }
         val otp = AutomationAccessibilityService.getRecentOtp()
         return JSONObject().apply {
             if (otp != null) put("recent_otp", otp)
+            put("listener_connected", AuraNotificationListenerService.instance != null)
             put("notifications", JSONArray().apply {
-                for (item in list) {
+                for (item in merged) {
                     put(JSONObject().apply {
                         put("package", item.packageName)
                         put("text", item.text)

@@ -518,6 +518,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         rememberCopies(chatId, refs)
         // a normal chat (a Jarvis chat carries its own guide instead): the app's global context goes in front
         val it = if (intercepted === expanded) withGlobalContext(chatId, expanded) else intercepted
+        // Automatically extract & merge durable facts/preferences/reminders from text chat in background
+        if (intercepted === expanded && content.isNotBlank()) {
+            com.example.gemini.data.live.AuraMemoryManager.processCompletedTurnAsync(
+                context = getApplication(),
+                userInput = content,
+                isVoice = false
+            )
+        }
         when {
             isClaudeActive -> claudeBackend.sendMessage(it)
             isOpenCodeActive -> openCodeBackend.sendMessage(it)
@@ -1469,7 +1477,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // the first chat follows the new-chat agent (Antigravity's own start-up chat only fills in when it is AGY)
         if ((isClaudeEnabled || isOpenCodeEnabled || isCodexEnabled) && (newChatAgent.value != AgentKind.AGY || AgentKind.AGY !in enabledAgents.value)) startNewChat()
         claudeAccount.onAccountChanged = {
-            claudeBackend.refreshInfo(force = true)
+            claudeBackend.resetAccountCaches()
             viewModelScope.launch { claudeBackend.refreshSessions() }
         }
         claudeBackend.onTurnFinished = { claudeAccount.refreshUsage(force = false) }

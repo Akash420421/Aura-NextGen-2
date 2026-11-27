@@ -1999,6 +1999,7 @@ class VisualTaskOrchestrator(
 
         val distLower = distance.lowercase(Locale.ROOT)
         val isShortVideoFeed = distLower == "reel" || distLower == "short" ||
+            service.isCurrentlyShortVideoFeed(rootNode) ||
             com.example.gemini.data.live.DeviceControlHelper.isShortVideoScreen(
                 packageName = pkg,
                 viewIds = preElements.map { it.viewId },
@@ -2013,13 +2014,20 @@ class VisualTaskOrchestrator(
         }
 
         AgentTaskEngine.setState(AgentTaskEngine.State.ACTING)
-        val success = service.performSmartScrollAndAwait(direction, distance)
+        var success = service.performSmartScrollAndAwait(direction, distance)
 
         AgentTaskEngine.current()?.scrollCount = (AgentTaskEngine.current()?.scrollCount ?: 0) + 1
         dispatchImmediateScreenFrame()
-        val uiWait = waitForUiState(preSignature, expectedPackage = service.getActiveRootNode()?.packageName?.toString(), timeoutMs = 8_000L)
-        val rootAfter = uiWait.root ?: service.getActiveRootNode()
-        val postSignature = uiWait.signature ?: ScreenSignatureCalculator.computeSignature(rootAfter)
+        var uiWait = waitForUiState(preSignature, expectedPackage = service.getActiveRootNode()?.packageName?.toString(), timeoutMs = 4_000L)
+        var rootAfter = uiWait.root ?: service.getActiveRootNode()
+        var postSignature = uiWait.signature ?: ScreenSignatureCalculator.computeSignature(rootAfter)
+        // If raw swipe gesture completed but tree didn't shift, try real visible Accessibility container scroll
+        if (postSignature.isEquivalentTo(preSignature) && service.performBestVisibleAccessibilityScroll(direction)) {
+            success = true
+            uiWait = waitForUiState(preSignature, expectedPackage = rootAfter?.packageName?.toString(), timeoutMs = 2_500L)
+            rootAfter = uiWait.root ?: service.getActiveRootNode()
+            postSignature = uiWait.signature ?: ScreenSignatureCalculator.computeSignature(rootAfter)
+        }
         if (postSignature.isEquivalentTo(preSignature)) {
             AgentTaskEngine.current()?.noProgressCount = (AgentTaskEngine.current()?.noProgressCount ?: 0) + 1
         } else {
@@ -2036,14 +2044,15 @@ class VisualTaskOrchestrator(
             elementsAfter.takeLast(6).joinToString("|") { "${it.id}:${it.primaryLabel}@${it.bounds.top}" }
         }
 
-        if (currentSignature.isNotBlank() && currentSignature == lastScreenSignature) {
+        val treeUnchanged = postSignature.isEquivalentTo(preSignature)
+        if (currentSignature.isNotBlank() && currentSignature == lastScreenSignature && treeUnchanged) {
             duplicateSignatureCount++
-            if (duplicateSignatureCount >= 2) {
+            if (duplicateSignatureCount >= 3) {
                 resetScrollCount()
                 val (pkg, title) = groundingEngine.extractScreenContext(rootAfter, elementsAfter)
                 return@withContext TaskActionResult(
                     success = false,
-                    message = "Reached end of screen in direction '$direction'. Cannot scroll further in this view. Current screen: '$title' in app '$pkg'. If looking for a photo/document, try opening another folder like 'WhatsApp Images', 'Screenshots', or 'Downloads'.",
+                    message = "Reached end of screen in direction '$direction'. Cannot scroll further in this view. Current screen: '$title' in app '$pkg'.",
                     currentStateSummary = groundingEngine.formatElementsSummary(elementsAfter, rootAfter)
                 )
             }
@@ -2053,10 +2062,10 @@ class VisualTaskOrchestrator(
         lastScreenSignature = currentSignature
 
         return@withContext TaskActionResult(
-            success = success && uiWait.ready,
+            success = success && (uiWait.ready || !treeUnchanged),
             message = "Scrolled screen $direction (scroll #$consecutiveScrollCount, distance: $distance).",
             currentStateSummary = groundingEngine.formatElementsSummary(elementsAfter, rootAfter),
-            verified = success && uiWait.ready && !postSignature.isEquivalentTo(preSignature)
+            verified = success && !treeUnchanged
         )
     }
 

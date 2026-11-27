@@ -622,10 +622,16 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         instanceRef = java.lang.ref.WeakReference(this)
+        com.example.gemini.data.live.ChatContextBridge.isMainActivityResumed = true
         if (com.example.gemini.ui.components.PermissionUtils.hasNotificationPermission(this)) {
             com.example.gemini.data.service.TermuxService.start(this)
         }
         com.example.gemini.data.local.LocalServerManager.autoStartOnAppLaunch(this)
+    }
+
+    override fun onPause() {
+        com.example.gemini.data.live.ChatContextBridge.isMainActivityResumed = false
+        super.onPause()
     }
 
     override fun onNewIntent(intent: Intent) {

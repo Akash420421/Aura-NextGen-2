@@ -559,15 +559,19 @@ class GeminiLiveWebSocket(
             // 6. media_playback_control
             put(JSONObject().apply {
                 put("name", "media_playback_control")
-                put("description", "Controls active playback (in-built browser video/audio OR phone media player): play, pause, toggle, next, previous, stop.")
+                put("description", "Controls active playback (in-built browser video/audio, native YouTube/Shorts/Reels, OR phone media player): play, pause, toggle, next, previous, stop, forward (+10s or seconds), rewind (-10s or seconds).")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("action", JSONObject().apply {
                             put("type", "STRING")
                             put("enum", JSONArray().apply {
-                                put("play"); put("pause"); put("toggle"); put("next"); put("previous"); put("stop")
+                                put("play"); put("pause"); put("toggle"); put("next"); put("previous"); put("stop"); put("forward"); put("rewind")
                             })
+                        })
+                        put("seconds", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional seek seconds for forward/rewind (default 10).")
                         })
                     })
                     put("required", JSONArray().put("action"))
@@ -577,15 +581,20 @@ class GeminiLiveWebSocket(
             // 6b. youtube_action
             put(JSONObject().apply {
                 put("name", "youtube_action")
-                put("description", "Controls smart YouTube actions (in native YouTube app OR in-built browser): skip visible Skip Ad button ('skip_ad'), play first visible video card ('play_first'), 'like', 'subscribe', 'fullscreen', 'play', 'pause', 'next', 'previous'.")
+                put("description", "Controls smart YouTube & short-video actions (native YouTube app, YouTube Shorts, Instagram Reels, OR in-built browser): skip visible Skip Ad button ('skip_ad'), play first visible video card ('play_first'), 'like', 'subscribe', 'fullscreen', 'forward' (skip +10s), 'rewind' (back -10s), 'play', 'pause', 'next' (swipes next on Shorts/Reels), 'previous'.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
                         put("action", JSONObject().apply {
                             put("type", "STRING")
                             put("enum", JSONArray().apply {
-                                put("skip_ad"); put("play_first"); put("like"); put("subscribe"); put("fullscreen"); put("play"); put("pause"); put("next"); put("previous")
+                                put("skip_ad"); put("play_first"); put("like"); put("subscribe"); put("fullscreen")
+                                put("forward"); put("rewind"); put("play"); put("pause"); put("next"); put("previous")
                             })
+                        })
+                        put("seconds", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Optional seconds for forward/rewind (default 10).")
                         })
                     })
                     put("required", JSONArray().put("action"))
@@ -955,7 +964,7 @@ class GeminiLiveWebSocket(
             // 16. scroll_screen
             put(JSONObject().apply {
                 put("name", "scroll_screen")
-                put("description", "Scrolls the active screen: 'down', 'up', 'left', or 'right'.")
+                put("description", "Scrolls the active phone app screen ('down', 'up', 'left', 'right') using reliable touch-fling + Accessibility container fallback. Automatically swipes next/previous if YouTube Shorts or Instagram Reels is on screen.")
                 put("parameters", JSONObject().apply {
                     put("type", "OBJECT")
                     put("properties", JSONObject().apply {
@@ -965,7 +974,7 @@ class GeminiLiveWebSocket(
                         })
                         put("distance", JSONObject().apply {
                             put("type", "STRING")
-                            put("description", "Scroll distance: 'small' (~35% screen), 'medium' (~65% screen, DEFAULT), or 'large' (~85% screen). Defaults to 'medium'.")
+                            put("description", "Scroll distance: 'small' (~40% screen), 'medium' (~65% screen, DEFAULT), or 'large' (~85% screen). Defaults to 'medium'.")
                         })
                     })
                     put("required", JSONArray().put("direction"))
@@ -1546,6 +1555,10 @@ class GeminiLiveWebSocket(
                                         put("type", "INTEGER")
                                         put("description", "Milliseconds to wait for 'wait' action.")
                                     })
+                                    put("seconds", JSONObject().apply {
+                                        put("type", "INTEGER")
+                                        put("description", "Seek seconds for forward/rewind (default 10).")
+                                    })
                                 })
                                 put("required", JSONArray().put("action"))
                             })
@@ -1691,6 +1704,83 @@ class GeminiLiveWebSocket(
                         })
                     })
                     put("required", JSONArray().put("answer"))
+                })
+            })
+
+            // 41. set_alarm
+            put(JSONObject().apply {
+                put("name", "set_alarm")
+                put("description", "Sets an alarm or countdown timer on the user's phone, or opens existing alarms. Call immediately when user says e.g. 'subah 6 baje ka alarm laga do', '6:30 AM alarm set karo', '10 minute ka timer lagao'.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("action", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply { put("set_alarm"); put("set_timer"); put("show_alarms") })
+                            put("description", "'set_alarm' (default), 'set_timer', or 'show_alarms'.")
+                        })
+                        put("hour", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "24-hour clock hour (0-23) for set_alarm (e.g. 6 for 6 AM, 18 for 6 PM).")
+                        })
+                        put("minute", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Minute (0-59) for set_alarm (default 0).")
+                        })
+                        put("time_text", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional spoken time string e.g. '6:30 AM' or 'subah 7 baje'.")
+                        })
+                        put("duration_seconds", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Countdown duration in seconds for set_timer (e.g. 300 for 5 min).")
+                        })
+                        put("label", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional alarm or timer label (e.g. 'Gym', 'Medicine').")
+                        })
+                    })
+                })
+            })
+
+            // 42. save_memory
+            put(JSONObject().apply {
+                put("name", "save_memory")
+                put("description", "Saves an important personal fact, preference, date, routine, relationship, reminder, or standing rule into Aura's persistent memory across chats and restarts. Call whenever the user explicitly asks to remember something OR mentions any durable important detail worth remembering.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("fact", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Concise statement of what to remember (e.g. 'User wakes up at 6 AM for gym', 'User likes black theme').")
+                        })
+                        put("category", JSONObject().apply {
+                            put("type", "STRING")
+                            put("enum", JSONArray().apply { put("PERSONAL"); put("PREFERENCE"); put("ROUTINE"); put("CONTACT"); put("PROJECT"); put("NOTE") })
+                            put("description", "Memory category.")
+                        })
+                        put("topic_key", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Optional short snake_case key to update/merge existing facts on the same topic (e.g. 'user_name', 'wake_time', 'favorite_color').")
+                        })
+                    })
+                    put("required", JSONArray().put("fact"))
+                })
+            })
+
+            // 43. forget_memory
+            put(JSONObject().apply {
+                put("name", "forget_memory")
+                put("description", "Deletes previously stored memories matching the given keyword or topic when the user asks to forget or remove something.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Keyword or topic to remove from persistent memory.")
+                        })
+                    })
+                    put("required", JSONArray().put("query"))
                 })
             })
         }

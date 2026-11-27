@@ -115,4 +115,19 @@ class AccessibilityAutomationTest {
         assertEquals("Message 25", recent[0].text)
         assertEquals("Message 21", recent[4].text)
     }
+
+    @Test
+    fun twoStageScrollAndReelMotionStayInsideSafeScreenBounds() {
+        val (scrollPlan, scrollDur) = AccessibilityGestureMath.computeSafeScrollPoints("down", "medium", 1080, 2400)
+        assertTrue(scrollDur in 200L..400L)
+        assertTrue(scrollPlan.start.y > scrollPlan.engageEnd.y)
+        assertTrue(scrollPlan.engageEnd.y > scrollPlan.flingEnd.y)
+        assertTrue(scrollPlan.flingEnd.y >= 100f && scrollPlan.start.y <= 2280f)
+
+        val reelUp = AccessibilityGestureMath.computeReelSwipeMotion(upward = true, attempt = 1, screenWidth = 1080, screenHeight = 2400)
+        assertTrue("Reel X should avoid right-side buttons", reelUp.start.x < 540f)
+        assertTrue(reelUp.start.y > reelUp.engageEnd.y)
+        assertTrue(reelUp.engageEnd.y > reelUp.flingEnd.y)
+        assertTrue(reelUp.flingEnd.y >= 120f && reelUp.start.y <= 2270f)
+    }
 }

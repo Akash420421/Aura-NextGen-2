@@ -19,6 +19,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.AlarmClock
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -105,8 +106,7 @@ class PhoneControlManager(private val context: Context) {
                 put("is_volume_fixed", runCatching { audioManager.isVolumeFixed }.getOrDefault(false))
             }
             runCatching {
-                val cur = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
-                put("brightness_percent", ((cur / 255.0) * 100).roundToInt().coerceIn(0, 100))
+                put("brightness_percent", readCurrentBrightnessPercent())
             }
         }
         info.put("hardware_controls", controls)
@@ -165,18 +165,27 @@ class PhoneControlManager(private val context: Context) {
         ActivityLauncherHelper.startActivitySafely(context, intent)
     }
 
-    private fun readCurrentBrightnessPercent(): Int {
-        // Prefer perceptual float brightness on Android P+ OEMs (Pixel, OnePlus, Samsung, Xiaomi)
-        val floatPct = runCatching {
-            val f = Settings.System.getFloat(context.contentResolver, "screen_brightness_float")
-            if (f in 0.0f..1.0f) (f * 100f).roundToInt().coerceIn(0, 100) else null
-        }.getOrNull()
-        if (floatPct != null) return floatPct
+    @Volatile
+    private var lastFloatBrightnessWritable: Boolean? = null
 
-        val intVal = runCatching {
-            Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
-        }.getOrDefault(128)
-        return ((intVal / 255.0) * 100.0).roundToInt().coerceIn(0, 100)
+    private fun readIntBrightnessPercent(): Int? = runCatching {
+        val intVal = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+        ((intVal / 255.0) * 100.0).roundToInt().coerceIn(0, 100)
+    }.getOrNull()
+
+    private fun readFloatBrightnessPercent(): Int? = runCatching {
+        val f = Settings.System.getFloat(context.contentResolver, "screen_brightness_float")
+        if (f in 0.0f..1.0f) (f * 100f).roundToInt().coerceIn(0, 100) else null
+    }.getOrNull()
+
+    private fun readCurrentBrightnessPercent(targetHint: Int? = null, preferInt: Boolean = (lastFloatBrightnessWritable == false)): Int {
+        val intPct = readIntBrightnessPercent()
+        val floatPct = readFloatBrightnessPercent()
+        if (targetHint != null && intPct != null && floatPct != null) {
+            return if (abs(intPct - targetHint) <= abs(floatPct - targetHint)) intPct else floatPct
+        }
+        if (preferInt && intPct != null) return intPct
+        return floatPct ?: intPct ?: 50
     }
 
     fun getBrightnessSummaryDetailed(): DeviceControlResult {
@@ -210,6 +219,7 @@ class PhoneControlManager(private val context: Context) {
         }
 
         return try {
+            val prePct = readCurrentBrightnessPercent()
             Settings.System.putInt(
                 context.contentResolver,
                 Settings.System.SCREEN_BRIGHTNESS_MODE,
@@ -217,28 +227,40 @@ class PhoneControlManager(private val context: Context) {
             )
 
             val brightnessValue = ((clamped / 100.0) * 255).roundToInt().coerceIn(1, 255)
-            Settings.System.putInt(
-                context.contentResolver,
-                Settings.System.SCREEN_BRIGHTNESS,
-                brightnessValue
-            )
-            // Modern Pixel / OnePlus / Samsung / Xiaomi OEMs respect float brightness alongside 0..255 int
-            runCatching {
+            val intWritten = runCatching {
+                Settings.System.putInt(
+                    context.contentResolver,
+                    Settings.System.SCREEN_BRIGHTNESS,
+                    brightnessValue
+                )
+            }.getOrDefault(false)
+            // Modern Pixel / OnePlus / Samsung / Xiaomi / vivo OEMs may use float brightness alongside 0..255 int
+            val floatWritten = runCatching {
                 Settings.System.putFloat(
                     context.contentResolver,
                     "screen_brightness_float",
                     (clamped / 100.0f).coerceIn(0.01f, 1.0f)
                 )
-            }
-            Thread.sleep(25)
-            val readBack = readCurrentBrightnessPercent()
+            }.getOrDefault(false)
+            lastFloatBrightnessWritable = floatWritten
+            Thread.sleep(45)
+            val readBack = readCurrentBrightnessPercent(targetHint = clamped, preferInt = !floatWritten)
+            val verified = (intWritten || floatWritten) && (
+                abs(readBack - clamped) <= 6 ||
+                    (clamped > prePct && readBack > prePct) ||
+                    (clamped < prePct && readBack < prePct)
+                )
             DeviceControlResult(
-                success = true,
-                verified = true,
+                success = verified,
+                verified = verified,
                 setting = "brightness",
                 state = "$readBack%",
                 actualPercent = readBack,
-                message = "Screen brightness set and verified at $readBack percent."
+                message = if (verified) {
+                    "Screen brightness set and verified at $readBack percent."
+                } else {
+                    "Requested brightness $clamped%, but system reported $readBack%."
+                }
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to set brightness: ${e.message}", e)
@@ -446,6 +468,9 @@ class PhoneControlManager(private val context: Context) {
                 else -> return@runCatching
             }
             audioManager.setStreamVolume(callStream, tgt, 0)
+            Thread.sleep(20)
+            val actualCall = audioManager.getStreamVolume(callStream).coerceIn(minVol, maxVol)
+            Log.d(TAG, "Synced STREAM_VOICE_CALL during comm mode: requested=$tgt actual=$actualCall/$maxVol")
         }
     }
 
@@ -779,6 +804,102 @@ class PhoneControlManager(private val context: Context) {
     }
 
     fun performSystemAction(action: String): String = performSystemActionDetailed(action).message
+
+    /**
+     * Creates an Android Alarm or Countdown Timer via standard Clock intents (`AlarmClock.ACTION_SET_ALARM`
+     * / `ACTION_SET_TIMER`) with skip-UI preference and graceful interactive Clock fallback.
+     */
+    fun setAlarmDetailed(
+        hour: Int,
+        minute: Int,
+        label: String = "",
+        days: ArrayList<Int>? = null
+    ): DeviceControlResult {
+        val h = hour.coerceIn(0, 23)
+        val m = minute.coerceIn(0, 59)
+        val cleanLabel = label.trim().ifBlank { "Aura Alarm" }
+        val baseIntent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+            putExtra(AlarmClock.EXTRA_HOUR, h)
+            putExtra(AlarmClock.EXTRA_MINUTES, m)
+            putExtra(AlarmClock.EXTRA_MESSAGE, cleanLabel)
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            if (!days.isNullOrEmpty()) {
+                putIntegerArrayListExtra(AlarmClock.EXTRA_DAYS, days)
+            }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val launchedQuietly = baseIntent.resolveActivity(context.packageManager) != null &&
+            ActivityLauncherHelper.startActivitySafely(context, baseIntent)
+        val launchedWithUi = if (!launchedQuietly) {
+            val fallbackIntent = Intent(baseIntent).apply { putExtra(AlarmClock.EXTRA_SKIP_UI, false) }
+            fallbackIntent.resolveActivity(context.packageManager) != null &&
+                ActivityLauncherHelper.startActivitySafely(context, fallbackIntent)
+        } else {
+            false
+        }
+        val formattedTime = String.format(Locale.US, "%02d:%02d", h, m)
+        val ok = launchedQuietly || launchedWithUi
+        return if (ok) {
+            DeviceControlResult(
+                success = true,
+                verified = true,
+                setting = "alarm",
+                state = formattedTime,
+                message = "Alarm set for $formattedTime ($cleanLabel)."
+            )
+        } else {
+            val deskClock = context.packageManager.getLaunchIntentForPackage("com.google.android.deskclock")
+                ?: context.packageManager.getLaunchIntentForPackage("com.android.deskclock")
+                ?: context.packageManager.getLaunchIntentForPackage("com.vivo.alarm")
+            deskClock?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (deskClock != null) ActivityLauncherHelper.startActivitySafely(context, deskClock)
+            DeviceControlResult(
+                success = false,
+                verified = false,
+                setting = "alarm",
+                message = "System Clock app did not accept silent alarm intent; ${if (deskClock != null) "opened Clock app so you can confirm $formattedTime" else "no compatible Clock app handler found"}."
+            )
+        }
+    }
+
+    fun setTimerDetailed(seconds: Int, label: String = ""): DeviceControlResult {
+        val secs = seconds.coerceIn(1, 24 * 3600)
+        val cleanLabel = label.trim().ifBlank { "Aura Timer" }
+        val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+            putExtra(AlarmClock.EXTRA_LENGTH, secs)
+            putExtra(AlarmClock.EXTRA_MESSAGE, cleanLabel)
+            putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val ok = (intent.resolveActivity(context.packageManager) != null &&
+            ActivityLauncherHelper.startActivitySafely(context, intent)) || run {
+            val uiIntent = Intent(intent).apply { putExtra(AlarmClock.EXTRA_SKIP_UI, false) }
+            uiIntent.resolveActivity(context.packageManager) != null &&
+                ActivityLauncherHelper.startActivitySafely(context, uiIntent)
+        }
+        val desc = if (secs >= 60 && secs % 60 == 0) "${secs / 60} min" else "${secs}s"
+        return DeviceControlResult(
+            success = ok,
+            verified = ok,
+            setting = "timer",
+            state = desc,
+            message = if (ok) "Timer set for $desc ($cleanLabel)." else "Could not find a Clock app handler to set a $desc timer."
+        )
+    }
+
+    fun showAlarmsDetailed(): DeviceControlResult {
+        val intent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val ok = intent.resolveActivity(context.packageManager) != null &&
+            ActivityLauncherHelper.startActivitySafely(context, intent)
+        return DeviceControlResult(
+            success = ok,
+            verified = ok,
+            setting = "alarm",
+            message = if (ok) "Opened Clock alarms list." else "Could not open Clock alarms."
+        )
+    }
 
     private fun setAutoRotateDetailed(enabled: Boolean?): DeviceControlResult {
         val currentOn = runCatching {

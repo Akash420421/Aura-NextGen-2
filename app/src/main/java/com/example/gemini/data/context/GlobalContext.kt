@@ -229,7 +229,9 @@ object GlobalContext {
         val known = chatId?.takeIf { it.isNotBlank() }?.let { id -> synchronized(sent) { sent[id] } }
         val sendFirst = first != null && (!hasEarlierMessages || known != fp)
         val every = everyMessageBody(chatId = chatId, hasEarlierMessages = hasEarlierMessages)
-        if (!sendFirst && every == null) return text to null
+        val chatMem = com.example.gemini.data.live.AuraMemoryManager.getChatMemoryContext(text)
+            .takeIf { it.isNotBlank() }
+        if (!sendFirst && every == null && chatMem == null) return text to null
         val note = buildString {
             if (sendFirst) {
                 append(
@@ -240,8 +242,12 @@ object GlobalContext {
                     }
                 ).append("\n\n").append(first)
             }
+            if (chatMem != null) {
+                if (isNotEmpty()) append("\n\n")
+                append(chatMem)
+            }
             if (every != null) {
-                if (sendFirst) append("\n\n")
+                if (isNotEmpty()) append("\n\n")
                 append(every)
             }
         }

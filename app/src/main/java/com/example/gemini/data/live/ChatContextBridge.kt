@@ -45,12 +45,16 @@ object ChatContextBridge {
         currentViewMode = upper
     }
 
+    @Volatile var isMainActivityResumed: Boolean = false
+
     fun isInBuiltBrowserOpen(): Boolean {
         return currentViewMode == "BROWSER" ||
             runCatching { com.example.gemini.ui.browser.BrowserSessionManager.instance.getActiveTab()?.isOnScreen == true }.getOrDefault(false)
     }
 
     fun isInBuiltBrowserActive(): Boolean {
+        if (!isMainActivityResumed) return false
+        if (isVoiceLandingVisible && currentViewMode != "BROWSER") return false
         if (!isInBuiltBrowserOpen()) return false
         val svc = com.example.gemini.data.automation.AutomationAccessibilityService.instance
         if (svc != null && svc.isExternalAppForeground()) {

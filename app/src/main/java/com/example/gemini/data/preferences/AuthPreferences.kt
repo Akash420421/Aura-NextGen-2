@@ -807,6 +807,15 @@ class AuthPreferences(private val context: Context) {
         }
     }
 
+    suspend fun clearModelSelectionCaches() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(PREFERRED_MODEL_ID)
+            prefs.remove(PREFERRED_MODEL_KEY)
+            prefs.remove(PREFERRED_MODEL_NAME)
+            prefs.remove(ENABLED_MODELS)
+        }
+    }
+
     suspend fun setCommandAutoExecutionPolicy(policy: String) {
         context.dataStore.edit { prefs ->
             prefs[COMMAND_AUTO_EXECUTION_POLICY] = policy

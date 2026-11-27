@@ -332,11 +332,22 @@ class CodexChatBackend(
         client.rpc("account/read", buildJsonObject { put("refreshToken", false) })
             .onSuccess { res ->
                 val o = res.obj()
+                val prevEmail = _account.value?.email
                 val acc = o.o("account")
-                _account.value = acc?.let { CodexAccount(it.str("type").orEmpty(), it.str("email"), it.str("planType")) }
+                val nextAccount = acc?.let { CodexAccount(it.str("type").orEmpty(), it.str("email"), it.str("planType")) }
+                val switchedAccount = nextAccount != null && !prevEmail.isNullOrBlank() &&
+                    !nextAccount.email.isNullOrBlank() && !prevEmail.equals(nextAccount.email, ignoreCase = true)
+                _account.value = nextAccount
                 val needsAuth = o?.get("requiresOpenaiAuth")?.toString() == "true"
                 _state.value = if (acc == null && needsAuth) CodexState.SIGNED_OUT else CodexState.READY
-                if (acc != null) refreshRateLimits()
+                if (switchedAccount) {
+                    _rateLimits.value = null
+                    _availableModels.value = emptyList()
+                    _selectedModelId.value = ""
+                    prefs.setModel("")
+                    refreshModels()
+                }
+                if (acc != null) refreshRateLimits() else _rateLimits.value = null
             }
             .onFailure { e ->
                 // Codex did not start (or answer): the status shows why
@@ -435,7 +446,15 @@ class CodexChatBackend(
     fun logout() {
         backendScope.launch {
             client.rpc("account/logout")
-                .onSuccess { refreshAccount() }
+                .onSuccess {
+                    _rateLimits.value = null
+                    _availableModels.value = emptyList()
+                    _account.value = null
+                    _selectedModelId.value = ""
+                    prefs.setModel("")
+                    prefs.setEffort("")
+                    refreshAccount()
+                }
                 .onFailure { _toasts.tryEmit("Could not sign out: ${it.message}") }
         }
     }
@@ -1385,8 +1404,18 @@ class CodexChatBackend(
             "account/login/completed" -> {
                 if (_login.value?.loginId == p.str("loginId")) _login.value = null
                 if (p.str("success") == "true") {
+                    _rateLimits.value = null
+                    _availableModels.value = emptyList()
+                    _selectedModelId.value = ""
+                    prefs.setModel("")
+                    prefs.setEffort("")
                     _toasts.tryEmit("Signed in to Codex")
-                    backendScope.launch { refreshAccount(); refreshModels(); refreshThreads() }
+                    backendScope.launch {
+                        refreshAccount()
+                        refreshRateLimits()
+                        refreshModels()
+                        refreshThreads()
+                    }
                 } else p.str("error")?.takeIf { it != "Login was not completed" }?.let { _toasts.tryEmit("Codex sign-in failed: $it") }
             }
             "thread/queue/changed" -> if (tid != null && tid == attachedId) refreshQueue(tid)

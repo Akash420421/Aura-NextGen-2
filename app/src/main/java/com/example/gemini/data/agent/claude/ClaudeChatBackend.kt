@@ -169,6 +169,13 @@ class ClaudeChatBackend(
         _rateLimits.value = emptyMap()
     }
 
+    fun resetAccountCaches() {
+        dropLiveRateLimits()
+        controlsTouched = false
+        chatControls.clear()
+        refreshInfo(force = true)
+    }
+
     private val _sessionCost = MutableStateFlow(0.0)
     val sessionCost: StateFlow<Double> = _sessionCost.asStateFlow()
 

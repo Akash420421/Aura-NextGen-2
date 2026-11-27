@@ -90,6 +90,25 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private var eventBusMonitorJob: Job? = null
     private var lastAnnouncedStatusHash: Int = 0
     private val lastProactiveUpdateAt = AtomicLong(0L)
+    private val pendingUserTurnBuffer = StringBuilder()
+    private val userTurnBufferLock = Any()
+
+    private fun flushPendingUserTurnForMemory() {
+        val fullTurn = synchronized(userTurnBufferLock) {
+            val s = pendingUserTurnBuffer.toString().trim()
+            pendingUserTurnBuffer.clear()
+            s
+        }
+        val ctx = appContext ?: return
+        if (fullTurn.isNotBlank()) {
+            AuraMemoryManager.processCompletedTurnAsync(
+                context = ctx,
+                userInput = fullTurn,
+                assistantResponse = _spokenSentence.value,
+                isVoice = true
+            )
+        }
+    }
 
     // Callback invoked when AI requests screen share permission from user
     var requestScreenShareCallback: (() -> Unit)? = null
@@ -353,6 +372,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     fun stopSession() {
         Log.i(TAG, "Stopping live voice session...")
+        flushPendingUserTurnForMemory()
         JarvisSoundEffects.playStandbySound()
 
         proactiveStatusJob?.cancel()
@@ -470,17 +490,19 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("### YOUTUBE SONGS, SHORTS & AUTO AD SKIP (#16):\n")
         sb.append("- Play ANY song/video (named like 'Tum Hi Ho lagao' OR vague like 'apni marzi se koi accha gaana laga do', 'YouTube pe gaana bajao', or 'in-built browser mein song lagao'): ALWAYS call `search_and_play_youtube(query=\"...\")`! It resolves the direct video immediately and arms automatic ad-skip — NEVER open YouTube and scroll endlessly without selecting!\n")
         sb.append("- If a YouTube feed/search list is ALREADY open on screen and user asks to select/play the top or specific visible song ('pehla gaana chalao', 'ye wala bajao', '<song title> select karo'), call `youtube_action(action=\"play_first\")` or `click_ui_element(target_name=\"<exact song title>\" | \"first video\")` directly!\n")
-        sb.append("- Skip YouTube ads / like / subscribe / fullscreen / play first video on feed: call `youtube_action(action=\"skip_ad\"|\"like\"|\"subscribe\"|\"fullscreen\"|\"play_first\"|\"pause\"|\"play\"|\"next\")`! Notice `skip_ad` works in both the native YouTube app AND Aura's In-Built Browser.\n\n")
+        sb.append("- Skip YouTube ads / like / subscribe / fullscreen / seek 10s / play first video: call `youtube_action(action=\"skip_ad\"|\"like\"|\"subscribe\"|\"fullscreen\"|\"forward\"|\"rewind\"|\"play_first\"|\"pause\"|\"play\"|\"next\", seconds=10)`! For '10 second aage badhao' / 'skip 10s' call `youtube_action(action=\"forward\", seconds=10)` (or `rewind` for back). For 'video/reel/short like karo' call `youtube_action(action=\"like\")`. For 'video pause karo' / 'play karo' call `youtube_action(action=\"pause\"|\"play\")` or `media_playback_control`! Notice `skip_ad`, `like`, `forward`, `rewind` work in both the native YouTube app AND Aura's In-Built Browser.\n\n")
 
         sb.append("### ADVANCE DEVICE CONTROL (INSTANT HARDWARE & SYSTEM SETTINGS):\n")
         sb.append("- Check battery percentage, charging status, temperature, volume levels, Wi-Fi/network, RAM, storage, brightness, or DND -> call `get_device_status()` IMMEDIATELY (fast default reads `battery,audio,system`). NEVER guess battery % or volume — ALWAYS call `get_device_status()` first and report the exact returned percentage!\n")
-        sb.append("- Change volume ('volume full karo', 'volume 50% set kar', 'volume kam/zyada karo', 'ringtone full karo', 'alarm volume kam karo', 'mute karo') -> ALWAYS call `set_volume(action=..., stream=..., percentage=...)` directly (`percentage=100` for full/max, `50` for half/50%). Always read the returned `verified`, `actual_percent`, and `capped_by_system`: if `verified=false` or `capped_by_system=true` (e.g., Android Safe Volume warning capped headphones at 67% or DND blocked change), honestly inform the user with the actual verified percentage instead of claiming it changed!\n")
+        sb.append("- Change volume ('volume full karo', 'volume 50% set kar', 'volume tez/kam/zyada karo', 'ringtone full karo', 'alarm volume kam karo', 'mute karo') -> ALWAYS call `set_volume(action=..., stream=..., percentage=...)` directly (`percentage=100` for full/max, `50` for half/50%). Always read the returned `verified`, `actual_percent`, and `capped_by_system`: if `verified=false` or `capped_by_system=true` (e.g., Android Safe Volume warning capped headphones at 67% or DND blocked change), honestly inform the user with the actual verified percentage instead of claiming it changed!\n")
+        sb.append("- Set Alarm or Timer ('subah 6 baje ka alarm laga do', '6:30 AM alarm set karo', '10 minute ka timer lagao', 'alarm dikhao') -> ALWAYS call `set_alarm(action=\"set_alarm\"|\"set_timer\"|\"show_alarms\", hour=..., minute=..., time_text=..., duration_seconds=..., label=...)`!\n")
         sb.append("- Switch ringer ('silent karo', 'vibrate mode lagao', 'ring mode on karo') -> call `set_ringer_mode(mode=\"silent\"|\"vibrate\"|\"normal\")`.\n")
         sb.append("- Brightness ('brightness badhao', '50% karo', 'full brightness', 'auto brightness on/off karo') -> call `set_brightness(...)`.\n")
         sb.append("- Flashlight/torch ('torch on/off/toggle') -> call `set_flashlight(...)`.\n")
         sb.append("- Wi-Fi / Bluetooth / Mobile Data / GPS Location / DND / Airplane / Hotspot / Battery Saver / Dark Mode / Auto-Rotate / Screen Timeout -> call `set_device_setting(setting=..., enabled=true|false, value=...)`! It executes directly or auto-toggles the Android switch via Accessibility and returns `verified=true/false`. If `verified=false` or `permission_required=true`, report the true blocker/screen instead of faking success!\n")
         sb.append("- Notification panel, Quick Settings / Control Center, Lock screen, Screenshot, Split screen -> call `system_action(action=\"notifications\"|\"quick_settings\"|\"lock_screen\"|\"take_screenshot\"|\"split_screen\")`.\n")
-        sb.append("- Check recent notifications, pending WhatsApp messages, or OTP codes -> call `read_notifications()`.\n")
+        sb.append("- Check recent notifications, SMS, WhatsApp/Telegram/Instagram messages, or OTP codes -> call `read_notifications()` immediately whenever asked 'kisi ka message aaya kya' or 'messages padh kar batao'.\n")
+        sb.append("- AUTOMATIC PERSISTENT MEMORY: Aura automatically saves important facts across conversations, AND whenever the user asks you to remember something ('ye yaad rakhna', 'note kar lo') OR shares durable personal details, preferences, routines, deadlines, relationships, or rules, ALSO call `save_memory(fact=..., category=..., topic_key=...)` cleanly (or `forget_memory(query=...)` to remove a saved memory).\n")
         sb.append("- WHATSAPP NOTIFICATION AUTO-REPLY (#18 — SMART CONFIRM DEFAULT):\n")
         sb.append("  -> When an incoming WhatsApp notification triggers Smart Confirm Mode, read the sender and message clearly in Hindi/Hinglish and suggest the reply draft, then wait for confirmation before calling `reply_whatsapp_notification(sender_name=\"...\", message=\"...\", action=\"send\")` (or `action=\"dismiss\"`). Notice `reply_whatsapp_notification` sends quietly via Android RemoteInput without opening WhatsApp!\n")
         sb.append("  -> Toggle Direct Auto-Reply / Smart Confirm Mode / check status -> call `configure_whatsapp_auto_reply(mode=\"smart_confirm\"|\"direct_saved_contacts\"|\"off\"|\"status\")`.\n\n")
@@ -502,7 +524,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
         sb.append("### SHORT VIDEO FEEDS (INSTAGRAM REELS, SHORTS, TIKTOK):\n")
         sb.append("- When asked to tap the Reels tab or button (e.g. 'Reel wala button dabao', 'Reels open karo', 'Reels laga do', 'Reels tab'): ALWAYS call `click_ui_element(target_name=\"Reels\")` targeting the bottom navigation Reels tab.\n")
-        sb.append("- When asked to swipe or advance a reel (e.g. 'Reel swipe karo', 'swipe', 'next reel', 'agla reel', 'swipe reel'): ALWAYS call `swipe_reel(direction=\"up\")`!\n\n")
+        sb.append("- When asked to swipe or scroll to next/previous Reel OR YouTube Short ('Reel swipe karo', 'Shorts scroll karo', 'agla short', 'next reel', 'up/down swipe karo'): ALWAYS call `swipe_reel(direction=\"up\"|\"down\")`!\n\n")
 
         sb.append("### CONTINUOUS AUTO-SCROLL:\n")
         sb.append("- When asked to auto-scroll (e.g. 'scroll karte raho', 'auto scroll chalu karo', 'keep scrolling'): Call `start_continuous_scroll(direction=\"down\")`.\n")
@@ -575,10 +597,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- Open native app -> `open_app(app_name)`.\n")
         sb.append("- Open website / search in Aura In-Built Browser -> `open_in_app_browser(url=\"...\")`.\n")
         sb.append("- Control Aura In-Built Browser -> `browser_read_page`, `browser_find`, `browser_click`, `browser_type`, `browser_scroll`, `browser_navigate`, `browser_tabs`, `browser_media_control`, `close_in_app_browser`.\n")
-        sb.append("- Play song/video on YouTube -> `search_and_play_youtube(query=\"...\")`; Skip Ad / Like / Subscribe / Play Visible -> `youtube_action(action=\"skip_ad\"|...)`.\n")
+        sb.append("- Play song/video on YouTube -> `search_and_play_youtube(query=\"...\")`; Skip Ad / Like / Seek 10s / Subscribe / Play Visible -> `youtube_action(action=\"skip_ad\"|\"like\"|\"forward\"|\"rewind\"|..., seconds=10)`.\n")
         sb.append("- Send WhatsApp message -> `send_whatsapp_message(recipient_name=\"...\", message=\"...\")`; Reply / Dismiss WhatsApp notification -> `reply_whatsapp_notification(sender_name=\"...\", message=\"...\", action=\"send\"|\"dismiss\")`; Toggle WhatsApp Auto-Reply mode -> `configure_whatsapp_auto_reply(mode=...)`.\n")
         sb.append("- Call saved contact -> `call_contact(contact_name=\"...\")`; Dial numeric number -> `dial_number(phone_number=\"...\")`.\n")
-        sb.append("- Device Telemetry & Control -> `get_device_status()`, `set_volume`, `set_ringer_mode`, `set_brightness`, `set_flashlight`, `set_device_setting`, `system_action`, `read_notifications`.\n")
+        sb.append("- Device Telemetry, Alarm & Control -> `get_device_status()`, `set_volume`, `set_alarm`, `set_ringer_mode`, `set_brightness`, `set_flashlight`, `set_device_setting`, `system_action`, `read_notifications`.\n")
+        sb.append("- Persistent Auto-Memory -> `save_memory(fact=..., category=..., topic_key=...)`, `forget_memory(query=...)`.\n")
         sb.append("- Scroll / Short-Video Swipe -> `scroll_screen(direction=\"down\"|\"up\")`, `swipe_reel(direction=\"up\"|\"down\")`.\n")
         sb.append("- Tap / Type in external apps (Chrome, Settings, IG, etc.) -> `click_ui_element(target_name=\"...\")`, `type_text(text=\"...\", submit=true)`, `inspect_screen()`.\n")
         sb.append("- Navigate inside Aura AI (Drawer, Pin/Archive tab, Custom AntiGem Plugins, Skills & Plugins, MCP, Settings, Customize, Images Gallery, Projects, IDE, Terminal, Notes, Files) -> `navigate_app_screen(screen_name=\"...\")`.\n")
@@ -586,7 +609,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- System keys -> `press_key(key=\"back\"|\"home\"|\"recents\")`.\n")
         sb.append("- Local Web Preview (#13): NEVER run `python3 index.html` or `python <file>.html`! To preview ANY web project, ALWAYS call `start_local_preview_server(project_dir=\"...\", port=3000, open_in_browser=true)`.\n\n")
 
-        sb.append(AuraMemoryManager.getSystemPromptContext())
+        sb.append(AuraMemoryManager.getSystemPromptContext(lastUserUtterance))
         sb.append(ChatContextBridge.getActiveChatPromptContext())
         runCatching { phoneControlManager?.getQuickBatteryAndAudioLine() }
             .getOrNull()
@@ -642,6 +665,10 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     }
                     is AuraAgentEvent.WhatsAppAutoReplied -> {
                         "Direct WhatsApp Auto-Reply sent in background to '${ev.senderName}' (for \"${ev.incomingText.take(120)}\"): sent \"${ev.sentReply}\". Inform the user in 1 crisp Hindi/Hinglish sentence."
+                    }
+                    is AuraAgentEvent.IncomingMessageNotification -> {
+                        val otpInfo = ev.otpCode?.let { " Detected OTP code: $it." }.orEmpty()
+                        "Incoming notification on ${ev.appName} from '${ev.senderName}': \"${ev.messageText.take(220)}\".$otpInfo Read out who messaged and what the message says clearly in 1-2 short Hindi/Hinglish sentences."
                     }
                 }
                 waitUntilSafeToAnnounce()
@@ -754,10 +781,17 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
             }
         }
         ChatContextBridge.recordVoiceUserTurn(normalized)
-        AuraMemoryManager.learnFromConversation(normalized)
+        synchronized(userTurnBufferLock) {
+            if (pendingUserTurnBuffer.isNotEmpty()) pendingUserTurnBuffer.append(' ')
+            pendingUserTurnBuffer.append(normalized)
+            if (pendingUserTurnBuffer.length > 2000) {
+                pendingUserTurnBuffer.delete(0, pendingUserTurnBuffer.length - 1800)
+            }
+        }
     }
 
     override fun onInterrupted() {
+        flushPendingUserTurnForMemory()
         audioPlayer?.flush()
         _spokenSentence.value = ""
         _phase.value = Phase.LISTENING
@@ -765,6 +799,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     }
 
     override fun onTurnCompleted() {
+        flushPendingUserTurnForMemory()
         audioPlayer?.notifyTurnComplete()
         if (_phase.value != Phase.SPEAKING && _phase.value != Phase.MUTED && _phase.value != Phase.WORKING) {
             _phase.value = Phase.IDLE_READY
@@ -787,10 +822,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     private val FAST_DEVICE_TOOLS = setOf(
         "get_device_status", "get_battery_level", "get_battery_status", "check_battery",
-        "set_volume", "set_brightness", "set_flashlight",
+        "set_volume", "set_brightness", "set_flashlight", "set_alarm",
         "set_ringer_mode", "read_notifications", "system_action", "set_device_setting",
         "media_playback_control", "close_in_app_browser",
-        "reply_whatsapp_notification", "configure_whatsapp_auto_reply"
+        "reply_whatsapp_notification", "configure_whatsapp_auto_reply",
+        "save_memory", "forget_memory"
     )
 
     override fun onToolCallsBatch(calls: List<GeminiLiveWebSocket.ToolCallItem>) {
@@ -1624,20 +1660,22 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
                 "media_playback_control" -> {
                     val action = args.optString("action", "toggle")
+                    val seekSec = args.optInt("seconds", args.optInt("seek_seconds", 10)).coerceIn(1, 300)
                     if (ChatContextBridge.isInBuiltBrowserActive()) {
-                        val msg = BrowserSessionManager.instance.controlWebVideo(action)
+                        val msg = BrowserSessionManager.instance.controlWebVideo(action, seekSec.toDouble())
                         val ok = !msg.startsWith("Failed", true) && !msg.startsWith("No ", true)
                         JSONObject().put("status", if (ok) "success" else "error").put("message", msg)
                     } else {
-                        val ok = YouTubeController.sendMediaKey(context, action)
-                        JSONObject().put("status", if (ok) "success" else "error")
-                            .put("message", "Media action '$action' performed.")
+                        val res = YouTubeController.performPlayerAction(context, action, seekSec)
+                        JSONObject().put("status", if (res.success) "success" else "error")
+                            .put("message", res.message ?: "Media action '$action' performed.")
                     }
                 }
 
                 "youtube_action" -> {
                     val action = args.optString("action", "skip_ad")
-                    val res = YouTubeController.performPlayerAction(context, action)
+                    val seekSec = args.optInt("seconds", args.optInt("seek_seconds", 10)).coerceIn(1, 300)
+                    val res = YouTubeController.performPlayerAction(context, action, seekSec)
                     JSONObject().put("status", if (res.success) "success" else "error")
                         .put("message", res.message ?: "YouTube action '$action' attempted.")
                 }
@@ -1834,7 +1872,9 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                                     .ifBlank { stepObj.optString("target_name", "") }
                                     .ifBlank { stepObj.optString("text", "") }
                                     .ifBlank { "skip_ad" }
-                                executeTool("youtube_action", JSONObject().put("action", subAction))
+                                val yArgs = JSONObject().put("action", subAction)
+                                if (stepObj.has("seconds")) yArgs.put("seconds", stepObj.optInt("seconds", 10))
+                                executeTool("youtube_action", yArgs)
                             }
                             "search_and_play_youtube", "play_youtube" -> {
                                 val ytQuery = stepObj.optString("query", "")
@@ -1857,6 +1897,9 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                             "set_device_setting", "device_setting" -> executeTool("set_device_setting", stepObj)
                             "system_action" -> executeTool("system_action", stepObj)
                             "media_playback_control" -> executeTool("media_playback_control", stepObj)
+                            "set_alarm", "alarm" -> executeTool("set_alarm", stepObj)
+                            "save_memory", "remember" -> executeTool("save_memory", stepObj)
+                            "forget_memory" -> executeTool("forget_memory", stepObj)
                             "get_device_status", "get_battery_level", "get_battery_status", "check_battery" -> executeTool(action, stepObj)
                             "inspect_screen", "read_screen" -> executeTool("inspect_screen", stepObj)
                             "wait" -> {
@@ -2004,6 +2047,17 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
                 "swipe_reel" -> {
                     val dir = args.optString("direction", "up").trim().lowercase(Locale.ROOT)
+                    if (ChatContextBridge.isInBuiltBrowserActive()) {
+                        val activeUrl = withContext(Dispatchers.Main) {
+                            BrowserSessionManager.instance.getActiveTab()?.let { it.webView?.url ?: it.url }.orEmpty().lowercase(Locale.ROOT)
+                        }
+                        if (activeUrl.contains("/shorts") || activeUrl.contains("/reel")) {
+                            val act = if (dir == "down" || dir == "prev" || dir == "previous") "previous" else "next"
+                            val msg = BrowserSessionManager.instance.controlWebVideo(act)
+                            val ok = !msg.startsWith("Failed", true) && !msg.startsWith("No ", true)
+                            return JSONObject().put("status", if (ok) "success" else "error").put("message", msg)
+                        }
+                    }
                     val res = VisualTaskOrchestrator.getInstance().handleSwipeReel(direction = dir)
                     JSONObject().put("status", if (res.success) "success" else "error")
                         .put("message", res.message)
@@ -2386,8 +2440,17 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 }
 
                 "scroll_screen" -> {
+                    val dir = args.optString("direction", "down").lowercase(Locale.ROOT)
                     if (ChatContextBridge.isInBuiltBrowserActive()) {
-                        val dir = args.optString("direction", "down").lowercase(Locale.ROOT)
+                        val activeUrl = withContext(Dispatchers.Main) {
+                            BrowserSessionManager.instance.getActiveTab()?.let { it.webView?.url ?: it.url }.orEmpty().lowercase(Locale.ROOT)
+                        }
+                        if (activeUrl.contains("/shorts") || activeUrl.contains("/reel")) {
+                            val act = if (dir == "up" || dir == "prev" || dir == "previous") "previous" else "next"
+                            val msg = BrowserSessionManager.instance.controlWebVideo(act)
+                            val ok = !msg.startsWith("Failed", true) && !msg.startsWith("No ", true)
+                            return JSONObject().put("status", if (ok) "success" else "error").put("message", msg)
+                        }
                         if (dir == "images" || dir == "gallery" || dir == "photos") {
                             val (ok, mediaSummary, _) = inspectBrowserViewportMedia(context, "scroll_to_images", null)
                             JSONObject().put("status", if (ok) "success" else "error").put("message", mediaSummary)
@@ -2603,6 +2666,59 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                             put("duration_ms", res.durationMs)
                         }
                     }
+                }
+
+                "set_alarm" -> {
+                    val parsed = DeviceControlHelper.parseAlarmArgs(
+                        rawAction = args.optString("action", "set_alarm"),
+                        rawHour = if (args.has("hour")) args.opt("hour") else null,
+                        rawMinute = if (args.has("minute")) args.opt("minute") else null,
+                        rawTimeText = args.optString("time_text", "").ifBlank { null },
+                        rawDurationSeconds = if (args.has("duration_seconds")) args.opt("duration_seconds") else null,
+                        rawLabel = args.optString("label", "")
+                    )
+                    if (parsed.parseError != null) {
+                        JSONObject().put("status", "error").put("verified", false).put("message", parsed.parseError)
+                    } else {
+                        val res = when (parsed.action) {
+                            "show_alarms" -> phoneControl.showAlarmsDetailed()
+                            "set_timer" -> phoneControl.setTimerDetailed(parsed.timerSeconds ?: 60, parsed.label)
+                            else -> {
+                                val daysArr = args.optJSONArray("days")?.let { arr ->
+                                    ArrayList<Int>().apply {
+                                        for (i in 0 until arr.length()) {
+                                            val d = arr.optInt(i, -1)
+                                            if (d in 1..7) add(d)
+                                        }
+                                    }
+                                }?.takeIf { it.isNotEmpty() }
+                                phoneControl.setAlarmDetailed(parsed.hour ?: 7, parsed.minute ?: 0, parsed.label, daysArr)
+                            }
+                        }
+                        deviceResultToJson(res)
+                    }
+                }
+
+                "save_memory" -> {
+                    val fact = args.optString("fact", "").ifBlank { args.optString("text", "") }.trim()
+                    val cat = args.optString("category", "").ifBlank { null }
+                    val topicKey = args.optString("topic_key", "").trim()
+                    if (fact.isBlank()) {
+                        JSONObject().put("status", "error").put("message", "Memory fact cannot be blank.")
+                    } else {
+                        AuraMemoryManager.init(context)
+                        val msg = AuraMemoryManager.rememberFact(fact, categoryOverride = cat, topicKey = topicKey)
+                        JSONObject().put("status", "success").put("message", msg)
+                    }
+                }
+
+                "forget_memory" -> {
+                    val query = args.optString("query", "").trim()
+                    AuraMemoryManager.init(context)
+                    val (count, msg) = AuraMemoryManager.forgetMatching(query)
+                    JSONObject().put("status", if (count > 0) "success" else "not_found")
+                        .put("removed_count", count)
+                        .put("message", msg)
                 }
 
                 "task_completed" -> {

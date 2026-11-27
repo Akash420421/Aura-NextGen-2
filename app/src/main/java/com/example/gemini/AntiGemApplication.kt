@@ -57,6 +57,8 @@ class AntiGemApplication : Application(), coil.ImageLoaderFactory {
             .onFailure { CrashLogger.recordNonFatal(this, "AuraContactsManager.init", it) }
         runCatching { com.example.gemini.data.jarvis.JarvisPreferences.init(this) }
             .onFailure { CrashLogger.recordNonFatal(this, "JarvisPreferences.init", it) }
+        runCatching { com.example.gemini.data.live.AuraMemoryManager.init(this) }
+            .onFailure { CrashLogger.recordNonFatal(this, "AuraMemoryManager.init", it) }
         // the cloud project new Antigravity chats start in (Remote Agents), before the first chat is created
         runCatching { com.example.gemini.data.agent.agy.AgyCloud.init(this) }
             .onFailure { CrashLogger.recordNonFatal(this, "AgyCloud.init", it) }

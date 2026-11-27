@@ -1,8 +1,12 @@
 package com.example.gemini.data.automation
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.net.Uri
 import android.util.Log
 import android.view.KeyEvent
@@ -233,15 +237,67 @@ object YouTubeController {
         }
     }
 
-    fun sendMediaKey(context: Context, action: String): Boolean {
+    private fun findExternalMediaController(context: Context): MediaController? {
+        return runCatching {
+            val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager ?: return null
+            val component = ComponentName(context, AuraNotificationListenerService::class.java)
+            val controllers = msm.getActiveSessions(component)
+                .filter { it.packageName != context.packageName && !it.packageName.contains("gemini") && !it.packageName.contains("aura.ai") }
+            controllers.firstOrNull {
+                it.packageName.contains("youtube", ignoreCase = true) ||
+                    it.playbackState?.state == PlaybackState.STATE_PLAYING
+            } ?: controllers.firstOrNull()
+        }.getOrNull()
+    }
+
+    fun sendMediaKey(context: Context, action: String, seekSeconds: Int = 10): Boolean {
+        val norm = action.lowercase(Locale.ROOT).trim()
+        val controller = findExternalMediaController(context)
+        if (controller != null) {
+            val tc = controller.transportControls
+            val handled = when (norm) {
+                "play", "resume" -> { tc.play(); true }
+                "pause" -> { tc.pause(); true }
+                "play_pause", "toggle" -> {
+                    val isPlaying = controller.playbackState?.state == PlaybackState.STATE_PLAYING
+                    if (isPlaying) tc.pause() else tc.play()
+                    true
+                }
+                "next", "skip" -> { tc.skipToNext(); true }
+                "prev", "previous" -> { tc.skipToPrevious(); true }
+                "stop" -> { tc.stop(); true }
+                "forward", "seek_forward" -> {
+                    val curPos = controller.playbackState?.position ?: -1L
+                    if (curPos >= 0L) {
+                        tc.seekTo(curPos + (seekSeconds.coerceIn(1, 300) * 1000L))
+                        true
+                    } else false
+                }
+                "rewind", "seek_back", "backward" -> {
+                    val curPos = controller.playbackState?.position ?: -1L
+                    if (curPos >= 0L) {
+                        tc.seekTo((curPos - seekSeconds.coerceIn(1, 300) * 1000L).coerceAtLeast(0L))
+                        true
+                    } else false
+                }
+                else -> false
+            }
+            if (handled) {
+                Log.i(TAG, "MediaSession transportControls '$norm' sent to ${controller.packageName}")
+                return true
+            }
+        }
+
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
-        val keyCode = when (action.lowercase(Locale.ROOT)) {
-            "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
+        val keyCode = when (norm) {
+            "play", "resume" -> KeyEvent.KEYCODE_MEDIA_PLAY
             "pause" -> KeyEvent.KEYCODE_MEDIA_PAUSE
             "play_pause", "toggle" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
             "next", "skip" -> KeyEvent.KEYCODE_MEDIA_NEXT
             "prev", "previous" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
             "stop" -> KeyEvent.KEYCODE_MEDIA_STOP
+            "forward", "seek_forward" -> KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+            "rewind", "seek_back", "backward" -> KeyEvent.KEYCODE_MEDIA_REWIND
             else -> return false
         }
         return try {
@@ -255,16 +311,16 @@ object YouTubeController {
     }
 
     /**
-     * Executes smart YouTube player actions (`skip_ad`, `like`, `subscribe`, `fullscreen`, `play_first`,
-     * `play`, `pause`, `next`, `previous`) in either Aura's In-Built Browser (when active on YouTube)
-     * or the foreground native YouTube app via Accessibility.
+     * Executes smart YouTube & short-video player actions (`skip_ad`, `like`, `subscribe`,
+     * `fullscreen`, `play_first`, `forward`, `rewind`, `play`, `pause`, `next`, `previous`)
+     * in either Aura's In-Built Browser or native apps (YouTube, YouTube Shorts, Instagram Reels).
      */
-    suspend fun performPlayerAction(context: Context, action: String): PlayResult {
+    suspend fun performPlayerAction(context: Context, action: String, seekSeconds: Int = 10): PlayResult {
         val normalized = action.trim().lowercase(Locale.ROOT)
         if (ChatContextBridge.isInBuiltBrowserActive()) {
             val activeUrl = BrowserSessionManager.instance.getActiveTab()?.let { it.webView?.url ?: it.url }.orEmpty().lowercase(Locale.ROOT)
             if (activeUrl.contains("youtube") || activeUrl.contains("youtu.be")) {
-                val res = BrowserSessionManager.instance.controlWebVideo(normalized)
+                val res = BrowserSessionManager.instance.controlWebVideo(normalized, seekSeconds.toDouble())
                 return PlayResult(!res.startsWith("Failed", ignoreCase = true) && !res.startsWith("No ", ignoreCase = true), null, res)
             }
         }
@@ -287,8 +343,8 @@ object YouTubeController {
             }
             "like" -> {
                 if (svc == null) return PlayResult(false, null, "Accessibility Service is not running.")
-                val ok = svc.likeYouTubeVideo()
-                PlayResult(ok, null, if (ok) "Liked the YouTube video." else "Could not find YouTube Like button on screen.")
+                val (ok, msg) = svc.likeCurrentVideoOrReel()
+                PlayResult(ok, null, msg)
             }
             "subscribe" -> {
                 if (svc == null) return PlayResult(false, null, "Accessibility Service is not running.")
@@ -310,8 +366,51 @@ object YouTubeController {
                 }
                 PlayResult(ok, null, if (ok) "Tapped first visible YouTube video." else "No visible YouTube video card found to play.")
             }
+            "forward", "seek_forward" -> {
+                if (svc != null && svc.isExternalAppForeground()) {
+                    val fg = svc.foregroundPackage.orEmpty().lowercase(Locale.ROOT)
+                    if (fg.contains("youtube")) {
+                        val (ok, msg) = svc.seekYouTubeVideo(forward = true, seconds = seekSeconds)
+                        if (ok) return PlayResult(true, null, msg)
+                    }
+                }
+                val ok = sendMediaKey(context, "forward", seekSeconds)
+                PlayResult(ok, null, if (ok) "Skipped forward ${seekSeconds}s." else "Could not seek video forward.")
+            }
+            "rewind", "seek_back", "backward" -> {
+                if (svc != null && svc.isExternalAppForeground()) {
+                    val fg = svc.foregroundPackage.orEmpty().lowercase(Locale.ROOT)
+                    if (fg.contains("youtube")) {
+                        val (ok, msg) = svc.seekYouTubeVideo(forward = false, seconds = seekSeconds)
+                        if (ok) return PlayResult(true, null, msg)
+                    }
+                }
+                val ok = sendMediaKey(context, "rewind", seekSeconds)
+                PlayResult(ok, null, if (ok) "Rewound ${seekSeconds}s." else "Could not rewind video.")
+            }
+            "pause", "play", "toggle", "play_pause", "resume" -> {
+                if (svc != null && svc.isCurrentlyShortVideoFeed()) {
+                    val tapped = svc.toggleShortVideoPlayPause()
+                    return PlayResult(tapped, null, if (tapped) "Toggled playback on short video." else "Failed to toggle playback.")
+                }
+                val ok = sendMediaKey(context, normalized, seekSeconds) || (svc?.toggleShortVideoPlayPause() == true)
+                PlayResult(ok, null, if (ok) "Dispatched '$normalized' playback control." else "Failed to '$normalized' playback.")
+            }
+            "next", "previous", "prev" -> {
+                if (svc != null && svc.isCurrentlyShortVideoFeed()) {
+                    val upward = normalized == "next"
+                    val swiped = svc.performReelSwipeAndAwait(upward = upward)
+                    return PlayResult(
+                        swiped,
+                        null,
+                        if (swiped) "Swiped to ${if (upward) "next" else "previous"} short video." else "Could not swipe short video."
+                    )
+                }
+                val ok = sendMediaKey(context, normalized, seekSeconds)
+                PlayResult(ok, null, if (ok) "Dispatched media action '$normalized'." else "Unsupported or failed media action '$normalized'.")
+            }
             else -> {
-                val ok = sendMediaKey(context, normalized)
+                val ok = sendMediaKey(context, normalized, seekSeconds)
                 PlayResult(ok, null, if (ok) "Dispatched media action '$normalized'." else "Unsupported or failed media action '$normalized'.")
             }
         }

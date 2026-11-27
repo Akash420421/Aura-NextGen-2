@@ -146,6 +146,18 @@ sealed class AuraAgentEvent {
         val sentReply: String,
         override val timestamp: Long = System.currentTimeMillis()
     ) : AuraAgentEvent()
+
+    /** Any incoming message/notification (SMS, Telegram, Instagram DM, Gmail, WhatsApp when Smart Confirm off, etc.). */
+    data class IncomingMessageNotification(
+        override val conversationId: String = "incoming_notifications",
+        val notificationKey: String,
+        val appName: String,
+        val packageName: String,
+        val senderName: String,
+        val messageText: String,
+        val otpCode: String? = null,
+        override val timestamp: Long = System.currentTimeMillis()
+    ) : AuraAgentEvent()
 }
 
 object AuraAgentEventBus {

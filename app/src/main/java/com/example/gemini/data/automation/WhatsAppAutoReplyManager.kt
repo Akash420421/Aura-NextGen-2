@@ -228,7 +228,17 @@ object WhatsAppAutoReplyManager {
         }
 
         scope.launch {
-            val draft = draftReplyText(incoming)
+            val liveActive = AuraLiveVoiceManager.phase.value !in setOf(
+                AuraLiveVoiceManager.Phase.IDLE,
+                AuraLiveVoiceManager.Phase.CONNECTING
+            )
+            // Keep live voice notifications snappy (<1s) while preserving full AI drafting offline
+            val draft = if (liveActive && decision.action == WhatsAppAutoReplyHelper.ReplyAction.SMART_CONFIRM) {
+                kotlinx.coroutines.withTimeoutOrNull(900L) { draftReplyText(incoming) }
+                    ?: WhatsAppAutoReplyHelper.buildSmartTemplateReply(incoming, JarvisPreferences.waAutoReplyTemplate.value)
+            } else {
+                draftReplyText(incoming)
+            }
             when (decision.action) {
                 WhatsAppAutoReplyHelper.ReplyAction.DIRECT_AUTO_REPLY -> {
                     val sentResult = sendViaHandleOrFallback(appCtx, incoming, draft)

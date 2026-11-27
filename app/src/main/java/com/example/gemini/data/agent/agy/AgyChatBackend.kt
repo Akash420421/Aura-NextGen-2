@@ -257,6 +257,133 @@ class AgyChatBackend(
     private var loginPollJob: Job? = null
     private var lastAuthCheckTimeMs = 0L
 
+    @Volatile private var lastKnownAccountKey: String = ""
+    @Volatile private var lastKnownQuotaFingerprint: String = ""
+    @Volatile private var loggedOutAwaitingFreshLogin: Boolean = false
+    @Volatile private var preLogoutAccountKey: String = ""
+    @Volatile private var preLogoutQuotaFingerprint: String = ""
+    @Volatile private var restartedDaemonForCurrentLogin: Boolean = false
+
+    private fun accountKeyOf(info: com.example.gemini.data.remote.AgyHubClient.AgyAuthInfo): String =
+        (info.email.ifBlank { info.username }).trim().lowercase(java.util.Locale.ROOT)
+
+    private fun quotaFingerprint(summary: com.example.gemini.domain.model.QuotaSummaryResponse?): String {
+        val groups = summary?.groups ?: return ""
+        if (groups.isEmpty()) return ""
+        return groups.joinToString("|") { g ->
+            val f = g.fiveHour?.remainingFraction?.let { String.format(java.util.Locale.US, "%.3f", it) } ?: "null"
+            val w = g.weekly?.remainingFraction?.let { String.format(java.util.Locale.US, "%.3f", it) } ?: "null"
+            "${g.groupId}:$f/$w"
+        }
+    }
+
+    private fun hasAnyExhaustedGroup(summary: com.example.gemini.domain.model.QuotaSummaryResponse?): Boolean {
+        val groups = summary?.groups ?: return false
+        return groups.any { g ->
+            (g.fiveHour != null && g.fiveHour.remainingFraction <= 0.01f) ||
+                (g.weekly != null && g.weekly.remainingFraction <= 0.01f)
+        }
+    }
+
+    private fun hasAnyHealthyGroup(summary: com.example.gemini.domain.model.QuotaSummaryResponse?): Boolean {
+        val groups = summary?.groups ?: return false
+        return groups.any { g ->
+            (g.fiveHour == null || g.fiveHour.remainingFraction > 0.05f) &&
+                (g.weekly == null || g.weekly.remainingFraction > 0.05f)
+        }
+    }
+
+    private suspend fun clearAccountCachesForSwitch(hubUrl: String) {
+        resetQuotaState()
+        _availableModels.value = emptyList()
+        _enabledModels.value = emptyList()
+        _selectedModelId.value = ""
+        pickedModelId = ""
+        chatModels.clear()
+        _userEmail.value = ""
+        com.example.gemini.data.remote.AgyHubClient.updateModelRegistry(emptyList())
+        com.example.gemini.data.remote.core.AgyCsrfManager.instance.clearToken(hubUrl)
+        runCatching { authPrefs.clearModelSelectionCaches() }
+    }
+
+    private suspend fun handleAuthenticatedAccount(
+        authed: com.example.gemini.data.remote.AgyHubClient.AgyAuthInfo,
+        hubUrl: String,
+        feedbackMsg: String?
+    ) {
+        val newKey = accountKeyOf(authed)
+        val accountSwitched = loggedOutAwaitingFreshLogin ||
+            (lastKnownAccountKey.isNotBlank() && newKey.isNotBlank() && newKey != lastKnownAccountKey)
+
+        if (accountSwitched) {
+            clearAccountCachesForSwitch(hubUrl)
+        }
+
+        _agyAuthInfo.value = authed
+        if (newKey.isNotBlank()) lastKnownAccountKey = newKey
+        val emailOrUser = authed.email.ifBlank { authed.username }
+        if (emailOrUser.isNotBlank()) _userEmail.value = emailOrUser
+        agyBridgeService.updateAuthState(isAuth = true, isChecking = false)
+        lastAuthCheckTimeMs = System.currentTimeMillis()
+        _isAuthBusy.value = false
+        _pendingLoginUrl.value = null
+        loginPollJob?.cancel()
+
+        if (!feedbackMsg.isNullOrBlank()) {
+            _authFeedbackMessage.tryEmit(feedbackMsg)
+        }
+
+        val syncOk = refreshQuotasAndModelsSync(
+            force = true,
+            showToastFeedback = false,
+            allowAutoPickHealthy = accountSwitched || _selectedModelId.value.isBlank()
+        )
+
+        // If account changed (or returning from logout) and the daemon returned stale exhausted quotas/account,
+        // do one automatic AGY hub restart so the fresh account's 100% models and quotas load cleanly.
+        val curFp = quotaFingerprint(_quotaSummary.value)
+        val sameCachedUserAfterLogout = loggedOutAwaitingFreshLogin &&
+            preLogoutAccountKey.isNotBlank() &&
+            newKey.isNotBlank() &&
+            newKey == preLogoutAccountKey &&
+            hasAnyExhaustedGroup(_quotaSummary.value)
+        val sameExhaustedQuotas = accountSwitched &&
+            preLogoutQuotaFingerprint.isNotBlank() &&
+            curFp == preLogoutQuotaFingerprint &&
+            hasAnyExhaustedGroup(_quotaSummary.value)
+        val missingFreshQuotas = accountSwitched && (!syncOk || _availableModels.value.isEmpty())
+
+        if ((sameCachedUserAfterLogout || sameExhaustedQuotas || missingFreshQuotas) && !restartedDaemonForCurrentLogin) {
+            restartedDaemonForCurrentLogin = true
+            Log.w("AgyChatBackend", "Detected stale account/quota cache on switch ($newKey). Restarting hub cleanly...")
+            _authFeedbackMessage.tryEmit("Syncing new account models & quotas...")
+            clearAccountCachesForSwitch(hubUrl)
+            runCatching {
+                com.example.gemini.data.local.LocalServerManager.restartServerAndWait(application)
+                withTimeoutOrNull(14_000L) {
+                    _isServerOnline.first { it == true }
+                }
+                delay(800L)
+                val freshAuth = agyHubClient.fetchDetailedAuthInfo(hubUrl).getOrNull()
+                if (freshAuth != null && freshAuth.isLoggedIn) {
+                    _agyAuthInfo.value = freshAuth
+                    val refreshedKey = accountKeyOf(freshAuth)
+                    if (refreshedKey.isNotBlank()) lastKnownAccountKey = refreshedKey
+                    val refreshedUser = freshAuth.email.ifBlank { freshAuth.username }
+                    if (refreshedUser.isNotBlank()) _userEmail.value = refreshedUser
+                }
+                refreshQuotasAndModelsSync(force = true, showToastFeedback = false, allowAutoPickHealthy = true)
+            }.onFailure { err ->
+                Log.w("AgyChatBackend", "Hub restart during account switch failed: ${err.message}")
+            }
+        }
+
+        loggedOutAwaitingFreshLogin = false
+        preLogoutAccountKey = ""
+        preLogoutQuotaFingerprint = ""
+        lastKnownQuotaFingerprint = quotaFingerprint(_quotaSummary.value)
+    }
+
     fun onDrawerOpened() {
         val now = System.currentTimeMillis()
         val isLoggedIn = _agyAuthInfo.value.isLoggedIn
@@ -313,19 +440,18 @@ class AgyChatBackend(
 
             if (res.isSuccess) {
                 val info = res.getOrThrow()
-                _agyAuthInfo.value = info
-                agyBridgeService.updateAuthState(isAuth = info.isLoggedIn, isChecking = false)
                 if (info.isLoggedIn) {
-                    lastAuthCheckTimeMs = System.currentTimeMillis()
-                    _isAuthBusy.value = false
-                    _pendingLoginUrl.value = null
-                    loginPollJob?.cancel()
+                    handleAuthenticatedAccount(
+                        authed = info,
+                        hubUrl = hubUrl,
+                        feedbackMsg = if (userInitiated) "Signed in as ${info.displayName.ifBlank { info.email }}" else null
+                    )
+                } else {
+                    _agyAuthInfo.value = info
+                    agyBridgeService.updateAuthState(isAuth = false, isChecking = false)
                     if (userInitiated) {
-                        _authFeedbackMessage.tryEmit("Signed in as ${info.displayName.ifBlank { info.email }}")
+                        _authFeedbackMessage.tryEmit("Not signed in.")
                     }
-                    refreshQuotas(force = false)
-                } else if (userInitiated) {
-                    _authFeedbackMessage.tryEmit("Not signed in.")
                 }
             } else {
                 _agyAuthInfo.value = _agyAuthInfo.value.copy(
@@ -356,14 +482,11 @@ class AgyChatBackend(
                     if (isNetworkConnected()) {
                         val res = agyHubClient.fetchDetailedAuthInfo(hubUrl)
                         if (res.isSuccess && res.getOrThrow().isLoggedIn) {
-                            val authed = res.getOrThrow()
-                            _agyAuthInfo.value = authed
-                            agyBridgeService.updateAuthState(isAuth = true, isChecking = false)
-                            lastAuthCheckTimeMs = System.currentTimeMillis()
-                            _isAuthBusy.value = false
-                            _pendingLoginUrl.value = null
-                            _authFeedbackMessage.tryEmit("Signed in successfully!")
-                            refreshQuotas(force = true)
+                            handleAuthenticatedAccount(
+                                authed = res.getOrThrow(),
+                                hubUrl = hubUrl,
+                                feedbackMsg = "Signed in successfully!"
+                            )
                             break
                         }
                     }
@@ -395,12 +518,11 @@ class AgyChatBackend(
             val preCheck = agyHubClient.fetchDetailedAuthInfo(hubUrl)
             if (preCheck.isSuccess && preCheck.getOrThrow().isLoggedIn) {
                 val authed = preCheck.getOrThrow()
-                _agyAuthInfo.value = authed
-                agyBridgeService.updateAuthState(isAuth = true, isChecking = false)
-                lastAuthCheckTimeMs = System.currentTimeMillis()
-                _isAuthBusy.value = false
-                _authFeedbackMessage.tryEmit("Already signed in as ${authed.displayName}!")
-                refreshQuotas(force = true)
+                handleAuthenticatedAccount(
+                    authed = authed,
+                    hubUrl = hubUrl,
+                    feedbackMsg = "Already signed in as ${authed.displayName}!"
+                )
                 return@launch
             }
 
@@ -440,6 +562,11 @@ class AgyChatBackend(
         _isAuthBusy.value = true
         loginPollJob?.cancel()
 
+        preLogoutAccountKey = lastKnownAccountKey.ifBlank { accountKeyOf(_agyAuthInfo.value) }
+        preLogoutQuotaFingerprint = quotaFingerprint(_quotaSummary.value)
+        loggedOutAwaitingFreshLogin = true
+        restartedDaemonForCurrentLogin = false
+
         backendScope.launch {
             val hubUrl = AuthPreferences.currentHubUrl
             try {
@@ -448,9 +575,9 @@ class AgyChatBackend(
                     status = com.example.gemini.data.remote.AgyHubClient.AgyAuthStatus.UNAUTHENTICATED,
                     isLoggedIn = false
                 )
+                clearAccountCachesForSwitch(hubUrl)
                 agyBridgeService.updateAuthState(isAuth = false, isChecking = false)
                 _authFeedbackMessage.tryEmit("Logged out successfully.")
-                refreshQuotas(force = true)
             } catch (e: Exception) {
                 _authFeedbackMessage.tryEmit("Logout error: ${e.message}")
             } finally {
@@ -1038,9 +1165,10 @@ class AgyChatBackend(
             if (conv != null && isExistingConv && (!isStreamActive || _isServerOnline.value != true)) {
                 startPersistentStream(conv.id)
             }
-            refreshQuotas()
-            if (!_agyAuthInfo.value.isLoggedIn || _agyAuthInfo.value.status == com.example.gemini.data.remote.AgyHubClient.AgyAuthStatus.CHECKING) {
+            if (loggedOutAwaitingFreshLogin || !_agyAuthInfo.value.isLoggedIn || _agyAuthInfo.value.status == com.example.gemini.data.remote.AgyHubClient.AgyAuthStatus.CHECKING) {
                 checkAgyAuthStatus(userInitiated = false)
+            } else {
+                refreshQuotas()
             }
             com.example.gemini.data.daemon.TermuxDaemonManager.checkHealthAndReconnect(isSilent = true)
         }
@@ -2456,94 +2584,181 @@ class AgyChatBackend(
         }
     }
 
+    private fun pickHealthyModelIfNeeded(
+        models: List<AiModel>,
+        summary: com.example.gemini.domain.model.QuotaSummaryResponse?,
+        currentSelected: String,
+        allowAutoPickHealthy: Boolean
+    ): AiModel? {
+        if (models.isEmpty()) return null
+        val groups = com.example.gemini.domain.model.AgyQuotaGroups.groups(summary)
+        val overrides = com.example.gemini.domain.model.ModelGroupPrefs.overrides(com.example.gemini.domain.model.QuotaAgent.AGY).value
+        val pill = com.example.gemini.domain.model.ModelGroupPrefs.pillWindow(com.example.gemini.domain.model.QuotaAgent.AGY).value
+
+        fun remainingOf(m: AiModel): Float {
+            val grp = com.example.gemini.domain.model.AgyQuotaGroups.groupOf(m, groups, overrides)
+            return grp?.pillWindow(pill)?.remaining ?: 1f
+        }
+
+        val currentObj = currentSelected.takeIf { it.isNotBlank() }?.let { sel ->
+            models.find { it.id == sel || it.key == sel }
+        }
+        val currentRemaining = currentObj?.let(::remainingOf) ?: -1f
+        val healthyCandidates = models.filter { remainingOf(it) > 0.05f }
+
+        // Keep current selection if it exists AND (not forcing healthy pick OR it already has > 1% quota OR no healthy alternative exists)
+        if (currentObj != null && (!allowAutoPickHealthy || currentRemaining > 0.01f || healthyCandidates.isEmpty())) {
+            return currentObj
+        }
+        if (healthyCandidates.isNotEmpty()) {
+            val maxRem = healthyCandidates.maxOf { remainingOf(it) }
+            val topPool = healthyCandidates.filter { kotlin.math.abs(remainingOf(it) - maxRem) <= 0.05f }
+            return topPool.find { it.key.contains("3.8") || it.key.contains("flash") || it.displayName.contains("flash", ignoreCase = true) }
+                ?: topPool.first()
+        }
+        return models.find { it.key.contains("3.8") || it.key.contains("flash") } ?: models.first()
+    }
+
     fun refreshQuotas(force: Boolean = true, showToastFeedback: Boolean = false) {
         backendScope.launch {
-            _isRefreshingModels.value = true
-            var failureError: String? = null
-            try {
-                val hubUrl = AuthPreferences.currentHubUrl
-                val modelsDeferred = async { agyHubClient.getAvailableModels(forceRefresh = force, hubUrl = hubUrl) }
-                val quotasDeferred = async { agyHubClient.retrieveUserQuotaSummary(forceRefresh = force, hubUrl = hubUrl) }
+            refreshQuotasAndModelsSync(
+                force = force,
+                showToastFeedback = showToastFeedback,
+                allowAutoPickHealthy = false
+            )
+        }
+    }
 
-                val modelsRes = modelsDeferred.await()
-                val quotasRes = quotasDeferred.await()
+    private suspend fun refreshQuotasAndModelsSync(
+        force: Boolean = true,
+        showToastFeedback: Boolean = false,
+        allowAutoPickHealthy: Boolean = false
+    ): Boolean {
+        _isRefreshingModels.value = true
+        var failureError: String? = null
+        var gotModelsOrQuotas = false
+        var effectiveAutoPickHealthy = allowAutoPickHealthy
+        try {
+            val hubUrl = AuthPreferences.currentHubUrl
+            if (force && !allowAutoPickHealthy) {
+                val freshAuth = runCatching { agyHubClient.fetchDetailedAuthInfo(hubUrl).getOrNull() }.getOrNull()
+                if (freshAuth != null && freshAuth.isLoggedIn) {
+                    val freshKey = accountKeyOf(freshAuth)
+                    if (freshKey.isNotBlank() && lastKnownAccountKey.isNotBlank() && freshKey != lastKnownAccountKey) {
+                        clearAccountCachesForSwitch(hubUrl)
+                        effectiveAutoPickHealthy = true
+                    }
+                    _agyAuthInfo.value = freshAuth
+                    if (freshKey.isNotBlank()) lastKnownAccountKey = freshKey
+                    val emailOrUser = freshAuth.email.ifBlank { freshAuth.username }
+                    if (emailOrUser.isNotBlank()) _userEmail.value = emailOrUser
+                }
+            }
+            val modelsDeferred = backendScope.async { agyHubClient.getAvailableModels(forceRefresh = force, hubUrl = hubUrl) }
+            val quotasDeferred = backendScope.async { agyHubClient.retrieveUserQuotaSummary(forceRefresh = force, hubUrl = hubUrl) }
 
-                if (modelsRes.isSuccess) {
-                    val models = modelsRes.getOrThrow()
-                    if (models.isNotEmpty()) {
-                        com.example.gemini.data.remote.AgyHubClient.updateModelRegistry(models)
-                        _availableModels.value = models
-                        val currentSelected = _selectedModelId.value
-                        val existingValidModel = if (currentSelected.isNotBlank()) {
-                            models.find { it.id == currentSelected || it.key == currentSelected }
+            val modelsRes = modelsDeferred.await()
+            val quotasRes = quotasDeferred.await()
+
+            val loadedSummary = quotasRes.getOrNull()
+            if (loadedSummary != null) {
+                gotModelsOrQuotas = true
+                _quotaSummary.value = loadedSummary
+            } else if (quotasRes.isFailure) {
+                failureError = quotasRes.exceptionOrNull()?.message
+            }
+
+            if (modelsRes.isSuccess) {
+                val models = modelsRes.getOrThrow()
+                if (models.isNotEmpty()) {
+                    gotModelsOrQuotas = true
+                    com.example.gemini.data.remote.AgyHubClient.updateModelRegistry(models)
+                    _availableModels.value = models
+
+                    val currentSelected = _selectedModelId.value
+                    val existingValidModel = if (currentSelected.isNotBlank()) {
+                        models.find { it.id == currentSelected || it.key == currentSelected }
+                    } else null
+
+                    val targetModel = if (existingValidModel != null && !effectiveAutoPickHealthy) {
+                        existingValidModel
+                    } else {
+                        val savedId = if (!effectiveAutoPickHealthy) authPrefs.preferredModelId.firstOrNull() else null
+                        val savedKey = if (!effectiveAutoPickHealthy) authPrefs.preferredModelKey.firstOrNull() else null
+                        val savedName = if (!effectiveAutoPickHealthy) authPrefs.preferredModelName.firstOrNull() else null
+
+                        val savedMatch = if (!effectiveAutoPickHealthy) {
+                            models.find {
+                                (!savedKey.isNullOrBlank() && (it.key.equals(savedKey, ignoreCase = true) || it.id == savedKey)) ||
+                                    (!savedName.isNullOrBlank() && it.displayName.equals(savedName, ignoreCase = true)) ||
+                                    (!savedId.isNullOrBlank() && (it.id == savedId || it.key == savedId))
+                            }
                         } else null
 
-                        if (existingValidModel != null) {
-                            // Current selection is already valid! Keep it and ensure canonical id
-                            if (_selectedModelId.value != existingValidModel.id) {
-                                _selectedModelId.value = existingValidModel.id
-                            }
-                        } else {
-                            // First run or need to restore saved preference
-                            val savedId = authPrefs.preferredModelId.firstOrNull()
-                            val savedKey = authPrefs.preferredModelKey.firstOrNull()
-                            val savedName = authPrefs.preferredModelName.firstOrNull()
+                        savedMatch ?: pickHealthyModelIfNeeded(
+                            models = models,
+                            summary = _quotaSummary.value,
+                            currentSelected = currentSelected,
+                            allowAutoPickHealthy = effectiveAutoPickHealthy
+                        )
+                    }
 
-                            val matched = models.find {
-                                (!savedKey.isNullOrBlank() && (it.key.equals(savedKey, ignoreCase = true) || it.id == savedKey)) ||
-                                (!savedName.isNullOrBlank() && it.displayName.equals(savedName, ignoreCase = true)) ||
-                                (!savedId.isNullOrBlank() && (it.id == savedId || it.key == savedId))
-                            }
-
-                            if (matched != null) {
-                                _selectedModelId.value = matched.id
-                                authPrefs.savePreferredModel(modelId = matched.id, modelKey = matched.key, displayName = matched.displayName)
-                            } else {
-                                val preferred = models.find { it.key.contains("3.8") || it.key.contains("flash") } ?: models.first()
-                                _selectedModelId.value = preferred.id
+                    if (targetModel != null) {
+                        if (_selectedModelId.value != targetModel.id) {
+                            _selectedModelId.value = targetModel.id
+                            pickedModelId = targetModel.id
+                            _currentConversation.value?.takeIf { it.agent == AgentKind.AGY }?.let { conv ->
+                                chatModels[conv.id] = targetModel.id
+                                val updated = conv.copy(modelId = targetModel.id)
+                                _currentConversation.value = updated
+                                _conversations.value = _conversations.value.map { if (it.id == updated.id) updated else it }
                             }
                         }
-
-                        recomputeEnabledModels()
+                        authPrefs.savePreferredModel(
+                            modelId = targetModel.id,
+                            modelKey = targetModel.key,
+                            displayName = targetModel.displayName
+                        )
                     }
-                } else {
-                    failureError = modelsRes.exceptionOrNull()?.message
-                }
 
-                if (quotasRes.isSuccess) {
-                    applyQuotaSummary(quotasRes.getOrThrow())
-                } else if (failureError == null) {
-                    failureError = quotasRes.exceptionOrNull()?.message
+                    recomputeEnabledModels()
                 }
+            } else if (failureError == null) {
+                failureError = modelsRes.exceptionOrNull()?.message
+            }
 
-                val userRes = agyHubClient.getLocalUserInfo(hubUrl)
-                if (userRes.isSuccess) {
-                    val (username, _) = userRes.getOrThrow()
-                    if (username.isNotBlank()) {
-                        _userEmail.value = username
-                    }
+            if (loadedSummary != null) {
+                recomputeQuotas()
+            }
+
+            val userRes = agyHubClient.getLocalUserInfo(hubUrl)
+            if (userRes.isSuccess) {
+                val (username, _) = userRes.getOrThrow()
+                if (username.isNotBlank() && _userEmail.value.isBlank()) {
+                    _userEmail.value = username
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("GeminiApp", "Error refreshing models & quotas from hub: ${e.message}")
-                failureError = e.message
-            } finally {
-                _isRefreshingModels.value = false
-                if (showToastFeedback) {
-                    withContext(Dispatchers.Main) {
-                        if (failureError != null) {
-                            val msg = if (failureError.contains("Connect", ignoreCase = true) || failureError.contains("failed to connect", ignoreCase = true)) {
-                                "Failed to refresh: Antigravity Hub (${AuthPreferences.currentHubUrl}) unreachable"
-                            } else {
-                                "Failed to refresh: $failureError"
-                            }
-                            android.widget.Toast.makeText(application, msg, android.widget.Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("GeminiApp", "Error refreshing models & quotas from hub: ${e.message}")
+            failureError = e.message
+        } finally {
+            _isRefreshingModels.value = false
+            if (showToastFeedback) {
+                withContext(Dispatchers.Main) {
+                    if (failureError != null) {
+                        val msg = if (failureError.contains("Connect", ignoreCase = true) || failureError.contains("failed to connect", ignoreCase = true)) {
+                            "Failed to refresh: Antigravity Hub (${AuthPreferences.currentHubUrl}) unreachable"
                         } else {
-                            android.widget.Toast.makeText(application, "Quotas & models refreshed", android.widget.Toast.LENGTH_SHORT).show()
+                            "Failed to refresh: $failureError"
                         }
+                        android.widget.Toast.makeText(application, msg, android.widget.Toast.LENGTH_LONG).show()
+                    } else {
+                        android.widget.Toast.makeText(application, "Quotas & models refreshed", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 }
             }
         }
+        return gotModelsOrQuotas && failureError == null
     }
 
     fun approveAndExecuteTerminalTool(

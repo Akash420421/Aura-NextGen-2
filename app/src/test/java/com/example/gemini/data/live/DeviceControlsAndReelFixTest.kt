@@ -116,5 +116,57 @@ class DeviceControlsAndReelFixTest {
                 descriptions = emptyList()
             )
         )
+
+        // YouTube Shorts with Hindi/English action stack without home/search tabs -> true
+        assertTrue(
+            DeviceControlHelper.isShortVideoScreen(
+                packageName = "com.google.android.youtube",
+                viewIds = listOf("com.google.android.youtube:id/shorts_pivot"),
+                labels = listOf("Like", "Dislike", "Comments"),
+                descriptions = emptyList()
+            )
+        )
+    }
+
+    @Test
+    fun `parseAlarmArgs parses morning evening times, timers, show alarms, and validates missing hour`() {
+        val morning = DeviceControlHelper.parseAlarmArgs("set_alarm", rawTimeText = "subah 6:30 baje", rawLabel = "Gym")
+        assertNull(morning.parseError)
+        assertEquals("set_alarm", morning.action)
+        assertEquals(6, morning.hour)
+        assertEquals(30, morning.minute)
+        assertEquals("Gym", morning.label)
+
+        val evening = DeviceControlHelper.parseAlarmArgs("set_alarm", rawTimeText = "sham 7:15")
+        assertNull(evening.parseError)
+        assertEquals(19, evening.hour)
+        assertEquals(15, evening.minute)
+
+        val timer = DeviceControlHelper.parseAlarmArgs("set_timer", rawDurationSeconds = "10 min", rawLabel = "Tea")
+        assertNull(timer.parseError)
+        assertEquals("set_timer", timer.action)
+        assertEquals(600, timer.timerSeconds)
+
+        val show = DeviceControlHelper.parseAlarmArgs("show")
+        assertEquals("show_alarms", show.action)
+
+        val invalid = DeviceControlHelper.parseAlarmArgs("set_alarm")
+        assertNotNull(invalid.parseError)
+    }
+
+    @Test
+    fun `AuraMemoryManager auto-extraction gate, dedupe similarity, and topic key helpers work cleanly`() {
+        assertFalse(AuraMemoryManager.shouldRunAiMemoryExtraction("ok"))
+        assertFalse(AuraMemoryManager.shouldRunAiMemoryExtraction("volume 50 percent kar do"))
+        assertTrue(AuraMemoryManager.shouldRunAiMemoryExtraction("Mera exam next Monday subah 9 baje hai yaad rakhna"))
+        assertTrue(AuraMemoryManager.shouldRunAiMemoryExtraction("I prefer dark minimal themes for my websites and apps"))
+
+        assertTrue(
+            AuraMemoryManager.isNearDuplicate(
+                "User wakes up at 6 AM for gym everyday",
+                "user wakes up at 6 AM for gym everyday!"
+            )
+        )
+        assertEquals("favorite_color", AuraMemoryManager.normalizeTopicKey("Favorite Color!"))
     }
 }
