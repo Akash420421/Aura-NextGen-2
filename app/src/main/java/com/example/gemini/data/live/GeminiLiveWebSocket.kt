@@ -1791,6 +1791,40 @@ class GeminiLiveWebSocket(
                     put("required", JSONArray().put("query"))
                 })
             })
+
+            // 44. recall_memory
+            put(JSONObject().apply {
+                put("name", "recall_memory")
+                put("description", "Searches Aura's persistent memory for facts/preferences matching a query. Call when the user asks what you remember about a topic.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("query", JSONObject().apply {
+                            put("type", "STRING")
+                            put("description", "Topic or keyword to search memory for. Blank returns most recent.")
+                        })
+                        put("limit", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Max memories to return (default 10).")
+                        })
+                    })
+                })
+            })
+
+            // 45. list_memories
+            put(JSONObject().apply {
+                put("name", "list_memories")
+                put("description", "Lists all facts currently stored in Aura's persistent memory. Call when the user asks what you remember.")
+                put("parameters", JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject().apply {
+                        put("limit", JSONObject().apply {
+                            put("type", "INTEGER")
+                            put("description", "Max memories to return (default 50).")
+                        })
+                    })
+                })
+            })
         }
     }
 

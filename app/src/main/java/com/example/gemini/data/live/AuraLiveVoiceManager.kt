@@ -22,6 +22,7 @@ import com.example.gemini.data.automation.YouTubeController
 import com.example.gemini.data.jarvis.JarvisPreferences
 import com.example.gemini.data.local.LocalEnvironmentManager
 import com.example.gemini.data.local.LocalTerminalBridge
+import com.example.gemini.data.memory.AuraMemoryV2
 import com.example.gemini.data.vision.ScreenCaptureManager
 import com.example.gemini.data.vision.VisualTaskOrchestrator
 import com.example.gemini.ui.browser.BrowserSessionManager
@@ -48,7 +49,7 @@ import java.util.concurrent.atomic.AtomicLong
  * 5. Screen Share video streaming (1 FPS 768px JPEG) + on-demand screen share prompt
  * 6. Contact Calling & WhatsApp Auto-Send automation
  * 7. Real terminal execution & project code file creation
- * 8. Real-time chat transcript recording (ChatContextBridge) & persistent memory (AuraMemoryManager)
+ * 8. Real-time chat transcript recording (ChatContextBridge) & persistent memory (AuraMemoryV2)
  */
 object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     private const val TAG = "AuraLiveVoiceManager"
@@ -103,7 +104,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         }
         val ctx = appContext ?: return fullTurn
         if (fullTurn.isNotBlank()) {
-            AuraMemoryManager.processCompletedTurnAsync(
+            AuraMemoryV2.processCompletedTurnAsync(
                 context = ctx,
                 userInput = fullTurn,
                 assistantResponse = _spokenSentence.value,
@@ -174,7 +175,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     fun init(context: Context) {
         appContext = context.applicationContext
-        AuraMemoryManager.init(context)
+        AuraMemoryV2.init(context)
         VoiceSessionStore.init(context)
         phoneControlManager = PhoneControlManager(context.applicationContext)
     }
@@ -231,7 +232,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
     fun startSession(context: Context) {
         if (isLive()) return
         appContext = context.applicationContext
-        AuraMemoryManager.init(context)
+        AuraMemoryV2.init(context)
         phoneControlManager = PhoneControlManager(context.applicationContext)
         _spokenSentence.value = ""
         ChatContextBridge.startVoiceSessionConversation()
@@ -461,22 +462,12 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
 
     private fun buildSystemPrompt(): String {
         val sb = StringBuilder()
-        sb.append("You are Aura, a single unified real-time AI companion living inside the Aura AI Android app.\n")
-        sb.append("You have full direct control over Aura's chats, coding workspace, In-Built Browser, phone automation, apps, media playback, WhatsApp, screen inspection, and verified local preview servers.\n")
-        sb.append("IDENTITY LOCK: NEVER refer to yourself as 'Jarvis', 'sub-agent', 'chat agent', 'background agent', or 'Antigravity' as a separate entity. You ARE Aura — always speak in first person ('Maine...', 'Main abhi...').\n")
-        sb.append("BRAND RECOGNITION: In Hindi/Hinglish speech, users call this app 'Aura', 'Aura AI', or 'Aura Pro' (which ASR may occasionally mishear as 'aur app', 'ora', 'aora', 'oura', 'aurya pro'). Understand those as Aura / Aura Pro when used as an app name, while keeping normal Hindi 'aur' ('and'/'more') untouched.\n\n")
-
-        sb.append("### CRITICAL SPOKEN LANGUAGE, ANTI-HALLUCINATION & HINDI ASR DISAMBIGUATION:\n")
-        sb.append("- You MUST ALWAYS speak in conversational Hindi or Hinglish (Hindi mixed with natural English words as spoken in India).\n")
-        sb.append("- Speak warmly, confidently, and keep your replies brief and direct (1-2 crisp sentences).\n")
-        sb.append("- SPOKEN LANGUAGE LOCK: The user speaks ONLY Hindi, Hinglish, or Indian English. NEVER misinterpret unclear Hindi vowels, short clicks, or background noise as Spanish, Portuguese, French, Russian, or Welsh — NEVER ask 'Aap Spanish mein kyun bol rahe hain?'! If a phrase is unclear, politely ask 'Aawaz clear nahi aayi, ek baar phir bolna?'.\n")
-        sb.append("- HINDI/HINGLISH PHONETIC CONTEXT RULES:\n")
-        sb.append("  * On MCQs, exams, tests, or lists: phrases like '15 rupaye', '14 rupaye', 'pandrahve', '15ve ka' ALWAYS mean ordinal Question # (15th / 14th), NEVER rupees/money!\n")
-        sb.append("  * Short option letters: 'be'/'bee' = Option B, 'see'/'sea' = Option C, 'di'/'dee' = Option D.\n")
-        sb.append("  * App & UI phonetic recognition: while discussing Aura plugins/tools/extensions, 'melt' / 'sweet' = 'Meta Suite' (NOT melting ice!). 'Cognito'/'cognitive' = 'Incognito'. 'In bill' = 'In-Built Browser'. NEVER confuse 'one' or 'open' with 'band' (close)!\n")
-        sb.append("- STRICT GROUNDING (NO STALE SCREEN / NO FAKE CONTEXT): Ignore unrelated old chat topics (GTA 6, Flipkart, old websites) when helping on Chrome/MCQs/WhatsApp/YouTube. ALWAYS trust ONLY the newest `[LIVE SCREEN SNAPSHOT #...]` from `inspect_screen()` (never read an older question like Q13 when the newest snapshot shows Q14!), and NEVER invent fake states like 'Next button cooldown'.\n")
-        sb.append("- Ignore ambient background noise, live TV dialogue, news broadcasts, or unrelated room chatter completely. Only respond to direct near-field user requests.\n")
-        sb.append("- If the user interrupts you while you are speaking (barge-in), immediately stop your previous topic, listen to their new instruction, and respond to what they just said.\n\n")
+        sb.append(com.example.gemini.data.prompt.AuraPromptBuilder.coreVoicePrompt())
+        sb.append("\n### Hindi/Hinglish ASR notes:\n")
+        sb.append("- On MCQs/exams/tests, '15 rupaye', '14 rupaye', 'pandrahve', '15ve ka' mean ordinal question number, not money.\n")
+        sb.append("- Short option letters: 'be'/'bee' = B, 'see'/'sea' = C, 'di'/'dee' = D.\n")
+        sb.append("- 'melt'/'sweet' may mean 'Meta Suite'; 'Cognito' = 'Incognito'; 'In bill' = 'In-Built Browser'. Never confuse 'one'/'open' with 'band' (close).\n")
+        sb.append("- Ignore background noise, live TV, news, and unrelated room chatter. Only respond to direct near-field user requests.\n\n")
 
         sb.append("### DIRECT IMAGE GENERATION (NEVER REFUSE!):\n")
         sb.append("- You HAVE native AI image generation right here in Voice! Whenever the user asks to generate, create, draw, or make ANY image, picture, photo, cat/dog/character art, poster, wallpaper, or thumbnail ('mere liye ek cat ki image banao', 'draw a sunset', 'thumbnail banao'):\n")
@@ -597,15 +588,11 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("   - When asked what you can do (e.g. 'tum kya kya kar sakte ho?', 'kya kar sakte ho?'): Answer naturally in voice describing phone automation, generating AI images directly, playing music, web browsing, and coding capabilities. DO NOT CALL ANY TOOLS! DO NOT START BUILDING OR CREATING ANYTHING!\n")
         sb.append("   - NEVER boast or mention internal app features! NEVER say: 'main new chat shuru kar sakta hoon', 'main new chat create karta hoon', or 'task delegate karta hoon'. All internal workflows are completely SILENT to the user!\n\n")
 
-        sb.append("2. DISCOVERY-FIRST PROJECT PLANNING & STRICT REQUIREMENTS CONTRACT (#11 & #12):\n")
-        sb.append("   - STRICT CONFIRMATION RULE: ONLY start coding when the user explicitly commands you to build/create/code something.\n")
-        sb.append("   - DISCOVERY FIRST (#11): If the request is a non-trivial or under-specified website/app/landing page (e.g. 'ek landing page banao', 'portfolio banao', 'startup website banao') AND key details (brand/business name, theme/colors, target audience, core sections) are missing, ask 2–4 short, high-signal clarifying questions in Hindi/Hinglish FIRST (unless user says 'khud decide kar lo' / 'default bana do'). Once answers are collected, summarize the plan in 1–2 lines, save/include a clean `requirements.md` contract, and start building via `start_new_chat_task(prompt=...)` with ONLY the clean technical specification (NEVER include 'Ek new chat create karo...' meta-wrappers!).\n")
-        sb.append("   - STRICT CONTRACT (#12):\n")
-        sb.append("     * Theme Lock: If user requested light/white/minimal theme, NEVER switch to dark mode.\n")
-        sb.append("     * Multi-File Lock: If user asked for separate files (HTML + CSS + JS or modular React/Next components), NEVER dump everything into one file.\n")
-        sb.append("     * Mobile-First Responsive Lock: Always enforce viewport meta, fluid grids, no horizontal overflow, and 44px+ touch targets.\n")
-        sb.append("     * Meta-Instructions vs Domain Content: If user references external design/UI skills, inspiration URLs, or GitHub UI-skills repos, treat them strictly as STYLING/CRAFT RULES — NEVER copy repo names, skill docs, or GitHub URLs into the website's brand name or copy!\n")
-        sb.append("   - Speak a brief first-person confirmation (e.g. 'Haan bilkul, main abhi banana shuru kar raha hoon aur aapko saath-saath update deta rahunga.').\n")
+        sb.append("2. WEBSITE / APP BUILDING (VOICE HANDS OFF; CHAT BUILDS AFTER CONFIRMATION):\n")
+        sb.append("   - Voice mode does NOT build websites. It only sends a prompt to chat.\n")
+        sb.append("   - If the user asks to build a website, portfolio, landing page, or app in voice: do NOT ask discovery questions and do NOT start building. Call `start_new_chat_task(prompt=...)` with a prompt that begins exactly `[WEBSITE DISCOVERY MODE]`, includes the user's idea, and tells the chat agent to collect full requirements (purpose, brand, audience, pages, content, language, theme, style, icons, animations, features, references) and NOT create files, run commands, or start a preview server until the user gives explicit final confirmation.\n")
+        sb.append("   - Never include meta-wrappers like 'Ek new chat create karo...' in the prompt.\n")
+        sb.append("   - Speak only a brief first-person line like 'Haan, main aapke website ka idea chat mein bhej raha hoon, wahan sab details pooch kar requirements jama karega.'\n")
         sb.append("   - NEVER re-send or repeat a task.\n\n")
 
         sb.append("3. CHECKING TASK / WEBSITE STATUS & CROSS-SCREEN PROJECT AWARENESS (#8, #13, #14):\n")
@@ -654,7 +641,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         sb.append("- System keys -> `press_key(key=\"back\"|\"home\"|\"recents\")`.\n")
         sb.append("- Local Web Preview (#13): NEVER run `python3 index.html` or `python <file>.html`! To preview ANY web project, ALWAYS call `start_local_preview_server(project_dir=\"...\", port=3000, open_in_browser=true)`.\n\n")
 
-        sb.append(AuraMemoryManager.getSystemPromptContext(lastUserUtterance))
+        sb.append(AuraMemoryV2.getSystemPromptContext(lastUserUtterance))
         sb.append(ChatContextBridge.getActiveChatPromptContext())
         runCatching { phoneControlManager?.getQuickBatteryAndAudioLine() }
             .getOrNull()
@@ -880,29 +867,29 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
         "set_ringer_mode", "read_notifications", "system_action", "set_device_setting",
         "media_playback_control", "close_in_app_browser",
         "reply_whatsapp_notification", "configure_whatsapp_auto_reply",
-        "save_memory", "forget_memory"
+        "save_memory", "forget_memory", "recall_memory", "list_memories"
     )
 
     override fun onToolCallsBatch(calls: List<GeminiLiveWebSocket.ToolCallItem>) {
         if (calls.isEmpty()) return
         val allFast = calls.all { it.name in FAST_DEVICE_TOOLS }
+        // Live status must reflect what the model is actually doing. Report tool execution for every call,
+        // not just slow tools, so the UI never shows a stale "Listening" while a tool is running.
+        _statusText.value = if (calls.size > 1) "Working (${calls.size} steps)..." else "Executing ${calls.first().name}..."
         if (!allFast) {
             _phase.value = Phase.WORKING
-            _statusText.value = "Working (${calls.first().name})..."
         }
 
         scope?.launch(Dispatchers.IO) {
             val runBatch: suspend () -> Unit = {
                 val responsesArray = JSONArray()
                 for ((index, call) in calls.withIndex()) {
-                    if (!allFast) {
-                        withContext(Dispatchers.Main) {
-                            _phase.value = Phase.WORKING
-                            _statusText.value = if (calls.size > 1) {
-                                "Step ${index + 1}/${calls.size}: ${call.name}..."
-                            } else {
-                                "Executing ${call.name}..."
-                            }
+                    withContext(Dispatchers.Main) {
+                        if (!allFast) _phase.value = Phase.WORKING
+                        _statusText.value = if (calls.size > 1) {
+                            "Step ${index + 1}/${calls.size}: ${call.name}..."
+                        } else {
+                            "Executing ${call.name}..."
                         }
                     }
                     val result = executeTool(call.name, call.args)
@@ -920,7 +907,7 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                 webSocket?.sendToolResponses(responsesArray)
 
                 withContext(Dispatchers.Main) {
-                    if (_phase.value == Phase.WORKING) {
+                    if (_phase.value != Phase.SPEAKING && _phase.value != Phase.MUTED) {
                         _phase.value = Phase.THINKING
                         _statusText.value = "Thinking..."
                     }
@@ -2773,19 +2760,46 @@ object AuraLiveVoiceManager : GeminiLiveWebSocket.Listener {
                     if (fact.isBlank()) {
                         JSONObject().put("status", "error").put("message", "Memory fact cannot be blank.")
                     } else {
-                        AuraMemoryManager.init(context)
-                        val msg = AuraMemoryManager.rememberFact(fact, categoryOverride = cat, topicKey = topicKey)
+                        AuraMemoryV2.init(context)
+                        val msg = AuraMemoryV2.rememberFact(fact, categoryOverride = cat, topicKey = topicKey)
                         JSONObject().put("status", "success").put("message", msg)
                     }
                 }
 
                 "forget_memory" -> {
                     val query = args.optString("query", "").trim()
-                    AuraMemoryManager.init(context)
-                    val (count, msg) = AuraMemoryManager.forgetMatching(query)
+                    AuraMemoryV2.init(context)
+                    val (count, msg) = AuraMemoryV2.forgetMatching(query)
                     JSONObject().put("status", if (count > 0) "success" else "not_found")
                         .put("removed_count", count)
                         .put("message", msg)
+                }
+
+                "recall_memory" -> {
+                    val query = args.optString("query", "").trim()
+                    val limit = args.optInt("limit", 10).coerceIn(1, 50)
+                    AuraMemoryV2.init(context)
+                    val items = AuraMemoryV2.recallMemories(query, limit)
+                    val arr = JSONArray()
+                    items.forEach { m ->
+                        arr.put(JSONObject().apply {
+                            put("id", m.id); put("text", m.text); put("category", m.category); put("topic_key", m.topicKey)
+                        })
+                    }
+                    JSONObject().put("status", "success").put("count", items.size).put("memories", arr)
+                }
+
+                "list_memories" -> {
+                    val limit = args.optInt("limit", 50).coerceIn(1, 200)
+                    AuraMemoryV2.init(context)
+                    val items = AuraMemoryV2.memories.value.take(limit)
+                    val arr = JSONArray()
+                    items.forEach { m ->
+                        arr.put(JSONObject().apply {
+                            put("id", m.id); put("text", m.text); put("category", m.category); put("topic_key", m.topicKey)
+                        })
+                    }
+                    JSONObject().put("status", "success").put("count", items.size).put("memories", arr)
                 }
 
                 "task_completed" -> {

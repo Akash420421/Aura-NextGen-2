@@ -167,6 +167,67 @@ object ChatFeedCache {
         // where the latest prompt's items start: a model divider goes right before that prompt
         var promptStart = -1
         var nextCall = 0
+
+        // One assistant turn can contain several messages (agy emits one message per step). Merge them:
+        // a single collapsible "Thinking" section + tool steps + final answer, instead of stacking
+        // endless "Thought for Xs" accordions. We buffer assistant items and flush per user turn.
+        val turnItems = ArrayList<ChatFeedItem>()
+        val turnThoughts = ArrayList<MarkdownBlock.AgentThought>()
+        var turnFirstAssistantId: String? = null
+
+        fun flushTurn() {
+            if (turnThoughts.isNotEmpty()) {
+                val merged = turnThoughts.map { it.thought.trim() }.filter { it.isNotBlank() }
+                    .distinct().joinToString("\n\n")
+                val duration = turnThoughts.mapNotNull { it.durationMs }.filter { it > 0 }.sum().takeIf { it > 0 }
+                val streaming = turnThoughts.any { it.isStreaming }
+                if (merged.isNotBlank() || streaming) {
+                    addItem(
+                        ChatFeedItem.AssistantThinking(
+                            messageId = turnFirstAssistantId ?: "turn_${result.size}",
+                            thoughtText = merged.ifBlank { "Thinking..." },
+                            durationMs = duration,
+                            isStreaming = streaming
+                        )
+                    )
+                }
+            }
+            for (item in turnItems) addItem(item)
+            turnItems.clear()
+            turnThoughts.clear()
+            turnFirstAssistantId = null
+        }
+
+        fun routeAssistant(item: ChatFeedItem) {
+            when (item) {
+                is ChatFeedItem.AssistantBlock -> {
+                    val block = item.block
+                    if (block is MarkdownBlock.AgentThought) {
+                        if (turnFirstAssistantId == null) turnFirstAssistantId = item.messageId
+                        turnThoughts += block
+                    } else {
+                        if (turnFirstAssistantId == null) turnFirstAssistantId = item.messageId
+                        turnItems += item
+                    }
+                }
+                is ChatFeedItem.AssistantThinking -> {
+                    if (turnFirstAssistantId == null) turnFirstAssistantId = item.messageId
+                    turnThoughts += MarkdownBlock.AgentThought(
+                        thought = item.thoughtText,
+                        durationMs = item.durationMs,
+                        isStreaming = item.isStreaming
+                    )
+                }
+                is ChatFeedItem.AssistantFooter -> {
+                    if (turnFirstAssistantId == null) turnFirstAssistantId = item.message.id
+                    turnItems += item
+                }
+                is ChatFeedItem.StreamingMessage -> turnItems += item
+                is ChatFeedItem.AssistantTyping -> addItem(item)
+                else -> addItem(item)
+            }
+        }
+
         fun addCall(call: ChatFeedItem.VoiceCall) {
             if (dividers) {
                 val day = dayKey(call.startedAt)
@@ -179,6 +240,7 @@ object ChatFeedCache {
         }
         for (msg in messages) {
             if (msg.role == MessageRole.USER) {
+                flushTurn() // close previous assistant turn before opening a new prompt
                 while (nextCall < voiceCalls.size && voiceCalls[nextCall].startedAt <= msg.createdAt) addCall(voiceCalls[nextCall++])
             }
             if (dividers && msg.role == MessageRole.USER) {
@@ -205,7 +267,7 @@ object ChatFeedCache {
             if (!msg.isStreaming) {
                 val parsed = getOrParse(msg)
                 for (item in parsed) {
-                    addItem(item)
+                    routeAssistant(item)
                 }
             } else {
                 val hasActiveRunningTool = msg.toolCalls.any {
@@ -224,13 +286,15 @@ object ChatFeedCache {
                 if (contentToParse.isNotEmpty() || msg.toolCalls.isNotEmpty()) {
                     val blocks = parseMarkdownBlocks(contentToParse, msg.toolCalls)
                     for (i in blocks.indices) {
-                        addItem(ChatFeedItem.AssistantBlock(
-                            messageId = msg.id,
-                            blockIndex = i,
-                            block = blocks[i],
-                            isFirst = i == 0,
-                            isLast = i == blocks.lastIndex
-                        ))
+                        routeAssistant(
+                            ChatFeedItem.AssistantBlock(
+                                messageId = msg.id,
+                                blockIndex = i,
+                                block = blocks[i],
+                                isFirst = i == 0,
+                                isLast = i == blocks.lastIndex
+                            )
+                        )
                     }
                 } else if (!hasActiveRunningTool) {
                     // Only show waiting indicator before ANY output or tool call has appeared
@@ -238,6 +302,7 @@ object ChatFeedCache {
                 }
             }
         }
+        flushTurn()
         // calls after the last prompt (or a call going on now) close the chat
         while (nextCall < voiceCalls.size) addCall(voiceCalls[nextCall++])
         return result

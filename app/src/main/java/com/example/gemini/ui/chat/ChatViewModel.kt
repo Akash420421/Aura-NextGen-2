@@ -526,13 +526,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // a Jarvis chat on screen: its message carries Jarvis' hidden note (or goes to the voice Jarvis chat as a typed turn)
         val jarvis = com.example.gemini.data.jarvis.JarvisController
         val chatId = currentConversation.value?.id
-        val intercepted = (if (jarvis.isAttached) jarvis.interceptScreenMessage(chatId, withVol) else withVol) ?: return
+        // Website discovery gate: while collecting requirements, forbid building until explicit final confirmation.
+        val websiteNote = com.example.gemini.data.website.WebsiteDiscoverySession.directiveFor(chatId, content)
+        val withWebsite = if (websiteNote != null && !withVol.contains("[WEBSITE DISCOVERY MODE]")) {
+            "$websiteNote\n\n$withVol"
+        } else withVol
+        val intercepted = (if (jarvis.isAttached) jarvis.interceptScreenMessage(chatId, withWebsite) else withWebsite) ?: return
         rememberCopies(chatId, refs)
         // a normal chat (a Jarvis chat carries its own guide instead): the app's global context goes in front
-        val it = if (intercepted === withVol) withGlobalContext(chatId, withVol) else intercepted
+        val it = if (intercepted === withWebsite) withGlobalContext(chatId, withWebsite) else intercepted
         // Automatically extract & merge durable facts/preferences/reminders from text chat in background
-        if (intercepted === expanded && content.isNotBlank()) {
-            com.example.gemini.data.live.AuraMemoryManager.processCompletedTurnAsync(
+        if (!jarvis.isAttached && content.isNotBlank()) {
+            com.example.gemini.data.memory.AuraMemoryV2.processCompletedTurnAsync(
                 context = getApplication(),
                 userInput = content,
                 isVoice = false

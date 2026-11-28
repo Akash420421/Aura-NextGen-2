@@ -59,7 +59,7 @@ fun JarvisSettingsScreen(cardBg: Color, cardBorder: BorderStroke, onOpen: (Jarvi
     val P = JarvisPreferences
     val hotword by P.hotword.state.collectAsState()
     val liveApiKey by P.liveApiKey.state.collectAsState()
-    val allMemories by com.example.gemini.data.live.AuraMemoryManager.memories.collectAsState()
+    val allMemories by com.example.gemini.data.memory.AuraMemoryV2.memories.collectAsState()
     val waAutoEnabled by P.waAutoReplyEnabled.state.collectAsState()
     val waDirectSaved by P.waDirectSavedContacts.state.collectAsState()
     val c = com.example.gemini.theme.AppColors
@@ -785,14 +785,35 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
             }
             JarvisSettingsPage.MEMORY -> {
                 JCard(cardBg, cardBorder, "Persistent Memory") {
-                    val memoryList by com.example.gemini.data.live.AuraMemoryManager.memories.collectAsState()
+                    val memoryList by com.example.gemini.data.memory.AuraMemoryV2.memories.collectAsState()
+                    val memoryEnabled by com.example.gemini.data.memory.AuraMemoryV2.enabled.collectAsState()
                     var newFact by remember { mutableStateOf("") }
 
                     Text(
-                        "Aura Voice remembers your preferences, project stack, and personal facts across all chats and app restarts.",
+                        "Aura automatically remembers your preferences, project stack, routines, and personal facts across all chats and app restarts.",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
+
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Automatic memory", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Text(
+                                if (memoryEnabled) "Learning from voice and text chats" else "Paused — no new facts are saved or injected",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                            )
+                        }
+                        Switch(
+                            checked = memoryEnabled,
+                            onCheckedChange = { com.example.gemini.data.memory.AuraMemoryV2.setEnabled(it) }
+                        )
+                    }
 
                     Spacer(Modifier.height(8.dp))
                     Row(
@@ -810,7 +831,7 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                         OutlinedButton(
                             onClick = {
                                 if (newFact.isNotBlank()) {
-                                    com.example.gemini.data.live.AuraMemoryManager.rememberFact(newFact)
+                                    com.example.gemini.data.memory.AuraMemoryV2.rememberFact(newFact)
                                     newFact = ""
                                 }
                             },
@@ -828,7 +849,7 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                     ) {
                         Text("Remembered Facts (${memoryList.size})", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         if (memoryList.isNotEmpty()) {
-                            TextButton(onClick = { com.example.gemini.data.live.AuraMemoryManager.clearAll() }) {
+                            TextButton(onClick = { com.example.gemini.data.memory.AuraMemoryV2.clearAll() }) {
                                 Text("Clear All", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                             }
                         }
@@ -862,7 +883,7 @@ fun JarvisSettingsSectionPage(page: JarvisSettingsPage, cardBg: Color, cardBorde
                                     Text(item.text, fontSize = 13.sp)
                                 }
                                 IconButton(
-                                    onClick = { com.example.gemini.data.live.AuraMemoryManager.deleteMemory(item.id) },
+                                    onClick = { com.example.gemini.data.memory.AuraMemoryV2.deleteMemory(item.id) },
                                     modifier = Modifier.size(28.dp)
                                 ) {
                                     Icon(

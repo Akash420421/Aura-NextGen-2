@@ -25,7 +25,7 @@ import java.util.UUID
  */
 object ChatContextBridge {
     private const val TAG = "ChatContextBridge"
-    private const val MAX_MESSAGES_IN_CONTEXT = 8
+    private const val MAX_MESSAGES_IN_CONTEXT = 16
 
     var viewModel: ChatViewModel? = null
     @Volatile private var currentViewMode: String = "CHAT"
@@ -471,6 +471,15 @@ object ChatContextBridge {
         return cleaned
     }
 
+    /** A website/app build request that has not already been converted to discovery mode. */
+    private fun isWebsiteBuildRequest(text: String): Boolean {
+        val lower = text.lowercase()
+        val site = Regex("(?i)\\b(website|web ?site|web app|landing ?page|portfolio|homepage|blog|e-?commerce|store|site)\\b")
+        if (!site.containsMatchIn(lower)) return false
+        val build = Regex("(?i)\\b(banao|bana|build|create|karo|kar do|shuru|start|make|likhna|code)\\b")
+        return build.containsMatchIn(lower)
+    }
+
     private fun closeOverlaysForChatNavigation() {
         requestCloseDrawer.value = true
         if (currentViewMode == "BROWSER") {
@@ -838,6 +847,13 @@ object ChatContextBridge {
         lastSentPrompt = cleanPrompt
         lastSentTime = now
 
+        // Voice only hands off. A website request from voice must enter chat DISCOVERY, not start building.
+        val dispatchPrompt = if (!cleanPrompt.startsWith("[WEBSITE DISCOVERY MODE]") &&
+            !cleanPrompt.contains("[BUILD MODE APPROVED]") && isWebsiteBuildRequest(cleanPrompt)
+        ) {
+            com.example.gemini.data.prompt.AuraPromptBuilder.websiteDiscoveryKickoff(cleanPrompt)
+        } else cleanPrompt
+
         try {
             // 1. Natively create a fresh new chat session in Kotlin FIRST (no wrapper text injected)
             isNewChatDraft = false
@@ -858,6 +874,9 @@ object ChatContextBridge {
             val conv = vm.currentConversation.value
             if (conv != null) {
                 explicitlySelectedChatId = conv.id
+                if (dispatchPrompt.startsWith("[WEBSITE DISCOVERY MODE]")) {
+                    com.example.gemini.data.website.WebsiteDiscoverySession.start(conv.id, dispatchPrompt)
+                }
                 recentTaskRecords += ChatQuestionnaireHelper.RecentTaskRecord(
                     sessionId = conv.id,
                     prompt = cleanPrompt,
@@ -890,7 +909,7 @@ object ChatContextBridge {
             }
 
             // 2. Dispatch the exact clean user prompt directly without clearing duplicate-guard timestamps
-            vm.sendMessage(cleanPrompt)
+            vm.sendMessage(dispatchPrompt)
 
             // Wait up to 6s for initial acknowledgment
             val waitStart = System.currentTimeMillis()
@@ -941,9 +960,14 @@ object ChatContextBridge {
                 if (autoSend) {
                     delay(350L)
                     vm.currentConversation.value?.id?.let { explicitlySelectedChatId = it }
+                    vm.currentConversation.value?.id?.let { id ->
+                        if (text.startsWith("[WEBSITE DISCOVERY MODE]")) {
+                            com.example.gemini.data.website.WebsiteDiscoverySession.start(id, text)
+                        }
+                    }
                     vm.sendMessage(text)
                     clearPromptCache()
-                    "Message bhej diya gaya hai."
+                    "Message bhej diya hai."
                 } else {
                     vm.currentConversation.value?.id?.let { explicitlySelectedChatId = it }
                     "Nayi chat ready hai."
@@ -968,6 +992,11 @@ object ChatContextBridge {
                 requestViewMode("CHAT")
                 requestSwitchToChatTab.value = true
                 if (autoSend) {
+                    vm.currentConversation.value?.id?.let { id ->
+                        if (text.startsWith("[WEBSITE DISCOVERY MODE]")) {
+                            com.example.gemini.data.website.WebsiteDiscoverySession.start(id, text)
+                        }
+                    }
                     vm.sendMessage(text)
                     clearPromptCache()
                     "Message bhej diya hai."
